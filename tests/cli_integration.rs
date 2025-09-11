@@ -1,0 +1,220 @@
+use std::cell::Cell;
+use std::fs;
+use std::path::Path;
+
+use tempfile::tempdir;
+
+use context_builder::{Prompter, cli::Args, run_with_args};
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+    last_processing_count: Cell<usize>,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+            last_processing_count: Cell::new(0),
+        }
+    }
+
+    fn last_count(&self) -> usize {
+        self.last_processing_count.get()
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, file_count: usize) -> std::io::Result<bool> {
+        self.last_processing_count.set(file_count);
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+#[test]
+fn preview_mode_does_not_create_output_file() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("output.md").to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: true,
+        line_numbers: false,
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    // Run in preview mode
+    let res = run_with_args(args, &prompter);
+    assert!(res.is_ok(), "preview mode should succeed");
+
+    // No output file created
+    assert!(
+        !root.join("output.md").exists(),
+        "output file should not be created in preview mode"
+    );
+}
+
+#[test]
+fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Files that should be included by filters
+    write_file(
+        &root.join("src/main.rs"),
+        "fn main() {\n    println!(\"hi\");\n}\n",
+    );
+    write_file(&root.join("README.md"), "# Top-level readme\n\nSome text");
+
+    // Ignored directories/files
+    write_file(
+        &root.join("node_modules/pkg/index.js"),
+        "console.log('ignore');",
+    );
+    write_file(&root.join("target/artifact.txt"), "binary");
+
+    // A large file to exercise streaming and performance
+    let mut large = String::with_capacity(4000 * 25);
+    for i in 0..4000 {
+        large.push_str(&format!("// line {}\n", i + 1));
+    }
+    write_file(&root.join("src/large.rs"), &large);
+
+    let output_path = root.join("ctx.md");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec!["rs".into(), "md".into()],
+        ignore: vec!["node_modules".into(), "target".into()],
+        preview: false,
+        line_numbers: true,
+    };
+
+    // Always proceed without interactive prompts
+    let prompter = TestPrompter::new(true, true);
+
+    let res = run_with_args(args, &prompter);
+    assert!(res.is_ok(), "end-to-end generation should succeed");
+
+    // Output file exists
+    assert!(
+        output_path.exists(),
+        "output file should be created at {}",
+        output_path.display()
+    );
+
+    // Basic content checks
+    let out = fs::read_to_string(&output_path).unwrap();
+
+    // Has file tree section
+    assert!(
+        out.contains("## File Tree Structure"),
+        "output should contain a 'File Tree Structure' section"
+    );
+
+    // Has at least one rust code block with line numbers (looking for ' | ' marker)
+    assert!(
+        out.contains("```rust"),
+        "output should contain a rust code block"
+    );
+    assert!(
+        out.contains("   1 | "),
+        "output should contain line-numbered code blocks"
+    );
+
+    // Should not include ignored directory entries' content (not a strict check, but indicative)
+    assert!(
+        !out.contains("console.log('ignore');"),
+        "output should not include content from ignored directories"
+    );
+}
+
+#[test]
+fn overwrite_prompt_is_respected() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Prepare an existing output file with sentinel content
+    let output_path = root.join("out.md");
+    write_file(&output_path, "SENTINEL");
+
+    // Put a file to process
+    write_file(&root.join("src/lib.rs"), "pub fn f() {}");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec!["rs".into()],
+        ignore: vec![],
+        preview: false,
+        line_numbers: false,
+    };
+
+    // Deny overwrite
+    let prompter = TestPrompter::new(false, true);
+
+    let res = run_with_args(args, &prompter);
+    assert!(
+        res.is_ok(),
+        "run should exit gracefully when overwrite denied"
+    );
+
+    // Ensure file is unchanged
+    let out = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(out, "SENTINEL", "existing output should not be overwritten");
+}
+
+#[test]
+fn confirm_processing_receives_large_count() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a lot of files (should be well over the 100 threshold)
+    fs::create_dir_all(root.join("data")).unwrap();
+    for i in 0..150 {
+        write_file(&root.join("data").join(format!("f{}.txt", i)), "x");
+    }
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("out.md").to_string_lossy().into_owned(),
+        filter: vec!["txt".into()],
+        ignore: vec![],
+        preview: false,
+        line_numbers: false,
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    let res = run_with_args(args, &prompter);
+    assert!(res.is_ok(), "run should succeed with many files");
+
+    // Ensure our injected prompter saw the large count (>= 150)
+    assert!(
+        prompter.last_count() >= 150,
+        "expected confirm_processing to be called with >=150 files, got {}",
+        prompter.last_count()
+    );
+}

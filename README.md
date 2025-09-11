@@ -35,6 +35,16 @@ cargo install --path .
 
 ## Usage
 
+### Benchmarks (quick)
+- Run:
+  - Linux/macOS: `cargo bench --bench context_bench`
+  - Windows PowerShell: `cargo bench --bench context_bench`
+- Include medium dataset (heavier):
+  - Linux/macOS: `CB_BENCH_MEDIUM=1 cargo bench --bench context_bench`
+  - Windows PowerShell: `$env:CB_BENCH_MEDIUM=1; cargo bench --bench context_bench`
+- HTML report:
+  - `target/criterion/report/index.html`
+
 ### Basic Usage
 
 ```bash
@@ -128,14 +138,98 @@ Context Builder is designed for efficiency:
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
+
 ### Development Setup
 
+
+
 ```bash
+
 git clone https://github.com/yourusername/context-builder.git
+
 cd context-builder
+
 cargo build
+
 cargo test
+
 ```
+
+## Benchmarks
+
+Run Criterion benchmarks to evaluate performance at different scales.
+
+- Quick run:
+  - Linux/macOS:
+    ```bash
+    cargo bench --bench context_bench
+    ```
+  - Windows PowerShell:
+    ```powershell
+    cargo bench --bench context_bench
+    ```
+
+- Include the medium dataset (disabled by default to keep runs lighter):
+  - Linux/macOS:
+    ```bash
+    CB_BENCH_MEDIUM=1 cargo bench --bench context_bench
+    ```
+  - Windows PowerShell:
+    ```powershell
+    $env:CB_BENCH_MEDIUM=1; cargo bench --bench context_bench
+    ```
+
+- HTML reports:
+  - Open the Criterion report at:
+    - target/criterion/report/index.html
+    - or per-benchmark reports under: target/criterion/context_builder/*/report/index.html
+
+Notes:
+- Benchmarks run both with and without line numbers to compare overhead.
+- Datasets are generated in a temporary directory during the run.
+- Binary files are generated but ignored by the default filters.
+- Ignores: node_modules, target; Filters: rs, md, txt, toml.
+
+## Generating sample datasets
+
+You can generate persistent sample datasets (ignored from version control) for local testing and manual performance checks.
+
+- Add this to your .gitignore if not already present:
+  ```
+  /samples
+  ```
+
+- Compile and run the generator script:
+  - Linux/macOS:
+    ```bash
+    rustc scripts/generate_samples.rs -O -o generate_samples && ./generate_samples --help
+    ```
+  - Windows PowerShell:
+    ```powershell
+    rustc scripts/generate_samples.rs -O -o generate_samples.exe; .\generate_samples.exe --help
+    ```
+
+Common usages:
+- Default presets (tiny, small) into ./samples:
+  - `generate_samples`
+- Include medium and large:
+  - `generate_samples --presets tiny,small,medium --include-large`
+- Only one preset with custom parameters:
+  - `generate_samples --only small --files 5000 --depth 4 --width 4 --size 1024`
+- Clean output before generating:
+  - `generate_samples --clean`
+- Dry run (print plan only):
+  - `generate_samples --dry-run`
+
+Generated structure per dataset:
+- project/
+  - src/, docs/, assets/ nested trees with text files
+  - target/, node_modules/ with ignored noise
+  - README.md, Cargo.toml at root
+  - .bin files sprinkled across trees to validate binary handling
+
+Binary files are intentionally ignored for now. In the future, specialized parsers can be added to support additional document types (e.g., PDF, DOC).
+
 
 ## Changelog
 
