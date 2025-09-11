@@ -146,7 +146,7 @@ fn generate_dataset(root: &Path, spec: &DatasetSpec) -> PathBuf {
 
             if spec.binary_every > 0 {
                 bin_counter += 1;
-                if bin_counter % spec.binary_every == 0 {
+                if bin_counter.is_multiple_of(spec.binary_every) {
                     let bpath = dir.join(format!("bin_{}_{}.bin", created, i));
                     write_binary_file(&bpath, 2048);
                 }

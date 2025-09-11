@@ -1,4 +1,9 @@
-#![allow(clippy::needless_return)]
+#![allow(
+    clippy::needless_return,
+    clippy::extra_unused_lifetimes,
+    clippy::doc_overindented_list_items,
+    dead_code
+)]
 //! Dataset generation script for creating synthetic sample directories to benchmark and test
 //! the context-builder CLI locally. This is intended to generate a folder that should be ignored
 //! by version control (e.g., add `/samples` to your project's .gitignore).
@@ -236,7 +241,6 @@ fn parse_csv(s: String) -> Vec<String> {
 
 fn print_help() {
     println!(
-        "{}",
         r#"generate_samples - generate synthetic datasets for benchmarking
 
 Usage:
@@ -394,7 +398,7 @@ fn generate_dataset(root: &Path, spec: &DatasetSpec, dry_run: bool) -> io::Resul
 
             if spec.binary_every > 0 {
                 bin_counter += 1;
-                if bin_counter % spec.binary_every == 0 {
+                if bin_counter.is_multiple_of(spec.binary_every) {
                     let bpath = dir.join(format!("bin_{}_{}.bin", created, i));
                     write_binary_file(&bpath, 2048)?;
                 }

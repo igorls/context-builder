@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::tree::{FileTree, write_tree_to_file};
 
-/// Generates the final markdown file.
+/// Generates the final Markdown file.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_markdown(
     output_path: &str,
@@ -160,7 +160,7 @@ fn process_file(
     };
 
     // Stream file content for performance and handle binary files
-    // Peek into the file to determine if it's likely text (UTF-8) without loading entire file
+    // Peek into the file to determine if it's likely text (UTF-8) without loading an entire file
     match fs::File::open(file_path) {
         Ok(mut file) => {
             let mut sniff = [0u8; 8192];
@@ -296,7 +296,7 @@ mod tests {
         )
         .unwrap();
 
-        // Create output file
+        // Create an output file
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
@@ -317,10 +317,10 @@ mod tests {
         let file_path = base_path.join("README.md");
         let output_path = base_path.join("output.md");
 
-        // Create a test markdown file
+        // Create a test Markdown file
         fs::write(&file_path, "# Test\n\nThis is a test markdown file.").unwrap();
 
-        // Create output file
+        // Create an output file
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
@@ -329,7 +329,7 @@ mod tests {
         // Read the output
         let content = fs::read_to_string(&output_path).unwrap();
 
-        // Debug print the content
+        // Debug prints the content
         println!("Generated content:\n{}", content);
 
         // Check that markdown files use the correct language identifier
@@ -372,7 +372,7 @@ mod tests {
         assert!(content.contains("   1 | "));
         assert!(content.contains("   2 | "));
 
-        // Count lines with " | " prefix equals number of lines in original file
+        // Count lines with "|" prefix equals number of lines in an original file
         let numbered_lines = content
             .lines()
             .filter(|l| {
@@ -407,7 +407,7 @@ mod tests {
 
         let content = fs::read_to_string(&output_path).unwrap();
 
-        // Expect a text block fallback with a helpful message
+        // Expect a text block to fall back with a helpful message
         assert!(content.contains("```text"));
         assert!(
             content

@@ -1,6 +1,6 @@
 use clap::Parser;
 
-/// CLI tool to aggregate directory contents into a single markdown file optimized for LLM consumption
+/// CLI tool to aggregate directory contents into a single Markdown file optimized for LLM consumption
 #[derive(Parser, Debug)]
 #[clap(author, version, about, arg_required_else_help = true)]
 pub struct Args {
@@ -20,7 +20,7 @@ pub struct Args {
     #[clap(short = 'i', long)]
     pub ignore: Vec<String>,
 
-    /// Preview mode: only print the file tree to console, don't generate the documentation file
+    /// Preview mode: only print the file tree to the console, don't generate the documentation file
     #[clap(long)]
     pub preview: bool,
 

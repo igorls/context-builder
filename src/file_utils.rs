@@ -9,7 +9,7 @@ pub fn collect_files(
     ignores: &[String],
 ) -> io::Result<Vec<DirEntry>> {
     let mut walker = WalkBuilder::new(base_path);
-    // By default, the ignore crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
+    // By default, the "ignore" crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
 
     // Apply custom ignore filtering later during iteration since `add_ignore` expects file paths to ignore files, not patterns.
 
@@ -79,7 +79,7 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
-    fn to_rel_paths(mut entries: Vec<ignore::DirEntry>, base: &Path) -> Vec<String> {
+    fn to_rel_paths(mut entries: Vec<DirEntry>, base: &Path) -> Vec<String> {
         entries.sort_by_key(|e| e.path().to_path_buf());
         entries
             .iter()
@@ -110,12 +110,12 @@ mod tests {
         let ignores: Vec<String> = vec![];
 
         let files = collect_files(base, &filters, &ignores).unwrap();
-        let rels = to_rel_paths(files, base);
+        let relative_paths = to_rel_paths(files, base);
 
-        assert!(rels.contains(&"src/main.rs".to_string()));
-        assert!(rels.contains(&"Cargo.toml".to_string()));
-        assert!(!rels.contains(&"README.md".to_string()));
-        assert!(!rels.contains(&"scripts/build.sh".to_string()));
+        assert!(relative_paths.contains(&"src/main.rs".to_string()));
+        assert!(relative_paths.contains(&"Cargo.toml".to_string()));
+        assert!(!relative_paths.contains(&"README.md".to_string()));
+        assert!(!relative_paths.contains(&"scripts/build.sh".to_string()));
     }
 
     #[test]
@@ -136,11 +136,11 @@ mod tests {
         let ignores: Vec<String> = vec!["target".into(), "node_modules".into(), "README.md".into()];
 
         let files = collect_files(base, &filters, &ignores).unwrap();
-        let rels = to_rel_paths(files, base);
+        let relative_paths = to_rel_paths(files, base);
 
-        assert!(rels.contains(&"src/main.rs".to_string()));
-        assert!(!rels.contains(&"target/artifact.txt".to_string()));
-        assert!(!rels.contains(&"node_modules/pkg.js".to_string()));
-        assert!(!rels.contains(&"README.md".to_string()));
+        assert!(relative_paths.contains(&"src/main.rs".to_string()));
+        assert!(!relative_paths.contains(&"target/artifact.txt".to_string()));
+        assert!(!relative_paths.contains(&"node_modules/pkg.js".to_string()));
+        assert!(!relative_paths.contains(&"README.md".to_string()));
     }
 }

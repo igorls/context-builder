@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_build_file_tree_with_collected_files() {
-        // 1. Setup a temporary directory with a file structure
+        // 1. Set up a temporary directory with a file structure
         let dir = tempdir().unwrap();
         let base_path = dir.path();
 
@@ -111,7 +111,7 @@ mod tests {
         // 2. Collect files using the actual function
         let files = collect_files(base_path, &[], &[]).unwrap();
 
-        // 3. Assert that the correct files were collected (hidden file is ignored)
+        // 3. Assert that the correct files were collected (a hidden file is ignored)
         assert_eq!(files.len(), 2);
 
         // 4. Build the tree with the collected files
