@@ -27,7 +27,7 @@ pub fn collect_files(
     Ok(walker
         .build()
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().map_or(false, |ft| ft.is_file()))
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
         .filter(|e| {
             let path = e.path();
             // Exclude any entry that contains an ignored directory or file name as a path component

@@ -89,7 +89,6 @@ pub fn generate_markdown(
 }
 
 /// Processes a single file and writes its content to the output.
-
 fn process_file(
     base_path: &Path,
 
