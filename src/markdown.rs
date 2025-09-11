@@ -1,0 +1,233 @@
+use chrono::Utc;
+use ignore::DirEntry;
+use log::{error, info, warn};
+use std::fs;
+use std::io::{self, Write};
+use std::path::Path;
+
+use crate::tree::{write_tree_to_file, FileTree};
+
+/// Generates the final markdown file.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_markdown(
+    output_path: &str,
+    input_dir: &str,
+    filters: &[String],
+    ignores: &[String],
+    file_tree: &FileTree,
+    files: &[DirEntry],
+    base_path: &Path,
+    line_numbers: bool,
+) -> io::Result<()> {
+    let mut output = fs::File::create(output_path)?;
+
+    // --- Header --- //
+    writeln!(output, "# Directory Structure Report\n")?;
+
+    if !filters.is_empty() {
+        writeln!(
+            output,
+            "This document contains files from the `{}` directory with extensions: {}",
+            input_dir,
+            filters.join(", ")
+        )?;
+    } else {
+        writeln!(
+            output,
+            "This document contains all files from the `{}` directory, optimized for LLM consumption.",
+            input_dir
+        )?;
+    }
+
+    if !ignores.is_empty() {
+        writeln!(output, "Custom ignored patterns: {}", ignores.join(", "))?;
+    }
+
+    writeln!(
+        output,
+        "Processed at: {}",
+        Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    )?;
+    writeln!(output)?;
+
+    // --- File Tree --- //
+    writeln!(output, "## File Tree Structure\n")?;
+    write_tree_to_file(&mut output, file_tree, 0)?;
+
+    // --- File Contents --- //
+    for entry in files {
+        process_file(base_path, entry.path(), &mut output, line_numbers)?;
+    }
+
+    Ok(())
+}
+
+/// Processes a single file and writes its content to the output.
+fn process_file(
+    base_path: &Path,
+    file_path: &Path,
+    output: &mut fs::File,
+    line_numbers: bool,
+) -> io::Result<()> {
+    let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
+    info!("Processing file: {}", relative_path.display());
+
+    let metadata = match fs::metadata(file_path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            error!(
+                "Failed to get metadata for {}: {}",
+                relative_path.display(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    let modified_time = metadata
+        .modified()
+        .ok()
+        .map(|time| {
+            let system_time: chrono::DateTime<Utc> = time.into();
+            system_time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+        })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // --- File Header --- //
+    writeln!(output)?;
+    writeln!(output, "## File: `{}`", relative_path.display())?;
+    writeln!(output)?;
+    writeln!(output, "- Size: {} bytes", metadata.len())?;
+    writeln!(output, "- Modified: {}", modified_time)?;
+    writeln!(output)?;
+
+    // --- File Content --- //
+    let extension = file_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("text");
+    let language = match extension {
+        "rs" => "rust",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "jsx" => "jsx",
+        "tsx" => "tsx",
+        "json" => "json",
+        "toml" => "toml",
+        "md" => "markdown",
+        "yaml" | "yml" => "yaml",
+        "html" => "html",
+        "css" => "css",
+        "py" => "python",
+        "java" => "java",
+        "cpp" => "cpp",
+        "c" => "c",
+        "h" => "c",
+        "hpp" => "cpp",
+        "sql" => "sql",
+        "sh" => "bash",
+        "xml" => "xml",
+        "lock" => "toml",
+        _ => extension,
+    };
+
+    match fs::read_to_string(file_path) {
+        Ok(content) => {
+            writeln!(output, "```{}", language)?;
+            if line_numbers {
+                for (i, line) in content.lines().enumerate() {
+                    writeln!(output, "{:>4} | {}", i + 1, line)?;
+                }
+            } else {
+                writeln!(output, "{}", content)?;
+            }
+            writeln!(output, "```")?;
+        }
+        Err(e) => {
+            warn!(
+                "Could not read file {}: {}. Skipping content.",
+                relative_path.display(),
+                e
+            );
+            writeln!(output, "```text")?;
+            writeln!(
+                output,
+                "<Could not read file content (e.g., binary file or permission error)>"
+            )?;
+            writeln!(output, "```")?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_code_block_formatting() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join("test.rs");
+        let output_path = base_path.join("output.md");
+
+        // Create a test Rust file
+        fs::write(
+            &file_path,
+            "fn main() {\n    println!(\"Hello, world!\");\n}",
+        )
+        .unwrap();
+
+        // Create output file
+        let mut output = fs::File::create(&output_path).unwrap();
+
+        // Process the file
+        process_file(base_path, &file_path, &mut output, false).unwrap();
+
+        // Read the output
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Check that code blocks are properly formatted
+        assert!(content.contains("```rust"));
+        assert!(content.contains("```") && content.matches("```").count() >= 2);
+    }
+
+    #[test]
+    fn test_markdown_file_formatting() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join("README.md");
+        let output_path = base_path.join("output.md");
+
+        // Create a test markdown file
+        fs::write(&file_path, "# Test\n\nThis is a test markdown file.").unwrap();
+
+        // Create output file
+        let mut output = fs::File::create(&output_path).unwrap();
+
+        // Process the file
+        process_file(base_path, &file_path, &mut output, false).unwrap();
+
+        // Read the output
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Debug print the content
+        println!("Generated content:\n{}", content);
+
+        // Check that markdown files use the correct language identifier
+        assert!(
+            content.contains("```markdown"),
+            "Content should contain '```markdown' but was: {}",
+            content
+        );
+        // Count the number of code block markers
+        let code_block_markers = content.matches("```").count();
+        assert!(
+            code_block_markers >= 2,
+            "Expected at least 2 code block markers, found {}",
+            code_block_markers
+        );
+    }
+}

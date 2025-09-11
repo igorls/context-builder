@@ -1,8 +1,22 @@
 [package]
 name = "context-builder"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+authors = ["Igor Lins e Silva"]
+description = "CLI tool to aggregate directory contents into a single markdown file optimized for LLM consumption"
+readme = "README.md"
+homepage = "https://github.com/igorls/context-builder"
+repository = "https://github.com/igorls/context-builder"
+license = "MIT"
+keywords = ["cli", "markdown", "documentation", "llm", "context"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-clap = { version = "4.0", features = ["derive"] }
-chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5.47", features = ["derive"] }
+chrono = { version = "0.4.42", features = ["serde"] }
+ignore = "0.4.23"
+log = "0.4.28"
+env_logger = "0.11.8"
+
+[dev-dependencies]
+tempfile = "3.22.0"
