@@ -16,9 +16,12 @@ pub type FileTree = BTreeMap<String, FileNode>;
 pub fn build_file_tree(files: &[DirEntry], base_path: &Path) -> FileTree {
     let mut tree = BTreeMap::new();
     for entry in files {
-        let path = entry.path().strip_prefix(base_path).unwrap_or_else(|_| entry.path());
+        let path = entry
+            .path()
+            .strip_prefix(base_path)
+            .unwrap_or_else(|_| entry.path());
         let components: Vec<_> = path.components().collect();
-        
+
         // Insert this path into the tree
         insert_path(&mut tree, &components);
     }
@@ -30,9 +33,9 @@ fn insert_path(tree: &mut FileTree, components: &[std::path::Component]) {
     if components.is_empty() {
         return;
     }
-    
+
     let name = components[0].as_os_str().to_string_lossy().to_string();
-    
+
     if components.len() == 1 {
         // This is the last component, so it's a file
         tree.insert(name, FileNode::File);
@@ -41,7 +44,7 @@ fn insert_path(tree: &mut FileTree, components: &[std::path::Component]) {
         // Make sure the directory exists
         tree.entry(name.clone())
             .or_insert_with(|| FileNode::Directory(BTreeMap::new()));
-        
+
         // Recursively insert the rest of the path
         if let Some(FileNode::Directory(next_dir)) = tree.get_mut(&name) {
             insert_path(next_dir, &components[1..]);
@@ -66,7 +69,11 @@ pub fn print_tree(tree: &FileTree, depth: usize) {
 }
 
 /// Recursively writes the file tree to a file.
-pub fn write_tree_to_file(output: &mut impl Write, tree: &FileTree, depth: usize) -> io::Result<()> {
+pub fn write_tree_to_file(
+    output: &mut impl Write,
+    tree: &FileTree,
+    depth: usize,
+) -> io::Result<()> {
     for (name, node) in tree {
         let indent = "  ".repeat(depth);
         match node {
@@ -81,7 +88,6 @@ pub fn write_tree_to_file(output: &mut impl Write, tree: &FileTree, depth: usize
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
