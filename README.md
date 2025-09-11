@@ -1,25 +1,36 @@
 # Context Builder
 
-A CLI tool to aggregate directory contents into a single markdown file optimized for LLM consumption.
+A blazing-fast CLI for creating LLM context from your entire codebase.
 
-## Overview
+[![Crates.io](https://img.shields.io/crates/v/context-builder.svg)](https://crates.io/crates/context-builder)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/igorls/context-builder/blob/main/LICENSE)
+[![CI](https://github.com/igorls/context-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/igorls/context-builder/actions/workflows/ci.yml)
 
-Context Builder is a powerful command-line utility that recursively processes directories and creates comprehensive markdown documentation. It's specifically designed to generate context files that are optimized for Large Language Models (LLMs), making it easier to provide complete project context in AI conversations.
+Tired of manually copy-pasting files into your LLM prompts? Context Builder automates this tedious process, creating a single, clean, and context-rich markdown file from any directory.
 
-## Features
+---
 
-- 📁 **Recursive directory processing** - Scans entire directory trees
-- 🔍 **Smart filtering** - Include only specific file extensions
-- 🚫 **Flexible ignoring** - Exclude folders and files by name
-- 🌳 **File tree visualization** - Generates clear directory structure
-- 👀 **Preview mode** - See what will be processed before generating
-- 📝 **Line numbers** - Optional line numbering for code blocks
-- ⚡ **Fast processing** - Efficient file handling with detailed timing
-- 🛡️ **Safe operations** - Confirms before overwriting existing files
+## Why Context Builder?
+
+Providing broad context to Large Language Models (LLMs) is key to getting high-quality, relevant responses. This tool was built to solve one problem exceptionally well: **packaging your project's source code into a clean, LLM-friendly format with zero fuss.**
+
+It's a command-line utility that recursively processes directories and creates comprehensive markdown documentation, optimized for AI conversations.
+
+## Core Features
+
+- ⚡ **Blazing Fast & Parallel by Default:** Processes thousands of files in seconds. It uses `rayon` to leverage all available CPU cores for maximum throughput.
+- 🧠 **Smart & Efficient File Discovery:** Built on the excellent `ignore` crate, it respects `.gitignore` rules and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
+- 💾 **Memory-Efficient Streaming:** Handles massive files with ease by reading and writing line-by-line, keeping memory usage low no matter the project size.
+- 🛡️ **Robust & Safe by Design:** Confirms before overwriting files and gracefully skips binary content. Built with Rust's guarantees of memory safety, it's a tool you can trust.
+- 🌳 **Clear File Tree Visualization:** Generates an easy-to-read directory structure at the top of the output file so you can see the project layout at a glance.
+- 🔍 **Powerful Filtering & Preview:** Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed before generating the full output.
+- 📝 **Optional Line-Numbered Code Blocks:** Add line numbers to all code blocks for easy reference with a simple `--line-numbers` flag.
+
+---
 
 ## Installation
 
-### From crates.io
+### From crates.io (Recommended)
 
 ```bash
 cargo install context-builder
@@ -28,22 +39,14 @@ cargo install context-builder
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/context-builder.git
+git clone https://github.com/igorls/context-builder.git
 cd context-builder
 cargo install --path .
 ```
 
-## Usage
+---
 
-### Benchmarks (quick)
-- Run:
-  - Linux/macOS: `cargo bench --bench context_bench`
-  - Windows PowerShell: `cargo bench --bench context_bench`
-- Include medium dataset (heavier):
-  - Linux/macOS: `CB_BENCH_MEDIUM=1 cargo bench --bench context_bench`
-  - Windows PowerShell: `$env:CB_BENCH_MEDIUM=1; cargo bench --bench context_bench`
-- HTML report:
-  - `target/criterion/report/index.html`
+## Usage
 
 ### Basic Usage
 
@@ -51,200 +54,55 @@ cargo install --path .
 # Process current directory and create output.md
 context-builder
 
-# Process specific directory
+# Process a specific directory
 context-builder -d /path/to/project
 
-# Specify output file
+# Specify an output file
 context-builder -d /path/to/project -o documentation.md
 ```
 
 ### Advanced Options
 
 ```bash
-# Filter by file extensions
-context-builder -f rs -f toml -f md
+# Filter by file extensions (e.g., only Rust and TOML files)
+context-builder -f rs -f toml
 
-# Ignore specific folders/files
+# Ignore specific folders/files by name
 context-builder -i target -i node_modules -i .git
 
-# Preview mode (show file tree without generating output)
+# Preview mode (shows the file tree without generating output)
 context-builder --preview
 
-# Add line numbers to code blocks
+# Add line numbers to all code blocks
 context-builder --line-numbers
 
-# Combine multiple options
+# Combine multiple options for a powerful workflow
 context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.md
 ```
 
 ### Command Line Options
 
-- `-d, --input <PATH>` - Directory path to process (default: current directory)
-- `-o, --output <FILE>` - Output file path (default: output.md)
-- `-f, --filter <EXT>` - File extensions to include (can be used multiple times)
-- `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times)
-- `--preview` - Preview mode: only show file tree, don't generate output
-- `--line-numbers` - Add line numbers to code blocks in the output
-- `-h, --help` - Show help information
-- `-V, --version` - Show version information
+- `-d, --input <PATH>` - Directory path to process (default: current directory).
+- `-o, --output <FILE>` - Output file path (default: `output.md`).
+- `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
+- `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
+- `--preview` - Preview mode: only show the file tree, don't generate output.
+- `--line-numbers` - Add line numbers to code blocks in the output.
+- `-h, --help` - Show help information.
+- `-V, --version` - Show version information.
 
-## Output Format
+---
 
-Context Builder generates markdown files with the following structure:
+## Documentation
 
-1. **Header** - Project name and generation timestamp
-2. **Processing Summary** - File counts and filtering information
-3. **File Tree** - Visual directory structure
-4. **File Contents** - Each file's content in fenced code blocks
-
-## Use Cases
-
-- **LLM Context Generation** - Create comprehensive project context for AI assistants
-- **Code Reviews** - Generate complete snapshots of codebases
-- **Documentation** - Create unified documentation from multiple files
-- **Project Analysis** - Get overview of project structure and contents
-- **Backup/Archival** - Create readable snapshots of project states
-
-## Examples
-
-### Rust Project
-
-```bash
-context-builder -d ./my-rust-project -f rs -f toml -i target -o rust_context.md
-```
-
-### JavaScript Project
-
-```bash
-context-builder -d ./my-js-project -f js -f ts -f json -i node_modules -i dist
-```
-
-### Documentation Project
-
-```bash
-context-builder -d ./docs -f md -f txt --line-numbers
-```
-
-## Performance
-
-Context Builder is designed for efficiency:
-
-- Processes thousands of files in seconds
-- Memory-efficient streaming for large files
-- Parallel directory traversal
-- Smart filtering to avoid unnecessary processing
+- **[DEVELOPMENT.md](DEVELOPMENT.md):** For contributors. Covers setup, testing, linting, and release process.
+- **[BENCHMARKS.md](BENCHMARKS.md):** For performance enthusiasts. Details on running benchmarks and generating datasets.
+- **[CHANGELOG.md](CHANGELOG.md):** A complete history of releases and changes.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
-
-
-### Development Setup
-
-
-
-```bash
-
-git clone https://github.com/yourusername/context-builder.git
-
-cd context-builder
-
-cargo build
-
-cargo test
-
-```
-
-## Benchmarks
-
-Run Criterion benchmarks to evaluate performance at different scales.
-
-- Quick run:
-  - Linux/macOS:
-    ```bash
-    cargo bench --bench context_bench
-    ```
-  - Windows PowerShell:
-    ```powershell
-    cargo bench --bench context_bench
-    ```
-
-- Include the medium dataset (disabled by default to keep runs lighter):
-  - Linux/macOS:
-    ```bash
-    CB_BENCH_MEDIUM=1 cargo bench --bench context_bench
-    ```
-  - Windows PowerShell:
-    ```powershell
-    $env:CB_BENCH_MEDIUM=1; cargo bench --bench context_bench
-    ```
-
-- HTML reports:
-  - Open the Criterion report at:
-    - target/criterion/report/index.html
-    - or per-benchmark reports under: target/criterion/context_builder/*/report/index.html
-
-Notes:
-- Benchmarks run both with and without line numbers to compare overhead.
-- Datasets are generated in a temporary directory during the run.
-- Binary files are generated but ignored by the default filters.
-- Ignores: node_modules, target; Filters: rs, md, txt, toml.
-
-## Generating sample datasets
-
-You can generate persistent sample datasets (ignored from version control) for local testing and manual performance checks.
-
-- Add this to your .gitignore if not already present:
-  ```
-  /samples
-  ```
-
-- Compile and run the generator script:
-  - Linux/macOS:
-    ```bash
-    rustc scripts/generate_samples.rs -O -o generate_samples && ./generate_samples --help
-    ```
-  - Windows PowerShell:
-    ```powershell
-    rustc scripts/generate_samples.rs -O -o generate_samples.exe; .\generate_samples.exe --help
-    ```
-
-Common usages:
-- Default presets (tiny, small) into ./samples:
-  - `generate_samples`
-- Include medium and large:
-  - `generate_samples --presets tiny,small,medium --include-large`
-- Only one preset with custom parameters:
-  - `generate_samples --only small --files 5000 --depth 4 --width 4 --size 1024`
-- Clean output before generating:
-  - `generate_samples --clean`
-- Dry run (print plan only):
-  - `generate_samples --dry-run`
-
-Generated structure per dataset:
-- project/
-  - src/, docs/, assets/ nested trees with text files
-  - target/, node_modules/ with ignored noise
-  - README.md, Cargo.toml at root
-  - .bin files sprinkled across trees to validate binary handling
-
-Binary files are intentionally ignored for now. In the future, specialized parsers can be added to support additional document types (e.g., PDF, DOC).
-
-
-## Changelog
-
-### v0.2.0
-- Added line numbers support
-- Improved file tree visualization
-- Enhanced error handling
-- Better CLI argument validation
-
-### v0.1.0
-- Initial release
-- Basic directory processing
-- File filtering and ignoring
-- Markdown output generation
+Contributions are welcome! Please see **[DEVELOPMENT.md](DEVELOPMENT.md)** for setup instructions and guidelines. For major changes, please open an issue first to discuss what you would like to change.
 
 ## License
 
-MIT License. See `LICENSE` file for details.
+This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** file for details.
