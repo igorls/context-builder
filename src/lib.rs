@@ -119,26 +119,10 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
                 Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
             ));
 
-            // Only add tree header tokens if not in preview mode
-            // (since preview already shows the tree)
-            if !args.preview {
-                total_tokens += estimate_tokens("## File Tree Structure\n\n");
-            }
-            // If both preview and token_count modes are enabled, show preview first
-            if args.preview {
-                println!("\n# File Tree Structure (Preview)\n");
-                print_tree(&file_tree, 0);
-                println!();
-            }
-
+            // File tree section (tree already printed earlier if --preview was supplied)
             total_tokens += estimate_tokens("## File Tree Structure\n\n");
 
-            // Count tokens for the file tree (unless in preview mode where it's already shown)
-            let tree_tokens = if args.preview {
-                0 // Don't count tree tokens when in preview mode since we skip the tree section
-            } else {
-                count_tree_tokens(&file_tree, 0)
-            };
+            let tree_tokens = count_tree_tokens(&file_tree, 0);
             total_tokens += tree_tokens;
 
             // Count tokens for all files
@@ -159,14 +143,6 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
     }
 
     // --- 5. Get user confirmation --- //
-    if !prompter.confirm_processing(files.len())? {
-        if !silent {
-            println!("Operation cancelled.");
-        }
-        return Ok(());
-    }
-
-    // --- 4. Get user confirmation --- //
     if !prompter.confirm_processing(files.len())? {
         if !silent {
             println!("Operation cancelled.");

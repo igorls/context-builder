@@ -1,6 +1,7 @@
 [package]
 name = "context-builder"
 version = "0.4.0"
+default-run = "context-builder"
 edition = "2024"
 authors = ["Igor Lins e Silva"]
 description = "CLI tool to aggregate directory contents into a single markdown file optimized for LLM consumption"
