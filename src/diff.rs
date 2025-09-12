@@ -8,7 +8,7 @@ use std::collections::HashMap;
 /// approach made it easy for volatile sections (timestamps, file tree
 /// structure, etc.) to create noisy diffs. To address this the new
 /// per‑file API lets the caller diff only the normalized *file content*
-//// blocks that appear under each `### File: `path`` heading in the
+/// blocks that appear under each `### File: `path`` heading in the
 /// canonical output, completely ignoring the global header or the file
 /// tree portion. Each file receives an isolated unified style diff.
 ///
@@ -23,7 +23,6 @@ use std::collections::HashMap;
 /// Backwards compatibility: the existing `generate_diff` function (full
 /// document diff) is retained for now. New code should prefer the
 /// per‑file functions.
-
 /// Determine number of context lines either from explicit argument or env.
 fn resolve_context_lines(explicit: Option<usize>) -> usize {
     explicit

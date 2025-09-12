@@ -198,15 +198,23 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         if line_numbers { "ln" } else { "raw" }
     ));
 
-    // Build static args; we rely on NoPrompt to auto-confirm overwrites and processing threshold
     let args = Args {
         input: input_dir.to_string_lossy().into_owned(),
+
         output: output_path.to_string_lossy().into_owned(),
+
         filter: spec.filters.clone(),
+
         ignore: spec.ignores.clone(),
+
         preview: false,
+
         token_count: false,
+
         line_numbers,
+
+        yes: true,
+        diff_only: false,
     };
 
     let prompter = NoPrompt;
@@ -240,12 +248,21 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
             let _ = black_box(run_with_args(
                 Args {
                     input: args.input.clone(),
+
                     output: args.output.clone(),
+
                     filter: args.filter.clone(),
+
                     ignore: args.ignore.clone(),
+
                     preview: args.preview,
+
                     token_count: args.token_count,
+
                     line_numbers: args.line_numbers,
+
+                    yes: true,
+                    diff_only: false,
                 },
                 &prompter,
             ));

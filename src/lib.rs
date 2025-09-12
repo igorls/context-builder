@@ -61,21 +61,24 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
 
     let config = load_config().unwrap_or_default();
     // Expose configured diff context lines (if provided) to the diff generator through env
-    if let Some(diff_ctx) = config.diff_context_lines {
-        if std::env::var("CB_DIFF_CONTEXT_LINES").is_err() {
-            unsafe {
-                std::env::set_var("CB_DIFF_CONTEXT_LINES", diff_ctx.to_string());
-            }
+    if let Some(diff_ctx) = config.diff_context_lines
+        && std::env::var("CB_DIFF_CONTEXT_LINES").is_err()
+    {
+        unsafe {
+            std::env::set_var("CB_DIFF_CONTEXT_LINES", diff_ctx.to_string());
         }
     }
 
-    if !args.preview && !args.token_count && Path::new(&args.output).exists() {
-        if !args.yes && !prompter.confirm_overwrite(&args.output)? {
-            if !silent {
-                println!("Operation cancelled.");
-            }
-            return Ok(());
+    if !args.preview
+        && !args.token_count
+        && Path::new(&args.output).exists()
+        && !args.yes
+        && !prompter.confirm_overwrite(&args.output)?
+    {
+        if !silent {
+            println!("Operation cancelled.");
         }
+        return Ok(());
     }
 
     let files = collect_files(base_path, &args.filter, &args.ignore)?;
@@ -196,10 +199,10 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
                         files_map.insert(p, current_lines.join("\n"));
                         current_lines.clear();
                     }
-                    if let Some(after) = line.strip_prefix("### File: `") {
-                        if let Some(end) = after.find('`') {
-                            current_path = Some(after[..end].to_string());
-                        }
+                    if let Some(after) = line.strip_prefix("### File: `")
+                        && let Some(end) = after.find('`')
+                    {
+                        current_path = Some(after[..end].to_string());
                     }
                     in_code = false;
                     continue;
@@ -254,20 +257,20 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
         if !added_paths.is_empty() {
             // For safety do replacements on a line-by-line rebuild to avoid nested replacements.
             let mut rebuilt = String::new();
-            let mut lines = files_section.lines().peekable();
-            while let Some(line) = lines.next() {
-                if let Some(after) = line.strip_prefix("### File: `") {
-                    if let Some(end) = after.find('`') {
-                        let path = &after[..end];
-                        rebuilt.push_str(line);
+            let lines = files_section.lines().peekable();
+            for line in lines {
+                if let Some(after) = line.strip_prefix("### File: `")
+                    && let Some(end) = after.find('`')
+                {
+                    let path = &after[..end];
+                    rebuilt.push_str(line);
+                    rebuilt.push('\n');
+                    // The original generator emits a blank line after heading; we add status before metadata
+                    if added_paths.contains(path) {
                         rebuilt.push('\n');
-                        // The original generator emits a blank line after heading; we add status before metadata
-                        if added_paths.contains(path) {
-                            rebuilt.push('\n');
-                            rebuilt.push_str("_Status: Added_\n");
-                        }
-                        continue;
+                        rebuilt.push_str("_Status: Added_\n");
                     }
+                    continue;
                 }
                 rebuilt.push_str(line);
                 rebuilt.push('\n');
@@ -292,7 +295,7 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
             for p in modified_paths.iter().copied().collect::<Vec<_>>() {
                 final_doc.push_str(&format!("- Modified: `{}`\n", p));
             }
-            final_doc.push_str("\n");
+            final_doc.push('\n');
         }
 
         // File Differences: ONLY modified files (no added / removed)
@@ -329,10 +332,10 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
         final_output.write_all(final_doc.as_bytes())?;
 
         // 9. Update canonical cache
-        if let Err(e) = fs::write(&cache_file, &new_canonical) {
-            if !silent {
-                eprintln!("Warning: failed to update canonical cache: {e}");
-            }
+        if let Err(e) = fs::write(&cache_file, &new_canonical)
+            && !silent
+        {
+            eprintln!("Warning: failed to update canonical cache: {e}");
         }
 
         let duration = start_time.elapsed();
@@ -385,40 +388,40 @@ pub fn run() -> io::Result<()> {
     }
 
     if let Some(config) = config {
-        if args.output == "output.md" {
-            if let Some(output) = config.output {
-                args.output = output;
-            }
+        if args.output == "output.md"
+            && let Some(output) = config.output
+        {
+            args.output = output;
         }
-        if args.filter.is_empty() {
-            if let Some(filter) = config.filter {
-                args.filter = filter;
-            }
+        if args.filter.is_empty()
+            && let Some(filter) = config.filter
+        {
+            args.filter = filter;
         }
-        if args.ignore.is_empty() {
-            if let Some(ignore) = config.ignore {
-                args.ignore = ignore;
-            }
+        if args.ignore.is_empty()
+            && let Some(ignore) = config.ignore
+        {
+            args.ignore = ignore;
         }
-        if !args.line_numbers {
-            if let Some(line_numbers) = config.line_numbers {
-                args.line_numbers = line_numbers;
-            }
+        if !args.line_numbers
+            && let Some(line_numbers) = config.line_numbers
+        {
+            args.line_numbers = line_numbers;
         }
-        if !args.preview {
-            if let Some(preview) = config.preview {
-                args.preview = preview;
-            }
+        if !args.preview
+            && let Some(preview) = config.preview
+        {
+            args.preview = preview;
         }
-        if !args.token_count {
-            if let Some(token_count) = config.token_count {
-                args.token_count = token_count;
-            }
+        if !args.token_count
+            && let Some(token_count) = config.token_count
+        {
+            args.token_count = token_count;
         }
-        if !args.yes {
-            if let Some(yes) = config.yes {
-                args.yes = yes;
-            }
+        if !args.yes
+            && let Some(yes) = config.yes
+        {
+            args.yes = yes;
         }
 
         let mut output_folder_path: Option<PathBuf> = None;

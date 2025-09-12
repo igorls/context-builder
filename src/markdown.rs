@@ -19,10 +19,10 @@ pub fn generate_markdown(
     base_path: &Path,
     line_numbers: bool,
 ) -> io::Result<()> {
-    if let Some(parent) = Path::new(output_path).parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = Path::new(output_path).parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)?;
     }
 
     let mut output = fs::File::create(output_path)?;
