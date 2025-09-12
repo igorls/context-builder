@@ -1,6 +1,7 @@
 use ignore::{DirEntry, WalkBuilder};
+use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Collects all files to be processed using `ignore` crate for efficient traversal.
 pub fn collect_files(
@@ -8,6 +9,9 @@ pub fn collect_files(
     filters: &[String],
     ignores: &[String],
 ) -> io::Result<Vec<DirEntry>> {
+    let mut ignores = ignores.to_vec();
+    ignores.push(".context-builder.toml".to_string());
+
     let mut walker = WalkBuilder::new(base_path);
     // By default, the "ignore" crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
 
@@ -70,6 +74,30 @@ pub fn confirm_overwrite(file_path: &str) -> io::Result<bool> {
     } else {
         Ok(false)
     }
+}
+
+pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+
+    let mut latest_file = None;
+    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
+
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let metadata = fs::metadata(&path)?;
+            let modified = metadata.modified()?;
+            if modified > latest_time {
+                latest_time = modified;
+                latest_file = Some(path);
+            }
+        }
+    }
+
+    Ok(latest_file)
 }
 
 #[cfg(test)]

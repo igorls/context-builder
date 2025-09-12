@@ -19,7 +19,25 @@ pub fn generate_markdown(
     base_path: &Path,
     line_numbers: bool,
 ) -> io::Result<()> {
+    if let Some(parent) = Path::new(output_path).parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
     let mut output = fs::File::create(output_path)?;
+
+    let input_dir_name = if input_dir == "." {
+        let current_dir = std::env::current_dir()?;
+        current_dir
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    } else {
+        input_dir.to_string()
+    };
 
     // --- Header --- //
     writeln!(output, "# Directory Structure Report\n")?;
@@ -28,14 +46,14 @@ pub fn generate_markdown(
         writeln!(
             output,
             "This document contains files from the `{}` directory with extensions: {}",
-            input_dir,
+            input_dir_name,
             filters.join(", ")
         )?;
     } else {
         writeln!(
             output,
             "This document contains all files from the `{}` directory, optimized for LLM consumption.",
-            input_dir
+            input_dir_name
         )?;
     }
 
@@ -51,10 +69,15 @@ pub fn generate_markdown(
     writeln!(output)?;
 
     // --- File Tree --- //
+
     writeln!(output, "## File Tree Structure\n")?;
+
     write_tree_to_file(&mut output, file_tree, 0)?;
 
-    // --- File Contents --- //
+    writeln!(output)?;
+
+    // (No '## Files' heading here; it will be injected later only once during final composition)
+    // (Diff section will be conditionally inserted later by the auto_diff logic in lib.rs)
 
     #[cfg(feature = "parallel")]
     {
@@ -121,10 +144,11 @@ fn process_file(
         })
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // --- File Header --- //
     writeln!(output)?;
-    writeln!(output, "## File: `{}`", relative_path.display())?;
+    writeln!(output, "### File: `{}`", relative_path.display())?;
+
     writeln!(output)?;
+
     writeln!(output, "- Size: {} bytes", metadata.len())?;
     writeln!(output, "- Modified: {}", modified_time)?;
     writeln!(output)?;

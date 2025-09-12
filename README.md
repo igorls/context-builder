@@ -18,13 +18,34 @@ It's a command-line utility that recursively processes directories and creates c
 
 ## Core Features
 
-- ⚡ **Blazing Fast & Parallel by Default:** Processes thousands of files in seconds. It uses `rayon` to leverage all available CPU cores for maximum throughput.
-- 🧠 **Smart & Efficient File Discovery:** Built on the excellent `ignore` crate, it respects `.gitignore` rules and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
-- 💾 **Memory-Efficient Streaming:** Handles massive files with ease by reading and writing line-by-line, keeping memory usage low no matter the project size.
-- 🛡️ **Robust & Safe by Design:** Confirms before overwriting files and gracefully skips binary content. Built with Rust's guarantees of memory safety, it's a tool you can trust.
-- 🌳 **Clear File Tree Visualization:** Generates an easy-to-read directory structure at the top of the output file so you can see the project layout at a glance.
-- 🔍 **Powerful Filtering & Preview:** Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed before generating the full output.
-- 📝 **Optional Line-Numbered Code Blocks:** Add line numbers to all code blocks for easy reference with a simple `--line-numbers` flag.
+
+- ⚡ **Blazing Fast & Parallel by Default:**  
+  Processes thousands of files in seconds by leveraging all available CPU cores.
+
+- 🧠 **Smart & Efficient File Discovery:**  
+  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
+
+- 💾 **Memory-Efficient Streaming:**  
+  Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
+
+- 🌳 **Clear File Tree Visualization:**  
+  Generates an easy-to-read directory structure at the top of the output file.
+
+- 🔍 **Powerful Filtering & Preview:**  
+  Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
+
+- ⚙️ **Configuration-First:**  
+  Use a `.context-builder.toml` file to store your preferences for consistent, repeatable outputs.
+
+- 🔁 **Automatic Per-File Diffs:**  
+  When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
+
+- ✂️ **Diff-Only Mode:**  
+  Output only the change summary and modified file diffs—no full file bodies—to minimize token usage.
+
+- 🧪 **Accurate Token Counting:**  
+  Get real tokenizer–based estimates with `--token-count` to plan your prompt budgets.
+
 
 ---
 
@@ -73,7 +94,7 @@ context-builder -i target -i node_modules -i .git
 # Preview mode (shows the file tree without generating output)
 context-builder --preview
 
-# Token count mode (estimate the total token count of the final document)
+# Token count mode (accurately count the total token count of the final document using a real tokenizer.)
 context-builder --token-count
 
 # Add line numbers to all code blocks
@@ -83,6 +104,54 @@ context-builder --line-numbers
 context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.md
 ```
 
+---
+
+## Configuration
+
+For more complex projects, you can use a `.context-builder.toml` file in your project's root directory to store your preferences. This is great for ensuring consistent outputs and avoiding repetitive command-line flags.
+
+### Example `.context-builder.toml`
+
+```toml
+# Default output file name
+output = "context.md"
+
+# Default output folder
+output_folder = "docs/context"
+
+# Create timestamped versions of the output file (e.g., context_20250912123000.md)
+timestamped_output = true
+
+# Automatically compute per-file diffs against the previous timestamped snapshot
+auto_diff = true
+
+# Emit only change summary + modified file diffs (omit full file bodies)
+# Set to true to greatly reduce token usage when you just need what's changed.
+diff_only = false
+
+# File extensions to include
+filter = ["rs", "toml", "md"]
+
+# Folders or file names to ignore
+ignore = ["target", "node_modules", ".git"]
+
+# Add line numbers to code blocks
+line_numbers = true
+```
+
+---
+
+## Auto-diff
+
+When using `timestamped_output = true` together with `auto_diff = true`, Context Builder compares the previous canonical snapshot to the newly generated one and produces:
+
+- A Change Summary (Added / Removed / Modified files)
+- A File Differences section containing only modified files (added & removed are summarized but not diffed)
+
+If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files” section is omitted to conserve tokens: you get just the header + tree, the Change Summary, and per-file diffs for modified files.
+
+**Note:** Command-line arguments will always override the settings in the configuration file.
+
 ### Command Line Options
 
 - `-d, --input <PATH>` - Directory path to process (default: current directory).
@@ -90,10 +159,17 @@ context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.m
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
 - `--preview` - Preview mode: only show the file tree, don't generate output.
-- `--token-count` - Token count mode: estimate the total token count of the final document.
+- `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
+- `--diff-only` - With `--auto-diff` + `--timestamped-output`, output only change summary + modified file diffs (omit full file bodies).
 - `-h, --help` - Show help information.
 - `-V, --version` - Show version information.
+
+---
+
+## Token Counting
+
+Context Builder uses the `tiktoken-rs` library to provide accurate token counts for OpenAI models. This ensures that the token count is as close as possible to the actual number of tokens that will be used by the model.
 
 ---
 

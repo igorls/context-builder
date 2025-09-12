@@ -21,16 +21,10 @@ env_logger = "0.11.8"
 rayon = { version = "1.10", optional = true }
 serde = { version = "1.0.219", features = ["derive"] }
 toml = "0.8.23"
-
 dissimilar = "1.0.10"
-
-similar = "2.4.0"
 tempfile = "3.22.0"
-
 tiktoken-rs = "0.7.0"
-
 once_cell = "1.19.0"
-
 
 [features]
 default = ["parallel"]
@@ -49,3 +43,20 @@ harness = false
 name = "generate_samples"
 path = "scripts/generate_samples.rs"
 required-features = ["samples-bin"]
+```
+"#;
+
+    let new_content = old_content.clone(); // Identical content
+
+    let diff_result = generate_diff(old_content, new_content);
+
+    println!("Diff result length: {}", diff_result.len());
+    println!("Diff result is empty: {}", diff_result.is_empty());
+
+    if diff_result.is_empty() {
+        println!("SUCCESS: No diff generated for identical files");
+    } else {
+        println!("ISSUE: Diff was generated for identical files");
+        println!("Diff content:\n{}", diff_result);
+    }
+}

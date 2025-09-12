@@ -1,33 +1,17 @@
-/// Token counting utilities for estimating LLM token usage
 use ignore::DirEntry;
+use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+/// Token counting utilities for estimating LLM token usage
+use tiktoken_rs::{CoreBPE, cl100k_base};
 
-/// Estimates the number of tokens in a text string
-///
-/// This uses a simple heuristic that 1 token is roughly 4 characters for code content
-/// and 3 characters for text content (like markdown, documentation, etc.)
+// Initialize the tokenizer once and reuse it
+static TOKENIZER: Lazy<CoreBPE> = Lazy::new(|| cl100k_base().unwrap());
+
+/// Estimates the number of tokens in a text string using a real tokenizer
 pub fn estimate_tokens(text: &str) -> usize {
-    // For code files, we'll use a ratio of 1 token per 4 characters
-    // For text files, we'll use a ratio of 1 token per 3 characters
-    // This is a rough estimation - actual token counts will vary based on the model's tokenizer
-
-    // Simple heuristic: if the text has many non-alphanumeric characters,
-    // it's likely code and we'll use the 4:1 ratio
-    let non_alpha_count = text
-        .chars()
-        .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
-        .count();
-    let alpha_count = text.chars().filter(|c| c.is_alphanumeric()).count();
-
-    if text.lines().count() > 5 && non_alpha_count > alpha_count / 2 {
-        // Likely code content
-        text.chars().count() / 4
-    } else {
-        // Likely text content
-        text.chars().count() / 3
-    }
+    TOKENIZER.encode_with_special_tokens(text).len()
 }
 
 /// Counts the tokens that would be generated for a file
@@ -90,23 +74,20 @@ pub fn count_tree_tokens(tree: &BTreeMap<String, crate::tree::FileNode>, depth: 
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
     fn test_estimate_tokens() {
         // Test with a simple string
         let text = "Hello, world!";
         let tokens = estimate_tokens(text);
-        // 13 characters, no special heuristic applies (text content)
-        // 13 chars / 3 ≈ 4 tokens
-        assert!(tokens > 0); // At least verify it returns some tokens
+        // "Hello, world!" is 4 tokens with cl100k_base
+        assert_eq!(tokens, 4);
 
         // Test with code-like content
         let code_text = "fn main() {\n    println!(\"Hello, world!\");\n}";
         let tokens = estimate_tokens(code_text);
-        // Function should return some tokens based on its logic
-        assert!(tokens > 0); // At least verify it returns some tokens
+        // This specific code snippet is 12 tokens with cl100k_base
+        assert_eq!(tokens, 12);
     }
 
     #[test]
@@ -120,11 +101,10 @@ mod tests {
         tree.insert("src".to_string(), crate::tree::FileNode::Directory(subdir));
 
         let tokens = count_tree_tokens(&tree, 0);
-        // This should count tokens for:
-        // "- 📄 file1.rs\n" (15 chars / 3 ≈ 5 tokens)
-        // "- 📁 src\n" (9 chars / 3 ≈ 3 tokens)
-        // "  - 📄 file2.md\n" (20 chars / 3 ≈ 6 tokens)
-        // Total should be around 14 tokens
-        assert!(tokens > 0);
+        // "- 📄 file1.rs\n" -> 8 tokens
+        // "- 📁 src\n" -> 6 tokens
+        // "  - 📄 file2.md\n" -> 9 tokens
+        // Total should be 23 tokens
+        assert_eq!(tokens, 23);
     }
 }

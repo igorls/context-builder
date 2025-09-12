@@ -10,6 +10,7 @@ pub enum FileNode {
     Directory(BTreeMap<String, FileNode>),
 }
 
+/// Type alias for the file tree structure.
 pub type FileTree = BTreeMap<String, FileNode>;
 
 /// Builds a nested BTreeMap representing the file structure.
