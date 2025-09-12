@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use tempfile::tempdir;
 
 use context_builder::cli::Args;
-use context_builder::{Prompter, run_with_args};
+use context_builder::{run_with_args, Prompter};
 
 static INIT: Once = Once::new();
 
@@ -200,19 +200,12 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
 
     let args = Args {
         input: input_dir.to_string_lossy().into_owned(),
-
         output: output_path.to_string_lossy().into_owned(),
-
         filter: spec.filters.clone(),
-
         ignore: spec.ignores.clone(),
-
         preview: false,
-
         token_count: false,
-
         line_numbers,
-
         yes: true,
         diff_only: false,
     };
@@ -244,23 +237,16 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
 
     group.bench_with_input(id, &args, |b, _| {
         b.iter(|| {
-            // Allow repeated overwrites; keep output path stable to avoid filesystem churn
-            let _ = black_box(run_with_args(
+            // Allow repeated overwrites; keep the output path stable to avoid filesystem churn
+            let _ = std::hint::black_box(run_with_args(
                 Args {
                     input: args.input.clone(),
-
                     output: args.output.clone(),
-
                     filter: args.filter.clone(),
-
                     ignore: args.ignore.clone(),
-
                     preview: args.preview,
-
                     token_count: args.token_count,
-
                     line_numbers: args.line_numbers,
-
                     yes: true,
                     diff_only: false,
                 },
