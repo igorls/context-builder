@@ -73,6 +73,9 @@ context-builder -i target -i node_modules -i .git
 # Preview mode (shows the file tree without generating output)
 context-builder --preview
 
+# Token count mode (estimate the total token count of the final document)
+context-builder --token-count
+
 # Add line numbers to all code blocks
 context-builder --line-numbers
 
@@ -87,6 +90,7 @@ context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.m
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
 - `--preview` - Preview mode: only show the file tree, don't generate output.
+- `--token-count` - Token count mode: estimate the total token count of the final document.
 - `--line-numbers` - Add line numbers to code blocks in the output.
 - `-h, --help` - Show help information.
 - `-V, --version` - Show version information.
@@ -102,6 +106,10 @@ context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.m
 ## Contributing
 
 Contributions are welcome! Please see **[DEVELOPMENT.md](DEVELOPMENT.md)** for setup instructions and guidelines. For major changes, please open an issue first to discuss what you would like to change.
+
+## Changelog
+
+See **[CHANGELOG.md](CHANGELOG.md)** for a complete history of releases and changes.
 
 ## License
 

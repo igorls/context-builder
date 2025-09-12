@@ -24,6 +24,10 @@ pub struct Args {
     #[clap(long)]
     pub preview: bool,
 
+    /// Token count mode: estimate the total token count of the final document
+    #[clap(long)]
+    pub token_count: bool,
+
     /// Add line numbers to code blocks in the output
     #[clap(long)]
     pub line_numbers: bool,
@@ -58,6 +62,7 @@ mod tests {
             "--ignore",
             "node_modules",
             "--preview",
+            "--token-count",
             "--line-numbers",
         ])
         .expect("should parse");
@@ -70,6 +75,7 @@ mod tests {
             vec!["target".to_string(), "node_modules".to_string()]
         );
         assert!(args.preview);
+        assert!(args.token_count);
         assert!(args.line_numbers);
     }
 

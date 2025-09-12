@@ -59,6 +59,7 @@ fn preview_mode_does_not_create_output_file() {
         filter: vec![],
         ignore: vec![],
         preview: true,
+        token_count: false,
         line_numbers: false,
     };
 
@@ -72,6 +73,121 @@ fn preview_mode_does_not_create_output_file() {
     assert!(
         !root.join("output.md").exists(),
         "output file should not be created in preview mode"
+    );
+}
+
+#[test]
+fn preview_mode_skips_overwrite_confirmation() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create an existing output file
+    let output_path = root.join("output.md");
+    write_file(&output_path, "existing content");
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: true,
+        token_count: false,
+        line_numbers: false,
+    };
+
+    // Use false for overwrite response to verify it's not called
+    let prompter = TestPrompter::new(false, true);
+
+    // Run in preview mode - should succeed even with overwrite denied
+    let res = run_with_args(args, &prompter);
+    assert!(
+        res.is_ok(),
+        "preview mode should succeed without overwrite confirmation"
+    );
+
+    // Output file should remain unchanged
+    let content = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        content, "existing content",
+        "output file should not be modified in preview mode"
+    );
+}
+
+#[test]
+fn token_count_mode_skips_overwrite_confirmation() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create an existing output file
+    let output_path = root.join("output.md");
+    write_file(&output_path, "existing content");
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: true,
+        line_numbers: false,
+    };
+
+    // Use false for overwrite response to verify it's not called
+    let prompter = TestPrompter::new(false, true);
+
+    // Run in token count mode - should succeed even with overwrite denied
+    let res = run_with_args(args, &prompter);
+    assert!(
+        res.is_ok(),
+        "token count mode should succeed without overwrite confirmation"
+    );
+
+    // Output file should remain unchanged
+    let content = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        content, "existing content",
+        "output file should not be modified in token count mode"
+    );
+}
+
+#[test]
+
+fn both_preview_and_token_count_modes_work_together() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("output.md").to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: true,
+        token_count: true,
+        line_numbers: false,
+    };
+
+    let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
+
+    // Run with both modes
+    let res = run_with_args(args, &prompter);
+    assert!(res.is_ok(), "both modes should work together");
+
+    // No output file created
+    assert!(
+        !root.join("output.md").exists(),
+        "output file should not be created when both modes are active"
     );
 }
 
@@ -109,6 +225,7 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         filter: vec!["rs".into(), "md".into()],
         ignore: vec!["node_modules".into(), "target".into()],
         preview: false,
+        token_count: false,
         line_numbers: true,
     };
 
@@ -169,6 +286,7 @@ fn overwrite_prompt_is_respected() {
         filter: vec!["rs".into()],
         ignore: vec![],
         preview: false,
+        token_count: false,
         line_numbers: false,
     };
 
@@ -203,6 +321,7 @@ fn confirm_processing_receives_large_count() {
         filter: vec!["txt".into()],
         ignore: vec![],
         preview: false,
+        token_count: false,
         line_numbers: false,
     };
 
@@ -216,5 +335,37 @@ fn confirm_processing_receives_large_count() {
         prompter.last_count() >= 150,
         "expected confirm_processing to be called with >=150 files, got {}",
         prompter.last_count()
+    );
+}
+
+#[test]
+fn token_count_mode_does_not_create_output_file() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("output.md").to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: true,
+        line_numbers: false,
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    // Run in token count mode
+    let res = run_with_args(args, &prompter);
+    assert!(res.is_ok(), "token count mode should succeed");
+
+    // No output file created
+    assert!(
+        !root.join("output.md").exists(),
+        "output file should not be created in token count mode"
     );
 }

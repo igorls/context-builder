@@ -1,3 +1,4 @@
+use chrono::Utc;
 use clap::Parser;
 use log::info;
 use std::io;
@@ -7,11 +8,13 @@ use std::time::Instant;
 pub mod cli;
 pub mod file_utils;
 pub mod markdown;
+pub mod token_count;
 pub mod tree;
 
 use cli::Args;
 use file_utils::{collect_files, confirm_overwrite, confirm_processing};
 use markdown::generate_markdown;
+use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
 use tree::{build_file_tree, print_tree};
 
 pub trait Prompter {
@@ -51,8 +54,8 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
         return Ok(());
     }
 
-    // Check if an output file already exists
-    if Path::new(&args.output).exists() {
+    // Check if an output file already exists (skip in preview and token count modes)
+    if !args.preview && !args.token_count && Path::new(&args.output).exists() {
         // Ask for user confirmation to overwrite
         if !prompter.confirm_overwrite(&args.output)? {
             if !silent {
@@ -70,11 +73,95 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
     // --- 2. Build file tree --- //
     let file_tree = build_file_tree(&files, base_path);
 
-    // --- 3. Handle preview mode --- //
+    // --- 3. Handle preview and token count modes --- //
     if args.preview {
         if !silent {
             println!("\n# File Tree Structure (Preview)\n");
             print_tree(&file_tree, 0);
+        }
+        // If only preview mode is set, return early
+        if !args.token_count {
+            return Ok(());
+        }
+        // If both preview and token_count are set, continue to token count mode
+    }
+
+    if args.token_count {
+        if !silent {
+            println!("\n# Token Count Estimation\n");
+
+            // Count tokens for the header section
+            let mut total_tokens = 0;
+            total_tokens += estimate_tokens("# Directory Structure Report\n\n");
+
+            if !args.filter.is_empty() {
+                total_tokens += estimate_tokens(&format!(
+                    "This document contains files from the `{}` directory with extensions: {}\n",
+                    args.input,
+                    args.filter.join(", ")
+                ));
+            } else {
+                total_tokens += estimate_tokens(&format!(
+                    "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
+                    args.input
+                ));
+            }
+
+            if !args.ignore.is_empty() {
+                total_tokens += estimate_tokens(&format!(
+                    "Custom ignored patterns: {}\n",
+                    args.ignore.join(", ")
+                ));
+            }
+
+            total_tokens += estimate_tokens(&format!(
+                "Processed at: {}\n\n",
+                Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+            ));
+
+            // Only add tree header tokens if not in preview mode
+            // (since preview already shows the tree)
+            if !args.preview {
+                total_tokens += estimate_tokens("## File Tree Structure\n\n");
+            }
+            // If both preview and token_count modes are enabled, show preview first
+            if args.preview {
+                println!("\n# File Tree Structure (Preview)\n");
+                print_tree(&file_tree, 0);
+                println!();
+            }
+
+            total_tokens += estimate_tokens("## File Tree Structure\n\n");
+
+            // Count tokens for the file tree (unless in preview mode where it's already shown)
+            let tree_tokens = if args.preview {
+                0 // Don't count tree tokens when in preview mode since we skip the tree section
+            } else {
+                count_tree_tokens(&file_tree, 0)
+            };
+            total_tokens += tree_tokens;
+
+            // Count tokens for all files
+            let file_tokens: usize = files
+                .iter()
+                .map(|entry| count_file_tokens(base_path, entry, args.line_numbers))
+                .sum();
+            total_tokens += file_tokens;
+
+            println!("Estimated total tokens: {}", total_tokens);
+            println!("File tree tokens: {}", tree_tokens);
+            println!("File content tokens: {}", file_tokens);
+            println!(
+                "\nNote: This is an estimation based on character count heuristics.\nActual token counts may vary depending on the specific tokenizer used by your LLM."
+            );
+        }
+        return Ok(());
+    }
+
+    // --- 5. Get user confirmation --- //
+    if !prompter.confirm_processing(files.len())? {
+        if !silent {
+            println!("Operation cancelled.");
         }
         return Ok(());
     }

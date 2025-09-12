@@ -205,6 +205,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         filter: spec.filters.clone(),
         ignore: spec.ignores.clone(),
         preview: false,
+        token_count: false,
         line_numbers,
     };
 
@@ -243,6 +244,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     filter: args.filter.clone(),
                     ignore: args.ignore.clone(),
                     preview: args.preview,
+                    token_count: args.token_count,
                     line_numbers: args.line_numbers,
                 },
                 &prompter,
