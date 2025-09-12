@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use tempfile::tempdir;
 
 use context_builder::cli::Args;
-use context_builder::{run_with_args, Prompter};
+use context_builder::{Prompter, run_with_args};
 
 static INIT: Once = Once::new();
 
