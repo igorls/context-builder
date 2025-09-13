@@ -5,7 +5,6 @@ All notable changes to this project will be documented in this file.
 ## v0.5.0
 
 - **BREAKING CHANGES**
-  - Environment variable `CB_DIFF_CONTEXT_LINES` is no longer used; diff configuration is now handled explicitly through `DiffConfig`
   - Cache file locations changed to project-specific paths to prevent collisions
 
 - **Critical Bug Fixes**
@@ -39,25 +38,33 @@ All notable changes to this project will be documented in this file.
   - Fixed inconsistent file tree visualization between auto-diff and standard modes
 
 - **Testing & Quality**
-  - Added comprehensive integration test suite with 11 tests covering:
-    - Determinism verification (5 tests)
-    - Auto-diff workflows (6 tests) 
+  - Added comprehensive integration test suite with tests covering:
+    - Determinism verification
+    - Auto-diff workflows
     - Cache collision prevention
     - Configuration change detection
     - Error recovery scenarios
-  - All tests use `#[serial]` attribute to prevent race conditions
+  - Fixed test race conditions by running tests serially in CI (`--test-threads=1`)
   - Added `pretty_assertions` for better test output
+  - Fixed all clippy warnings and enforced `-D warnings` in CI
 
 - **Dependencies**
-  - Added `fs2 = "0.4.3"` for file locking
-  - Added `serde_json = "1.0"` for structured cache format
-  - Added `serial_test = "3.0"` for test serialization
-  - Added `pretty_assertions = "1.4"` for enhanced test output
+  - Added `fs2` for file locking
+  - Added `serde_json` for structured cache format
+  - Added `serial_test` for test serialization
+  - Added `pretty_assertions` for enhanced test output
+  - Added `encoding_rs` for enhanced encoding detection and transcoding
 
 - **Migration**
   - Automatic detection and cleanup of old markdown-based cache files (`last_canonical.md`, etc.)
   - First run after upgrade will clear old cache format to prevent conflicts
   - CLI interface remains fully backward compatible
+
+- **Code Quality & Maintenance**
+  - Fixed all clippy warnings including type complexity, collapsible if statements, and redundant closures
+  - Updated CI workflow to prevent race conditions in tests
+  - Improved binary file detection with better encoding strategy handling
+  - Enhanced error handling for edge cases and file system operations
 
 ## v0.4.0
 

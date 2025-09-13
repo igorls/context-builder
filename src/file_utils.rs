@@ -15,6 +15,7 @@ pub fn collect_files(
     // Build overrides for custom ignore patterns
     let mut override_builder = OverrideBuilder::new(base_path);
     for pattern in ignores {
+        // Attention: Confusing pattern ahead!
         // Add the pattern to the override builder with ! prefix to ignore matching files.
         // In OverrideBuilder, patterns without ! are whitelist (include) patterns,
         // while patterns with ! are ignore patterns.

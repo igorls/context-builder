@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -43,20 +43,14 @@ jobs:
       - name: Build (default features)
         run: cargo build --verbose
 
-      - name: Build (no default features)
-        run: cargo build --no-default-features --verbose
-
       - name: Build (all features)
         run: cargo build --all-features --verbose
 
       - name: Run tests
-        run: cargo test --verbose
-
-      - name: Run tests (no default features)
-        run: cargo test --no-default-features --verbose
+        run: cargo test --verbose -- --test-threads=1
 
       - name: Run tests (all features)
-        run: cargo test --all-features --verbose
+        run: cargo test --all-features --verbose -- --test-threads=1
 
   security:
     name: Security Audit

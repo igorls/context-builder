@@ -21,7 +21,7 @@ pub fn count_file_tokens(base_path: &Path, entry: &DirEntry, line_numbers: bool)
 
     // Start with tokens for the file header (path, size, modified time)
     let mut token_count = estimate_tokens(&format!(
-        "\n## File: `{}`\n\n- Size: {} bytes\n- Modified: {}\n\n",
+        "\n### File: `{}`\n\n- Size: {} bytes\n- Modified: {}\n\n",
         relative_path.display(),
         entry.metadata().map(|m| m.len()).unwrap_or(0),
         "Unknown"
@@ -106,5 +106,47 @@ mod tests {
         // "  - 📄 file2.md\n" -> 9 tokens
         // Total should be 23 tokens
         assert_eq!(tokens, 23);
+    }
+
+    #[test]
+    fn test_token_estimation_format_consistency() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("test.rs");
+        std::fs::write(&test_file, "fn main() {}\n").unwrap();
+
+        let entry = ignore::WalkBuilder::new(&test_file)
+            .build()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        // Estimate tokens for the file
+        let estimated_tokens = count_file_tokens(dir.path(), &entry, false);
+
+        // Generate actual markdown content
+        let mut actual_content = Vec::new();
+        crate::markdown::process_file(dir.path(), &test_file, &mut actual_content, false, None)
+            .unwrap();
+        let actual_content_str = String::from_utf8(actual_content).unwrap();
+
+        // Count actual tokens
+        let actual_tokens = estimate_tokens(&actual_content_str);
+
+        // The estimation should be close to actual (within a reasonable margin)
+        // Allow for some variance due to timestamp differences and minor formatting
+        let difference = actual_tokens.abs_diff(estimated_tokens);
+
+        // Should be within 10% or 20 tokens difference (whichever is larger)
+        let max_allowed_difference = std::cmp::max(actual_tokens / 10, 20);
+
+        assert!(
+            difference <= max_allowed_difference,
+            "Token estimation {} differs too much from actual {} (difference: {})",
+            estimated_tokens,
+            actual_tokens,
+            difference
+        );
     }
 }

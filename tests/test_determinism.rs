@@ -89,6 +89,7 @@ fn test_deterministic_output_multiple_runs() {
             line_numbers: false,
             yes: true,
             diff_only: false,
+            clear_cache: false,
         },
         Config::default(),
         &prompter,
@@ -109,6 +110,7 @@ fn test_deterministic_output_multiple_runs() {
             line_numbers: false,
             yes: true,
             diff_only: false,
+            clear_cache: false,
         },
         Config::default(),
         &prompter,
@@ -215,7 +217,6 @@ fn test_deterministic_output_multiple_runs() {
         "Files should be listed in alphabetical order"
     );
 }
-
 #[test]
 #[serial] // Ensure tests don't interfere with each other
 fn test_deterministic_file_tree_order() {
@@ -239,6 +240,7 @@ fn test_deterministic_file_tree_order() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;
@@ -300,6 +302,7 @@ fn test_cache_collision_prevention() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -317,6 +320,7 @@ fn test_cache_collision_prevention() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -379,6 +383,7 @@ fn test_custom_ignores_performance() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;
@@ -431,6 +436,7 @@ fn test_configuration_affects_cache_key() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let args2 = Args {
@@ -443,6 +449,7 @@ fn test_configuration_affects_cache_key() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;
@@ -505,6 +512,7 @@ auto_diff = true
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;

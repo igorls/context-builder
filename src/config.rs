@@ -62,12 +62,30 @@ pub struct Config {
     /// Excludes full file contents section entirely. Added files appear only in the
     /// change summary (and are marked Added) but their full content is omitted.
     pub diff_only: Option<bool>,
+
+    /// Encoding handling strategy for non-UTF-8 files.
+    /// - "detect": Attempt to detect and transcode to UTF-8 (default)
+    /// - "strict": Only include valid UTF-8 files, skip others
+    /// - "skip": Skip all non-UTF-8 files without transcoding attempts
+    pub encoding_strategy: Option<String>,
 }
 
 /// Load configuration from `.context-builder.toml` in the current working directory.
 /// Returns `None` if the file does not exist or cannot be parsed.
 pub fn load_config() -> Option<Config> {
     let config_path = Path::new(".context-builder.toml");
+    if config_path.exists() {
+        let content = fs::read_to_string(config_path).ok()?;
+        toml::from_str(&content).ok()
+    } else {
+        None
+    }
+}
+
+/// Load configuration from `.context-builder.toml` in the specified project root directory.
+/// Returns `None` if the file does not exist or cannot be parsed.
+pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
+    let config_path = project_root.join(".context-builder.toml");
     if config_path.exists() {
         let content = fs::read_to_string(config_path).ok()?;
         toml::from_str(&content).ok()

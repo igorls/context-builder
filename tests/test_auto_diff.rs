@@ -82,6 +82,7 @@ fn test_auto_diff_workflow_basic() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
     let prompter = TestPrompter;
 
@@ -242,6 +243,7 @@ fn test_auto_diff_added_and_removed_files() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;
@@ -399,6 +401,7 @@ diff_only = true
         line_numbers: false,
         yes: true,
         diff_only: false, // Config file should override this
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;
@@ -540,6 +543,7 @@ fn test_cache_invalidation_on_config_change() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;
@@ -692,6 +696,7 @@ fn test_concurrent_cache_access() {
                     line_numbers: false,
                     yes: true,
                     diff_only: false,
+                    clear_cache: false,
                 };
 
                 let prompter = TestPrompter;
@@ -740,6 +745,7 @@ fn test_corrupted_cache_recovery() {
         line_numbers: false,
         yes: true,
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter;
@@ -863,5 +869,139 @@ fn test_corrupted_cache_recovery() {
     assert!(
         output_count >= 1,
         "Should produce output even with corrupted cache"
+    );
+}
+
+#[test]
+#[serial]
+fn test_diff_only_mode_includes_added_files() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    // Create config with auto_diff and diff_only enabled
+    fs::write(
+        project_dir.join(".context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+diff_only = true
+"#,
+    )
+    .unwrap();
+
+    let prompter = TestPrompter;
+
+    // First run to establish baseline
+    let args = Args {
+        input: ".".to_string(),
+        output: output_dir.join("context.md").to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false, // Will be overridden by config
+        clear_cache: false,
+    };
+
+    run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();
+
+    // Add a new file
+    fs::write(
+        project_dir.join("src").join("new_module.rs"),
+        "// New module added\npub fn new_function() -> String {\n    \"Hello from new module\".to_string()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn test_new_function() {\n        assert_eq!(new_function(), \"Hello from new module\");\n    }\n}\n",
+    )
+    .unwrap();
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run with the added file
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut second_args = args;
+
+    // Apply line_numbers from config
+    if !second_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        second_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !second_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        second_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&second_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            second_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            second_args.output = new_filename;
+        }
+    }
+
+    run_with_args(second_args, config, &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Find the latest output file
+    let outputs: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let latest_output = outputs
+        .iter()
+        .max_by_key(|p| fs::metadata(p).unwrap().modified().unwrap())
+        .unwrap();
+    let content = fs::read_to_string(latest_output).unwrap();
+
+    // Should have change summary
+    assert!(content.contains("## Change Summary"));
+
+    // Should have added files section (not full Files section)
+    assert!(content.contains("## Added Files"));
+    assert!(!content.contains("## Files\n"));
+
+    // Should include the full content of the added file (handle Windows path separators)
+    assert!(content.contains("### File: `src") && content.contains("new_module.rs`"));
+    assert!(content.contains("pub fn new_function() -> String"));
+    assert!(content.contains("Hello from new module"));
+    assert!(content.contains("_Status: Added_"));
+
+    // Should still have the file tree and header
+    assert!(content.contains("## File Tree Structure"));
+    assert!(content.contains("# Directory Structure Report"));
+
+    // Should not include full content of existing files (since they're unchanged)
+    // The existing main.rs content should not be in the full Files section (handle Windows path separators)
+    let main_rs_in_files = content.contains("### File: `src")
+        && content.contains("main.rs`")
+        && content.contains("Hello, world!");
+    assert!(
+        !main_rs_in_files,
+        "Existing unchanged files should not have full content in diff_only mode"
     );
 }

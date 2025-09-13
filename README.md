@@ -19,31 +19,31 @@ It's a command-line utility that recursively processes directories and creates c
 ## Core Features
 
 
-- ⚡ **Blazing Fast & Parallel by Default:**  
+- ⚡ **Blazing Fast & Parallel by Default:**
   Processes thousands of files in seconds by leveraging all available CPU cores.
 
-- 🧠 **Smart & Efficient File Discovery:**  
+- 🧠 **Smart & Efficient File Discovery:**
   Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
 
-- 💾 **Memory-Efficient Streaming:**  
+- 💾 **Memory-Efficient Streaming:**
   Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
 
-- 🌳 **Clear File Tree Visualization:**  
+- 🌳 **Clear File Tree Visualization:**
   Generates an easy-to-read directory structure at the top of the output file.
 
-- 🔍 **Powerful Filtering & Preview:**  
+- 🔍 **Powerful Filtering & Preview:**
   Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
 
-- ⚙️ **Configuration-First:**  
+- ⚙️ **Configuration-First:**
   Use a `.context-builder.toml` file to store your preferences for consistent, repeatable outputs.
 
-- 🔁 **Automatic Per-File Diffs:**  
+- 🔁 **Automatic Per-File Diffs:**
   When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
 
-- ✂️ **Diff-Only Mode:**  
+- ✂️ **Diff-Only Mode:**
   Output only the change summary and modified file diffs—no full file bodies—to minimize token usage.
 
-- 🧪 **Accurate Token Counting:**  
+- 🧪 **Accurate Token Counting:**
   Get real tokenizer–based estimates with `--token-count` to plan your prompt budgets.
 
 
@@ -55,6 +55,41 @@ It's a command-line utility that recursively processes directories and creates c
 
 ```bash
 cargo install context-builder
+```
+
+
+### If you don't have Rust installed
+
+Context Builder is distributed via crates.io. We do not ship pre-built binaries yet, so you need a Rust toolchain.
+
+
+#### Quick install (Linux/macOS):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+Follow the prompt, then restart your shell
+
+#### Windows (PowerShell):
+
+```powershell
+irm https://sh.rustup.rs -UseBasicParsing | Invoke-Expression
+```
+
+After installation, ensure Cargo is on your PATH:
+
+```bash
+cargo --version
+```
+
+Then install Context Builder:
+```bash
+cargo install context-builder
+```
+
+Update later with:
+```bash
+cargo install context-builder --force
 ```
 
 ### From source
@@ -100,6 +135,15 @@ context-builder --token-count
 # Add line numbers to all code blocks
 context-builder --line-numbers
 
+# Skip all confirmation prompts (auto-answer yes)
+context-builder --yes
+
+# Output only diffs (requires auto-diff & timestamped output)
+context-builder --diff-only
+
+# Clear cached project state (resets auto-diff baseline & removes stored state)
+context-builder --clear-cache
+
 # Combine multiple options for a powerful workflow
 context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.md
 ```
@@ -129,6 +173,9 @@ auto_diff = true
 # Set to true to greatly reduce token usage when you just need what's changed.
 diff_only = false
 
+# Number of context lines to show around changes in diffs (default: 3)
+diff_context_lines = 5
+
 # File extensions to include
 filter = ["rs", "toml", "md"]
 
@@ -137,6 +184,19 @@ ignore = ["target", "node_modules", ".git"]
 
 # Add line numbers to code blocks
 line_numbers = true
+
+# Preview mode: only show file tree without generating output
+preview = false
+
+# Token counting mode
+token_count = false
+
+# Automatically answer yes to all prompts
+yes = false
+
+# Encoding handling strategy for non-UTF-8 files
+# Options: "detect" (default), "strict", "skip"
+encoding_strategy = "detect"
 ```
 
 ---
@@ -161,10 +221,11 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
-- `--diff-only` - With `--auto-diff` + `--timestamped-output`, output only change summary + modified file diffs (omit full file bodies).
+- `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
+- `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
+- `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
 - `-h, --help` - Show help information.
 - `-V, --version` - Show version information.
-
 ---
 
 ## Token Counting

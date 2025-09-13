@@ -26,11 +26,16 @@ pub struct CacheManager {
 impl CacheManager {
     /// Create a new cache manager for the given project path and configuration
     pub fn new(project_path: &Path, config: &Config) -> Self {
-        let project_hash = Self::hash_path(project_path);
+        // Normalize the project path first for consistency
+        let normalized_project_path = Self::normalize_project_path(project_path);
+
+        let project_hash = Self::hash_path(&normalized_project_path);
         let config_hash = Self::hash_config(config);
 
-        // Ensure cache directory exists
-        let cache_dir = Path::new(".context-builder").join("cache");
+        // Ensure cache directory exists relative to normalized project root
+        let cache_dir = normalized_project_path
+            .join(".context-builder")
+            .join("cache");
         if !cache_dir.exists() {
             let _ = fs::create_dir_all(&cache_dir);
         }
@@ -47,16 +52,43 @@ impl CacheManager {
         cache_manager
     }
 
-    /// Generate a hash from the absolute path of the project
+    /// Normalize project path for consistent hashing and cache directory creation
+    fn normalize_project_path(path: &Path) -> PathBuf {
+        // Always resolve to absolute path first
+        let absolute_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            match std::env::current_dir() {
+                Ok(cwd) => cwd.join(path),
+                Err(_) => path.to_path_buf(),
+            }
+        };
+
+        // Try to canonicalize for consistency, but normalize the result
+        if let Ok(canonical) = absolute_path.canonicalize() {
+            Self::normalize_path_format(&canonical)
+        } else {
+            absolute_path
+        }
+    }
+
+    /// Generate a hash from the normalized project path
     fn hash_path(path: &Path) -> String {
         let mut hasher = DefaultHasher::new();
-        if let Ok(abs_path) = path.canonicalize() {
-            abs_path.hash(&mut hasher);
-        } else {
-            // If canonicalize fails, hash the path as is
-            path.hash(&mut hasher);
-        }
+        path.hash(&mut hasher);
         format!("{:x}", hasher.finish())
+    }
+
+    /// Normalize path format to handle Windows UNC prefixes
+    fn normalize_path_format(path: &Path) -> PathBuf {
+        let path_str = path.to_string_lossy();
+
+        // Remove Windows UNC prefix if present
+        if cfg!(windows) && path_str.starts_with("\\\\?\\") {
+            PathBuf::from(&path_str[4..])
+        } else {
+            path.to_path_buf()
+        }
     }
 
     /// Generate a hash from the configuration
@@ -230,7 +262,7 @@ mod tests {
         let _ = fs::create_dir(&project_path);
 
         // Create cache directory with old cache files
-        let cache_dir = dir.path().join(".context-builder").join("cache");
+        let cache_dir = project_path.join(".context-builder").join("cache");
         let _ = fs::create_dir_all(&cache_dir);
 
         let old_files = [
@@ -252,12 +284,7 @@ mod tests {
 
         // Create cache manager (this should trigger migration)
         let config = Config::default();
-        let cache_manager = CacheManager {
-            cache_dir: cache_dir.clone(),
-            project_hash: CacheManager::hash_path(&project_path),
-            config_hash: CacheManager::hash_config(&config),
-        };
-        cache_manager.migrate_old_cache();
+        let _cache_manager = CacheManager::new(&project_path, &config);
 
         // Verify old files are removed
         for file in &old_files {
@@ -267,6 +294,46 @@ mod tests {
                 "Old cache file {} should be removed after migration",
                 file
             );
+        }
+    }
+
+    #[test]
+    fn test_cache_consistency_across_path_representations() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config = Config::default();
+
+        // Test different path representations that should resolve to the same cache
+        let mut paths_to_test = vec![
+            project_path.clone(),
+            project_path.canonicalize().unwrap_or(project_path.clone()),
+        ];
+
+        // If we can create a relative path, test that too
+        if let Ok(current_dir) = std::env::current_dir()
+            && let Ok(relative) = project_path.strip_prefix(&current_dir)
+        {
+            paths_to_test.push(relative.to_path_buf());
+        }
+
+        let mut cache_paths = Vec::new();
+        for path in &paths_to_test {
+            let cache_manager = CacheManager::new(path, &config);
+            cache_paths.push(cache_manager.get_cache_path());
+        }
+
+        // All cache paths should be identical
+        for (i, path1) in cache_paths.iter().enumerate() {
+            for (j, path2) in cache_paths.iter().enumerate() {
+                if i != j {
+                    assert_eq!(
+                        path1, path2,
+                        "Cache paths should be identical for different representations of the same project path"
+                    );
+                }
+            }
         }
     }
 }

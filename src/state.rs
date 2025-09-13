@@ -208,9 +208,19 @@ impl FileState {
         use std::collections::hash_map::DefaultHasher;
         use std::fs;
         use std::hash::{Hash, Hasher};
+        use std::io::ErrorKind;
 
         let metadata = fs::metadata(path)?;
-        let content = fs::read_to_string(path)?;
+
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == ErrorKind::InvalidData => {
+                // Handle binary files gracefully
+                log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
+                format!("<Binary file - {} bytes>", metadata.len())
+            }
+            Err(e) => return Err(e),
+        };
 
         // Compute content hash
         let mut hasher = DefaultHasher::new();
@@ -374,5 +384,24 @@ mod tests {
         assert!(markdown.contains("- Added: `new.txt`"));
         assert!(markdown.contains("- Removed: `old.txt`"));
         assert!(markdown.contains("- Modified: `changed.txt`"));
+    }
+
+    #[test]
+    fn test_binary_file_handling() {
+        let temp_dir = tempdir().unwrap();
+        let binary_file = temp_dir.path().join("test.bin");
+
+        // Write binary data (non-UTF8)
+        let binary_data = vec![0u8, 255, 128, 42, 0, 1, 2, 3];
+        fs::write(&binary_file, &binary_data).unwrap();
+
+        // Should not crash and should handle gracefully
+        let file_state = FileState::from_path(&binary_file).unwrap();
+
+        // Content should be a placeholder for binary files
+        assert!(file_state.content.contains("Binary file"));
+        assert!(file_state.content.contains("8 bytes"));
+        assert_eq!(file_state.size, 8);
+        assert!(!file_state.content_hash.is_empty());
     }
 }

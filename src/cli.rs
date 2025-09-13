@@ -33,15 +33,16 @@ pub struct Args {
     pub line_numbers: bool,
 
     /// Automatically answer yes to all prompts
-
     #[clap(short = 'y', long)]
     pub yes: bool,
 
     /// Output only diffs (omit full file contents; requires auto-diff & timestamped output)
-
-    /// Defaults to false.
     #[clap(long, default_value_t = false)]
     pub diff_only: bool,
+
+    /// Clear the cached project state and exit
+    #[clap(long)]
+    pub clear_cache: bool,
 }
 
 #[cfg(test)]
@@ -56,7 +57,6 @@ mod tests {
     }
 
     #[test]
-
     fn parses_all_flags_and_options() {
         let args = Args::try_parse_from([
             "context-builder",
@@ -76,27 +76,22 @@ mod tests {
             "--token-count",
             "--line-numbers",
             "--diff-only",
+            "--clear-cache",
         ])
         .expect("should parse");
 
         assert_eq!(args.input, "some/dir");
-
         assert_eq!(args.output, "ctx.md");
-
         assert_eq!(args.filter, vec!["rs".to_string(), "toml".to_string()]);
-
         assert_eq!(
             args.ignore,
             vec!["target".to_string(), "node_modules".to_string()]
         );
-
         assert!(args.preview);
-
         assert!(args.token_count);
-
         assert!(args.line_numbers);
-
         assert!(args.diff_only);
+        assert!(args.clear_cache);
     }
 
     #[test]
@@ -124,26 +119,21 @@ mod tests {
         assert_eq!(args.ignore, vec!["target".to_string(), ".git".to_string()]);
         assert!(!args.preview);
         assert!(!args.line_numbers);
+        assert!(!args.clear_cache);
     }
 
     #[test]
-
     fn defaults_for_options_when_not_provided() {
         let args = Args::try_parse_from(["context-builder", "-d", "proj"]).expect("should parse");
 
         assert_eq!(args.input, "proj");
-
         assert_eq!(args.output, "output.md");
-
         assert!(args.filter.is_empty());
-
         assert!(args.ignore.is_empty());
-
         assert!(!args.preview);
-
         assert!(!args.line_numbers);
-
         assert!(!args.diff_only);
+        assert!(!args.clear_cache);
     }
 
     #[test]
@@ -151,5 +141,14 @@ mod tests {
         let args = Args::try_parse_from(["context-builder", "--diff-only"])
             .expect("should parse diff-only flag");
         assert!(args.diff_only);
+        assert!(!args.clear_cache);
+    }
+
+    #[test]
+    fn parses_clear_cache_flag() {
+        let args = Args::try_parse_from(["context-builder", "--clear-cache"])
+            .expect("should parse clear-cache flag");
+        assert!(args.clear_cache);
+        assert!(!args.diff_only);
     }
 }

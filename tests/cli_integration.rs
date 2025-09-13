@@ -56,22 +56,15 @@ fn preview_mode_does_not_create_output_file() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: root.join("output.md").to_string_lossy().into_owned(),
-
         filter: vec![],
-
         ignore: vec![],
-
         preview: true,
-
         token_count: false,
-
         line_numbers: false,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -102,22 +95,15 @@ fn preview_mode_skips_overwrite_confirmation() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: output_path.to_string_lossy().into_owned(),
-
         filter: vec![],
-
         ignore: vec![],
-
         preview: true,
-
         token_count: false,
-
         line_numbers: false,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -153,22 +139,15 @@ fn token_count_mode_skips_overwrite_confirmation() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: output_path.to_string_lossy().into_owned(),
-
         filter: vec![],
-
         ignore: vec![],
-
         preview: false,
-
         token_count: true,
-
         line_numbers: false,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -201,22 +180,15 @@ fn both_preview_and_token_count_modes_work_together() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: root.join("output.md").to_string_lossy().into_owned(),
-
         filter: vec![],
-
         ignore: vec![],
-
         preview: true,
-
         token_count: true,
-
         line_numbers: false,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
@@ -262,22 +234,15 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: output_path.to_string_lossy().into_owned(),
-
         filter: vec!["rs".into(), "md".into()],
-
         ignore: vec!["node_modules".into(), "target".into()],
-
         preview: false,
-
         token_count: false,
-
         line_numbers: true,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     // Always proceed without interactive prompts
@@ -355,22 +320,15 @@ fn overwrite_prompt_is_respected() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: output_path.to_string_lossy().into_owned(),
-
         filter: vec!["rs".into()],
-
         ignore: vec![],
-
         preview: false,
-
         token_count: false,
-
         line_numbers: false,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     // Deny overwrite
@@ -378,8 +336,8 @@ fn overwrite_prompt_is_respected() {
 
     let res = run_with_args(args, Config::default(), &prompter);
     assert!(
-        res.is_ok(),
-        "run should exit gracefully when overwrite denied"
+        res.is_err(),
+        "run should return error when overwrite denied"
     );
 
     // Ensure file is unchanged
@@ -400,22 +358,15 @@ fn confirm_processing_receives_large_count() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: root.join("out.md").to_string_lossy().into_owned(),
-
         filter: vec!["txt".into()],
-
         ignore: vec![],
-
         preview: false,
-
         token_count: false,
-
         line_numbers: false,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -442,22 +393,15 @@ fn token_count_mode_does_not_create_output_file() {
 
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-
         output: root.join("output.md").to_string_lossy().into_owned(),
-
         filter: vec![],
-
         ignore: vec![],
-
         preview: false,
-
         token_count: true,
-
         line_numbers: false,
-
         yes: false,
-
         diff_only: false,
+        clear_cache: false,
     };
 
     let prompter = TestPrompter::new(true, true);

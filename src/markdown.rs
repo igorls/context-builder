@@ -2,10 +2,16 @@ use chrono::Utc;
 use ignore::DirEntry;
 use log::{error, info, warn};
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::tree::{FileTree, write_tree_to_file};
+use encoding_rs::{Encoding, UTF_8};
+
+#[cfg(feature = "parallel")]
+use crossbeam_channel::{Receiver, Sender, bounded};
+#[cfg(feature = "parallel")]
+use std::thread;
 
 /// Generates the final Markdown file.
 #[allow(clippy::too_many_arguments)]
@@ -18,6 +24,7 @@ pub fn generate_markdown(
     files: &[DirEntry],
     base_path: &Path,
     line_numbers: bool,
+    encoding_strategy: Option<&str>,
 ) -> io::Result<()> {
     if let Some(parent) = Path::new(output_path).parent()
         && !parent.exists()
@@ -82,59 +89,106 @@ pub fn generate_markdown(
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        let results: Vec<io::Result<Vec<u8>>> = files
-            .par_iter()
-            .map(|entry| {
-                let mut buf = Vec::new();
-                match process_file(base_path, entry.path(), &mut buf, line_numbers) {
-                    Ok(()) => Ok(buf),
-                    Err(e) => Err(e),
-                }
-            })
-            .collect();
 
-        let mut errors = Vec::new();
-        for (index, chunk) in results.into_iter().enumerate() {
-            match chunk {
-                Ok(buf) => {
-                    if let Err(e) = output.write_all(&buf) {
-                        errors.push(format!(
-                            "Failed to write output for file {}: {}",
-                            files[index].path().display(),
-                            e
-                        ));
+        // Create a bounded channel for ordered chunks
+        type ChunkResult = (usize, io::Result<Vec<u8>>);
+        let (sender, receiver): (Sender<ChunkResult>, Receiver<ChunkResult>) =
+            bounded(num_cpus::get() * 2); // Buffer size based on CPU count
+
+        let writer_handle = {
+            let mut output = output;
+            let total_files = files.len();
+
+            thread::spawn(move || -> io::Result<()> {
+                let mut completed_chunks = std::collections::BTreeMap::new();
+                let mut next_index = 0;
+                let mut errors = Vec::new();
+
+                // Receive chunks and write them in order
+                while next_index < total_files {
+                    match receiver.recv() {
+                        Ok((index, chunk_result)) => {
+                            completed_chunks.insert(index, chunk_result);
+
+                            // Write all consecutive chunks starting from next_index
+                            while let Some(chunk_result) = completed_chunks.remove(&next_index) {
+                                match chunk_result {
+                                    Ok(buf) => {
+                                        if let Err(e) = output.write_all(&buf) {
+                                            errors.push(format!(
+                                                "Failed to write output for file index {}: {}",
+                                                next_index, e
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        errors.push(format!(
+                                            "Failed to process file index {}: {}",
+                                            next_index, e
+                                        ));
+                                    }
+                                }
+                                next_index += 1;
+                            }
+                        }
+                        Err(_) => break, // Channel closed
                     }
                 }
-                Err(e) => {
-                    errors.push(format!(
-                        "Failed to process file {}: {}",
-                        files[index].path().display(),
-                        e
-                    ));
-                }
-            }
-        }
 
-        if !errors.is_empty() {
-            error!(
-                "Encountered {} errors during parallel processing:",
-                errors.len()
-            );
-            for err in &errors {
-                error!("  {}", err);
-            }
-            return Err(std::io::Error::other(format!(
-                "Failed to process {} files: {}",
-                errors.len(),
-                errors.join("; ")
-            )));
-        }
+                if !errors.is_empty() {
+                    error!(
+                        "Encountered {} errors during parallel processing:",
+                        errors.len()
+                    );
+                    for err in &errors {
+                        error!("  {}", err);
+                    }
+                    return Err(std::io::Error::other(format!(
+                        "Failed to process {} files: {}",
+                        errors.len(),
+                        errors.join("; ")
+                    )));
+                }
+
+                Ok(())
+            })
+        };
+
+        // Process files in parallel and send results to writer
+        files.par_iter().enumerate().for_each(|(index, entry)| {
+            let mut buf = Vec::new();
+            let result = process_file(
+                base_path,
+                entry.path(),
+                &mut buf,
+                line_numbers,
+                encoding_strategy,
+            )
+            .map(|_| buf);
+
+            // Send result to writer thread (ignore send errors - channel might be closed)
+            let _ = sender.send((index, result));
+        });
+
+        // Close the sender to signal completion
+        drop(sender);
+
+        // Wait for writer thread to complete and propagate any errors
+        writer_handle
+            .join()
+            .map_err(|_| std::io::Error::other("Writer thread panicked"))??;
     }
 
     #[cfg(not(feature = "parallel"))]
     {
         for entry in files {
-            process_file(base_path, entry.path(), &mut output, line_numbers)?;
+            process_file(
+                base_path,
+                entry.path(),
+                &mut output,
+                line_numbers,
+                encoding_strategy,
+            )?;
         }
     }
 
@@ -142,13 +196,14 @@ pub fn generate_markdown(
 }
 
 /// Processes a single file and writes its content to the output.
-fn process_file(
+pub fn process_file(
     base_path: &Path,
 
     file_path: &Path,
 
     output: &mut impl Write,
     line_numbers: bool,
+    encoding_strategy: Option<&str>,
 ) -> io::Result<()> {
     let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
     info!("Processing file: {}", relative_path.display());
@@ -213,8 +268,7 @@ fn process_file(
         _ => extension,
     };
 
-    // Stream file content for performance and handle binary files
-    // Peek into the file to determine if it's likely text (UTF-8) without loading an entire file
+    // Enhanced binary file handling with encoding detection and transcoding
     match fs::File::open(file_path) {
         Ok(mut file) => {
             let mut sniff = [0u8; 8192];
@@ -240,17 +294,90 @@ fn process_file(
                 }
             };
             let slice = &sniff[..n];
-            let is_text = !slice.contains(&0) && std::str::from_utf8(slice).is_ok();
 
-            if !is_text {
-                warn!(
-                    "Detected non-text or binary file {}. Skipping content.",
-                    relative_path.display()
-                );
+            // First check if it's valid UTF-8
+            let is_utf8 = std::str::from_utf8(slice).is_ok();
+
+            if is_utf8 && !slice.contains(&0) {
+                // Valid UTF-8 text file - proceed normally
+            } else {
+                // Try encoding detection for non-UTF-8 files
+                // If it's not UTF-8, try to detect the encoding
+                let (encoding, _consumed) =
+                    encoding_rs::Encoding::for_bom(slice).unwrap_or((encoding_rs::UTF_8, 0));
+
+                // If it's not UTF-8, try to detect the encoding
+                let detected_encoding = if encoding == UTF_8 {
+                    // Use chardet-like detection for common encodings
+                    detect_text_encoding(slice)
+                } else {
+                    Some(encoding)
+                };
+
+                match detected_encoding {
+                    Some(enc) if enc != UTF_8 => {
+                        let strategy = encoding_strategy.unwrap_or("detect");
+                        match strategy {
+                            "strict" | "skip" => {
+                                // Skip files with non-UTF-8 encoding
+                                warn!(
+                                    "Skipping non-UTF-8 file {} (encoding: {}, strategy: {})",
+                                    relative_path.display(),
+                                    enc.name(),
+                                    strategy
+                                );
+                            }
+                            _ => {
+                                // Default "detect" strategy: attempt to transcode
+                                match transcode_file_content(file_path, enc) {
+                                    Ok(transcoded_content) => {
+                                        info!(
+                                            "Successfully transcoded {} from {} to UTF-8",
+                                            relative_path.display(),
+                                            enc.name()
+                                        );
+                                        write_text_content(
+                                            output,
+                                            &transcoded_content,
+                                            language,
+                                            line_numbers,
+                                        )?;
+                                        return Ok(());
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to transcode {} from {}: {}. Treating as binary.",
+                                            relative_path.display(),
+                                            enc.name(),
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        // Check if it's likely binary (contains null bytes)
+                        if slice.contains(&0) {
+                            warn!(
+                                "Detected binary file {} (contains null bytes). Skipping content.",
+                                relative_path.display()
+                            );
+                        } else {
+                            warn!(
+                                "Could not determine encoding for {}. Treating as binary.",
+                                relative_path.display()
+                            );
+                        }
+                    }
+                }
+
+                // Fallback to binary file placeholder
                 writeln!(output, "```text")?;
                 writeln!(
                     output,
-                    "<Could not read file content (e.g., binary file or permission error)>"
+                    "<Binary file or unsupported encoding: {} bytes>",
+                    metadata.len()
                 )?;
                 writeln!(output, "```")?;
                 return Ok(());
@@ -272,45 +399,38 @@ fn process_file(
                 return Ok(());
             }
 
-            writeln!(output, "```{}", language)?;
-            let mut reader = BufReader::new(file);
+            // Stream UTF-8 content
+            if let Err(e) = file.seek(SeekFrom::Start(0)) {
+                warn!(
+                    "Could not reset file cursor for {}: {}. Skipping content.",
+                    relative_path.display(),
+                    e
+                );
+                writeln!(output, "```text")?;
+                writeln!(
+                    output,
+                    "<Could not read file content (e.g., binary file or permission error)>"
+                )?;
+                writeln!(output, "```")?;
+                return Ok(());
+            }
 
-            if line_numbers {
-                let mut buf = String::new();
-                let mut line_no: usize = 1;
-                loop {
-                    buf.clear();
-                    match reader.read_line(&mut buf) {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            // Trim only trailing newline to avoid doubling
-                            let line = buf.strip_suffix('\n').unwrap_or(&buf);
-                            // Also handle Windows CRLF by trimming trailing '\r'
-                            let line = line.strip_suffix('\r').unwrap_or(line);
-                            writeln!(output, "{:>4} | {}", line_no, line)?;
-                            line_no += 1;
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Error while reading {}: {}. Output may be truncated.",
-                                relative_path.display(),
-                                e
-                            );
-                            break;
-                        }
-                    }
-                }
-            } else {
-                // Fast path: stream bytes to output
-                if let Err(e) = std::io::copy(&mut reader, output) {
+            let content = match std::fs::read_to_string(file_path) {
+                Ok(content) => content,
+                Err(e) => {
                     warn!(
-                        "Error while streaming {}: {}. Output may be truncated.",
+                        "Error reading file {}: {}. Output may be truncated.",
                         relative_path.display(),
                         e
                     );
+                    writeln!(output, "```text")?;
+                    writeln!(output, "<Error reading file content>")?;
+                    writeln!(output, "```")?;
+                    return Ok(());
                 }
-            }
-            writeln!(output, "```")?;
+            };
+
+            write_text_content(output, &content, language, line_numbers)?;
         }
         Err(e) => {
             warn!(
@@ -327,6 +447,90 @@ fn process_file(
         }
     }
 
+    Ok(())
+}
+
+/// Detect text encoding using heuristics for common encodings
+fn detect_text_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
+    // Try common encodings
+    let encodings = [
+        encoding_rs::WINDOWS_1252,
+        encoding_rs::UTF_16LE,
+        encoding_rs::UTF_16BE,
+        encoding_rs::SHIFT_JIS,
+    ];
+
+    for encoding in &encodings {
+        let (decoded, _, had_errors) = encoding.decode(bytes);
+        if !had_errors && is_likely_text(&decoded) {
+            return Some(encoding);
+        }
+    }
+
+    None
+}
+
+/// Check if decoded content looks like text (no control characters except common ones)
+fn is_likely_text(content: &str) -> bool {
+    let mut control_chars = 0;
+    let mut total_chars = 0;
+
+    for ch in content.chars() {
+        total_chars += 1;
+        if ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t' {
+            control_chars += 1;
+        }
+
+        // If more than 5% control characters, probably not text
+        if total_chars > 100 && control_chars * 20 > total_chars {
+            return false;
+        }
+    }
+
+    // Allow up to 5% control characters in small files
+    if total_chars > 0 {
+        control_chars * 20 <= total_chars
+    } else {
+        true
+    }
+}
+
+/// Transcode file content from detected encoding to UTF-8
+fn transcode_file_content(file_path: &Path, encoding: &'static Encoding) -> io::Result<String> {
+    let bytes = std::fs::read(file_path)?;
+    let (decoded, _, had_errors) = encoding.decode(&bytes);
+
+    if had_errors {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Failed to decode file with encoding {}", encoding.name()),
+        ));
+    }
+
+    Ok(decoded.into_owned())
+}
+
+/// Write text content with optional line numbers
+fn write_text_content(
+    output: &mut impl Write,
+    content: &str,
+    language: &str,
+    line_numbers: bool,
+) -> io::Result<()> {
+    writeln!(output, "```{}", language)?;
+
+    if line_numbers {
+        for (i, line) in content.lines().enumerate() {
+            writeln!(output, "{:>4} | {}", i + 1, line)?;
+        }
+    } else {
+        output.write_all(content.as_bytes())?;
+        if !content.ends_with('\n') {
+            writeln!(output)?;
+        }
+    }
+
+    writeln!(output, "```")?;
     Ok(())
 }
 
@@ -354,7 +558,7 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
-        process_file(base_path, &file_path, &mut output, false).unwrap();
+        process_file(base_path, &file_path, &mut output, false, None).unwrap();
 
         // Read the output
         let content = fs::read_to_string(&output_path).unwrap();
@@ -378,7 +582,7 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
-        process_file(base_path, &file_path, &mut output, false).unwrap();
+        process_file(base_path, &file_path, &mut output, false, None).unwrap();
 
         // Read the output
         let content = fs::read_to_string(&output_path).unwrap();
@@ -417,7 +621,7 @@ mod tests {
                 .unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, true).unwrap();
+        process_file(base_path, &file_path, &mut output, true, None).unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -452,21 +656,23 @@ mod tests {
         let file_path = base_path.join("image.bin");
         let output_path = base_path.join("out.md");
 
-        // Write some non-UTF8 bytes
-        let bytes = vec![0u8, 159, 146, 150, 255, 0, 1, 2];
+        // Write truly binary data that won't be decoded by encoding detection
+        let bytes = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG header
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // PNG chunk
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, // More binary data
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Null bytes
+        ];
         fs::write(&file_path, bytes).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false).unwrap();
+        process_file(base_path, &file_path, &mut output, false, None).unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
         // Expect a text block to fall back with a helpful message
         assert!(content.contains("```text"));
-        assert!(
-            content
-                .contains("<Could not read file content (e.g., binary file or permission error)>")
-        );
+        assert!(content.contains("<Binary file or unsupported encoding:"));
 
         // Ensure the code block is closed
         let fence_count = content.matches("```").count();
@@ -475,5 +681,90 @@ mod tests {
             "expected at least opening and closing fences, got {}",
             fence_count
         );
+    }
+
+    #[test]
+    fn test_encoding_detection_and_transcoding() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        // Test Windows-1252 encoded file (common in Windows)
+        let windows1252_content = [
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, // "Hello "
+            0x93, 0x57, 0x6F, 0x72, 0x6C, 0x64, 0x94, // "World" with smart quotes
+            0x0A, // newline
+        ];
+        let file_path = base_path.join("windows1252.txt");
+        fs::write(&file_path, windows1252_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(base_path, &file_path, &mut output, false, Some("detect")).unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should contain transcoded content with UTF-8 equivalents
+        assert!(content.contains("Hello"));
+        assert!(content.contains("World"));
+        // Should use text language
+        assert!(content.contains("```txt"));
+
+        // Ensure the code block is closed
+        let fence_count = content.matches("```").count();
+        assert!(
+            fence_count >= 2,
+            "expected at least opening and closing fences, got {}",
+            fence_count
+        );
+    }
+
+    #[test]
+    fn test_encoding_strategy_strict() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        // Create a file with non-UTF-8 content
+        let non_utf8_content = [0xFF, 0xFE, 0x41, 0x00]; // UTF-16 LE BOM + "A"
+        let file_path = base_path.join("utf16.txt");
+        fs::write(&file_path, non_utf8_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(base_path, &file_path, &mut output, false, Some("strict")).unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should contain binary file placeholder
+        assert!(content.contains("<Binary file or unsupported encoding:"));
+        assert!(content.contains("```text"));
+
+        // Ensure the code block is closed
+        let fence_count = content.matches("```").count();
+        assert!(
+            fence_count >= 2,
+            "expected at least opening and closing fences, got {}",
+            fence_count
+        );
+    }
+
+    #[test]
+    fn test_encoding_strategy_skip() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        // Create a file with UTF-16 content
+        let utf16_content = [0xFF, 0xFE, 0x48, 0x00, 0x69, 0x00]; // UTF-16 LE "Hi"
+        let file_path = base_path.join("utf16.txt");
+        fs::write(&file_path, utf16_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(base_path, &file_path, &mut output, false, Some("skip")).unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should contain binary file placeholder (skipped transcoding)
+        assert!(content.contains("<Binary file or unsupported encoding:"));
+        assert!(content.contains("```text"));
     }
 }

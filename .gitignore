@@ -12,13 +12,8 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Output files
-*.md
-!README.md
-!CHANGELOG.md
-!docs/**/*.md
-
 # Logs
 *.log
 
 samples/
+docs/*.md

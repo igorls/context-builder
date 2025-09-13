@@ -3,12 +3,13 @@ use clap::{CommandFactory, Parser};
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 pub mod cache;
 pub mod cli;
 pub mod config;
+pub mod config_resolver;
 pub mod diff;
 pub mod file_utils;
 pub mod markdown;
@@ -18,7 +19,7 @@ pub mod tree;
 
 use cache::CacheManager;
 use cli::Args;
-use config::{Config, load_config};
+use config::{Config, load_config_from_path};
 use diff::{PerFileStatus, render_per_file_diffs};
 use file_utils::{collect_files, confirm_overwrite, confirm_processing};
 use markdown::generate_markdown;
@@ -48,7 +49,6 @@ pub trait Prompter {
     fn confirm_processing(&self, file_count: usize) -> io::Result<bool>;
     fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool>;
 }
-
 pub struct DefaultPrompter;
 
 impl Prompter for DefaultPrompter {
@@ -59,7 +59,6 @@ impl Prompter for DefaultPrompter {
         confirm_overwrite(file_path)
     }
 }
-
 pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
     let start_time = Instant::now();
 
@@ -78,7 +77,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 final_args.input
             );
         }
-        return Ok(());
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "Input directory '{}' does not exist or is not a directory",
+                final_args.input
+            ),
+        ));
     }
 
     // Create diff configuration from config
@@ -101,7 +106,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if !silent {
             println!("Operation cancelled.");
         }
-        return Ok(());
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Operation cancelled by user",
+        ));
     }
 
     let files = collect_files(base_path, &final_args.filter, &final_args.ignore)?;
@@ -163,7 +171,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if !silent {
             println!("Operation cancelled.");
         }
-        return Ok(());
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Operation cancelled by user",
+        ));
     }
 
     if config.auto_diff.unwrap_or(false) {
@@ -249,6 +260,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         &files,
         base_path,
         final_args.line_numbers,
+        config.encoding_strategy.as_deref(),
     )?;
 
     let duration = start_time.elapsed();
@@ -327,11 +339,31 @@ fn generate_markdown_with_diff(
         _ => {}
     }
 
-    // Files section (unless diff_only mode)
-    if !diff_config.diff_only {
-        output.push_str("## Files\n\n");
+    // Files section: in diff_only mode, only include added files (LLM needs full context for new files)
+    let files_to_include: Vec<_> = if diff_config.diff_only {
+        // In diff_only mode, only include added files
+        comparison
+            .map(|comp| {
+                current_state
+                    .files
+                    .iter()
+                    .filter(|(path, _)| comp.summary.added.contains(path))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        // In normal mode, include all files
+        current_state.files.iter().collect()
+    };
 
-        for (path, file_state) in &current_state.files {
+    if !files_to_include.is_empty() {
+        if diff_config.diff_only {
+            output.push_str("## Added Files\n\n");
+        } else {
+            output.push_str("## Files\n\n");
+        }
+
+        for (path, file_state) in files_to_include {
             output.push_str(&format!("\n### File: `{}`\n\n", path.display()));
 
             // Check if this file was added
@@ -406,97 +438,67 @@ fn format_file_tree(tree: &crate::tree::FileTree) -> String {
     crate::tree::write_tree_to_file(&mut output, tree, 0).unwrap();
     String::from_utf8(output).unwrap()
 }
-
 pub fn run() -> io::Result<()> {
     env_logger::init();
-    let mut args = Args::parse();
-    let config = load_config();
+    let args = Args::parse();
+
+    // Determine project root first
+    let project_root = Path::new(&args.input);
+    let config = load_config_from_path(project_root);
+
+    // Handle early clear-cache request (runs even if no config or other args)
+    if args.clear_cache {
+        let cache_path = project_root.join(".context-builder").join("cache");
+        if cache_path.exists() {
+            match fs::remove_dir_all(&cache_path) {
+                Ok(()) => println!("Cache cleared: {}", cache_path.display()),
+                Err(e) => eprintln!("Failed to clear cache ({}): {}", cache_path.display(), e),
+            }
+        } else {
+            println!("No cache directory found at {}", cache_path.display());
+        }
+        return Ok(());
+    }
 
     if std::env::args().len() == 1 && config.is_none() {
         Args::command().print_help()?;
         return Ok(());
     }
 
-    let final_config = if let Some(config) = config {
-        if args.output == "output.md"
-            && let Some(output) = config.output.clone()
-        {
-            args.output = output;
-        }
-        if args.filter.is_empty()
-            && let Some(filter) = config.filter.clone()
-        {
-            args.filter = filter;
-        }
-        if args.ignore.is_empty()
-            && let Some(ignore) = config.ignore.clone()
-        {
-            args.ignore = ignore;
-        }
-        if !args.line_numbers
-            && let Some(line_numbers) = config.line_numbers
-        {
-            args.line_numbers = line_numbers;
-        }
-        if !args.preview
-            && let Some(preview) = config.preview
-        {
-            args.preview = preview;
-        }
-        if !args.token_count
-            && let Some(token_count) = config.token_count
-        {
-            args.token_count = token_count;
-        }
-        if !args.yes
-            && let Some(yes) = config.yes
-        {
-            args.yes = yes;
-        }
+    // Resolve final configuration using the new config resolver
+    let resolution = crate::config_resolver::resolve_final_config(args, config.clone());
 
-        let mut output_folder_path: Option<PathBuf> = None;
-        if let Some(output_folder) = config.output_folder.clone() {
-            let mut path = PathBuf::from(output_folder.clone());
-            path.push(&args.output);
-            args.output = path.to_str().unwrap().to_string();
-            output_folder_path = Some(PathBuf::from(output_folder));
+    // Print warnings if any
+    let silent = std::env::var("CB_SILENT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !silent {
+        for warning in &resolution.warnings {
+            eprintln!("Warning: {}", warning);
         }
+    }
 
-        if let Some(true) = config.timestamped_output {
-            let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
-
-            let path = Path::new(&args.output);
-
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("output");
-
-            let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
-
-            let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
-
-            if let Some(output_folder) = output_folder_path {
-                args.output = output_folder
-                    .join(new_filename)
-                    .to_str()
-                    .unwrap()
-                    .to_string();
-            } else {
-                let new_path = path.with_file_name(new_filename);
-
-                args.output = new_path.to_str().unwrap().to_string();
-            }
-        }
-
-        // Apply diff_only from config (CLI flag still has precedence if user supplied --diff-only)
-        if let Some(true) = config.diff_only {
-            args.diff_only = true;
-        }
-
-        config
-    } else {
-        Config::default()
+    // Convert resolved config back to Args for run_with_args
+    let final_args = Args {
+        input: resolution.config.input,
+        output: resolution.config.output,
+        filter: resolution.config.filter,
+        ignore: resolution.config.ignore,
+        line_numbers: resolution.config.line_numbers,
+        preview: resolution.config.preview,
+        token_count: resolution.config.token_count,
+        yes: resolution.config.yes,
+        diff_only: resolution.config.diff_only,
+        clear_cache: resolution.config.clear_cache,
     };
-    run_with_args(args, final_config, &DefaultPrompter)
+
+    // Create final Config with resolved values
+    let final_config = Config {
+        auto_diff: Some(resolution.config.auto_diff),
+        diff_context_lines: Some(resolution.config.diff_context_lines),
+        ..config.unwrap_or_default()
+    };
+
+    run_with_args(final_args, final_config, &DefaultPrompter)
 }
