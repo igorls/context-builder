@@ -1,0 +1,8 @@
+output = "context.md"
+output_folder = "docs"
+timestamped_output = true
+auto_diff = true
+diff_only = false
+filter = ["rs", "toml"]
+ignore = ["docs"]
+line_numbers = false

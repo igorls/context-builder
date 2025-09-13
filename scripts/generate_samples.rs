@@ -500,3 +500,15 @@ fn main() -> io::Result<()> {
     println!("Done.");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_expect_value() {
+        let mut args = vec!["--out".to_string(), "samples".to_string()].into_iter();
+        let value = expect_value("--out", &mut args);
+        assert_eq!(value, "samples");
+    }
+}

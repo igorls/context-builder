@@ -2,12 +2,12 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-/// Global configuration loaded from `.context-builder.toml`.
+/// Global configuration loaded from `context-builder.toml`.
 ///
 /// Any field left as `None` means "use the CLI default / do not override".
 /// Command-line arguments always take precedence over values provided here.
 ///
-/// Example `.context-builder.toml`:
+/// Example `context-builder.toml`:
 /// ```toml
 /// output = "context.md"
 /// output_folder = "docs"
@@ -19,6 +19,7 @@ use std::path::Path;
 /// line_numbers = false
 /// diff_context_lines = 5
 /// ```
+///
 #[derive(Deserialize, Debug, Default, Clone)]
 pub struct Config {
     /// Output file name (or base name when `timestamped_output = true`)
@@ -70,10 +71,10 @@ pub struct Config {
     pub encoding_strategy: Option<String>,
 }
 
-/// Load configuration from `.context-builder.toml` in the current working directory.
+/// Load configuration from `context-builder.toml` in the current working directory.
 /// Returns `None` if the file does not exist or cannot be parsed.
 pub fn load_config() -> Option<Config> {
-    let config_path = Path::new(".context-builder.toml");
+    let config_path = Path::new("context-builder.toml");
     if config_path.exists() {
         let content = fs::read_to_string(config_path).ok()?;
         toml::from_str(&content).ok()
@@ -82,10 +83,10 @@ pub fn load_config() -> Option<Config> {
     }
 }
 
-/// Load configuration from `.context-builder.toml` in the specified project root directory.
+/// Load configuration from `context-builder.toml` in the specified project root directory.
 /// Returns `None` if the file does not exist or cannot be parsed.
 pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
-    let config_path = project_root.join(".context-builder.toml");
+    let config_path = project_root.join("context-builder.toml");
     if config_path.exists() {
         let content = fs::read_to_string(config_path).ok()?;
         toml::from_str(&content).ok()

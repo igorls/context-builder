@@ -53,7 +53,7 @@ fn test_config_loaded_from_project_root_not_cwd() {
         "fn main() { println!(\"Hello\"); }",
     );
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 line_numbers = true
@@ -63,7 +63,7 @@ filter = ["rs"]
 
     // Create different config in working directory (should be ignored)
     write_file(
-        &working_dir.join(".context-builder.toml"),
+        &working_dir.join("context-builder.toml"),
         r#"
 auto_diff = false
 line_numbers = false
@@ -140,7 +140,7 @@ fn test_cache_created_in_project_root_not_cwd() {
         "fn main() { println!(\"Hello\"); }",
     );
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = true
@@ -362,7 +362,7 @@ fn test_load_config_from_path_function() {
 
     // Create project with config file
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 line_numbers = true
@@ -372,7 +372,7 @@ filter = ["rs"]
 
     // Create different config in working directory
     write_file(
-        &working_dir.join(".context-builder.toml"),
+        &working_dir.join("context-builder.toml"),
         r#"
 auto_diff = false
 line_numbers = false

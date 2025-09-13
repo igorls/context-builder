@@ -28,7 +28,7 @@ pub fn collect_files(
         }
     }
     // Also, always ignore the config file itself
-    if let Err(e) = override_builder.add("!.context-builder.toml") {
+    if let Err(e) = override_builder.add("!context-builder.toml") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("Failed to add config ignore: {}", e),

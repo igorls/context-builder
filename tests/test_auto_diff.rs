@@ -48,7 +48,7 @@ fn create_simple_project(base_dir: &Path) -> std::io::Result<()> {
 
     // Create config file to enable auto-diff
     fs::write(
-        base_dir.join(".context-builder.toml"),
+        base_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = true
@@ -375,7 +375,7 @@ fn test_diff_only_mode() {
 
     // Update config to enable diff_only
     fs::write(
-        project_dir.join(".context-builder.toml"),
+        project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = true
@@ -589,7 +589,7 @@ fn test_cache_invalidation_on_config_change() {
 
     // Change configuration - add line numbers
     fs::write(
-        project_dir.join(".context-builder.toml"),
+        project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = true
@@ -888,7 +888,7 @@ fn test_diff_only_mode_includes_added_files() {
 
     // Create config with auto_diff and diff_only enabled
     fs::write(
-        project_dir.join(".context-builder.toml"),
+        project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = true

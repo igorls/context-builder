@@ -19,7 +19,7 @@ All notable changes to this project will be documented in this file.
     - JSON-based structured caching replacing fragile markdown parsing
     - File locking with `fs2` crate for thread-safe concurrent access
     - Configuration changes now properly invalidate cache
-  - **Enhanced Auto-Diff System**: 
+  - **Enhanced Auto-Diff System**:
     - Structured state representation before markdown generation
     - Eliminated fragile text parsing with `extract_file_contents` and `strip_line_number` functions
     - Cache structured data (JSON) instead of markdown for reliability
@@ -73,7 +73,7 @@ All notable changes to this project will be documented in this file.
 
   - Token count mode (`--token-count`) now provides accurate token counts using the `tiktoken-rs` library.
 
-  - Configuration file support (`.context-builder.toml`) for project-specific settings.
+  - Configuration file support (`context-builder.toml`) for project-specific settings.
 
   - Timestamped output versions.
 

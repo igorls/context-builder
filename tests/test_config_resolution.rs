@@ -90,7 +90,7 @@ fn test_cli_arguments_override_config_file() {
 
     // Create config file with specific settings
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 filter = ["py"]
 line_numbers = true
@@ -166,7 +166,7 @@ fn test_config_applies_when_cli_uses_defaults() {
 
     // Create config file
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 filter = ["py", "rs"]
 line_numbers = true
@@ -245,7 +245,7 @@ fn test_timestamped_output_and_output_folder() {
 
     // Create config with timestamping and output folder (relative to project)
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 output = "context.md"
 output_folder = "docs"
@@ -324,7 +324,7 @@ fn test_mixed_explicit_and_default_values() {
 
     // Config with multiple settings
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 filter = ["py"]
 line_numbers = true
@@ -395,7 +395,7 @@ fn test_auto_diff_configuration_warning() {
 
     // Config with auto_diff but no timestamped_output (should generate warning)
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = false

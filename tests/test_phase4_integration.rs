@@ -59,7 +59,7 @@ fn test_phase4_features_integration() {
 
     // Create config with enhanced features enabled
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = true

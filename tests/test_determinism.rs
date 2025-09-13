@@ -491,7 +491,7 @@ fn test_edge_case_filenames_no_panic() {
 
     // Create a config file that enables timestamped output
     fs::write(
-        project_dir.join(".context-builder.toml"),
+        project_dir.join("context-builder.toml"),
         r#"
 timestamped_output = true
 auto_diff = true

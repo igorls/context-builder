@@ -35,7 +35,7 @@ It's a command-line utility that recursively processes directories and creates c
   Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
 
 - ⚙️ **Configuration-First:**
-  Use a `.context-builder.toml` file to store your preferences for consistent, repeatable outputs.
+  Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs.
 
 - 🔁 **Automatic Per-File Diffs:**
   When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
@@ -152,9 +152,9 @@ context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.m
 
 ## Configuration
 
-For more complex projects, you can use a `.context-builder.toml` file in your project's root directory to store your preferences. This is great for ensuring consistent outputs and avoiding repetitive command-line flags.
+For more complex projects, you can use a `context-builder.toml` file in your project's root directory to store your preferences. This is great for ensuring consistent outputs and avoiding repetitive command-line flags.
 
-### Example `.context-builder.toml`
+### Example `context-builder.toml`
 
 ```toml
 # Default output file name

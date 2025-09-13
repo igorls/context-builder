@@ -17,3 +17,5 @@ Thumbs.db
 
 samples/
 docs/*.md
+
+.context-builder

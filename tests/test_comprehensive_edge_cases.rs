@@ -267,7 +267,7 @@ fn test_cache_consistency_edge_cases() {
 
     // Create config with auto_diff enabled
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 auto_diff = true
 timestamped_output = true
@@ -531,7 +531,7 @@ fn test_cwd_independent_operation() {
     // Create test files
     write_file(&project_dir.join("test.rs"), "fn test() {}\n");
     write_file(
-        &project_dir.join(".context-builder.toml"),
+        &project_dir.join("context-builder.toml"),
         r#"
 filter = ["rs"]
 line_numbers = true

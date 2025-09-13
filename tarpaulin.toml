@@ -1,0 +1,17 @@
+[test_config]
+name = "Context Builder"
+manifest-path = "./Cargo.toml"
+skip-clean = true
+all-features = false
+exclude-files = [
+        "samples/*",
+        "benches/*",
+        "tests/*",
+        "scripts/*",
+        "src/main.rs"
+    ]
+no-fail-fast = true
+color = "Auto"
+
+[report]
+out = ["Html"]
