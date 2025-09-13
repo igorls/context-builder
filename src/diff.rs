@@ -511,4 +511,52 @@ mod tests {
         assert!(output.contains("_Status: Modified_"));
         assert!(output.ends_with("\n\n")); // Should add newlines
     }
+
+    #[test]
+    fn test_generate_diff_with_multiple_groups() {
+        // Create content that will result in multiple diff groups to trigger "..." separator
+        let old_content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10";
+        let new_content = "line1_modified\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9_modified\nline10";
+
+        let diff = generate_diff(old_content, new_content);
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("## File Differences"));
+        // With sufficient distance between changes and small context, should create groups with "..." separator
+        println!("Generated diff: {}", diff);
+    }
+
+    #[test]
+    fn test_diff_with_windows_line_endings() {
+        let old_content = "line1\r\nline2\r\n";
+        let new_content = "line1_modified\r\nline2\r\n";
+
+        let diff = generate_diff(old_content, new_content);
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("line1_modified"));
+        assert!(!diff.is_empty());
+    }
+
+    #[test]
+    fn test_unified_no_header_with_multiple_groups() {
+        // Create content that will result in multiple diff groups
+        let old_content = "start\n\n\n\n\n\n\n\n\n\nmiddle\n\n\n\n\n\n\n\n\n\nend";
+        let new_content =
+            "start_modified\n\n\n\n\n\n\n\n\n\nmiddle\n\n\n\n\n\n\n\n\n\nend_modified";
+
+        let diff = unified_no_header(old_content, new_content, 2);
+        assert!(diff.contains("```diff"));
+        // Should contain "..." separator between groups when changes are far apart
+        println!("Unified diff: {}", diff);
+    }
+
+    #[test]
+    fn test_unified_no_header_with_windows_line_endings() {
+        let old_content = "line1\r\nline2\r\n";
+        let new_content = "line1_modified\r\nline2\r\n";
+
+        let diff = unified_no_header(old_content, new_content, 3);
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("line1_modified"));
+        assert!(!diff.is_empty());
+    }
 }

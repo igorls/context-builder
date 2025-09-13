@@ -92,17 +92,13 @@ fn test_auto_diff_workflow_basic() {
     // Apply config merging manually since we're bypassing run()
     let mut first_args = args.clone();
 
-    // Apply line_numbers from config
-    if !first_args.line_numbers
-        && let Some(line_numbers) = config.line_numbers
-    {
+    // Apply line_numbers from config (matches run_with_args behavior)
+    if let Some(line_numbers) = config.line_numbers {
         first_args.line_numbers = line_numbers;
     }
 
     // Apply diff_only from config
-    if !first_args.diff_only
-        && let Some(diff_only) = config.diff_only
-    {
+    if let Some(diff_only) = config.diff_only {
         first_args.diff_only = diff_only;
     }
 
@@ -154,17 +150,13 @@ fn test_auto_diff_workflow_basic() {
     // Apply config merging manually since we're bypassing run()
     let mut second_args = args;
 
-    // Apply line_numbers from config
-    if !second_args.line_numbers
-        && let Some(line_numbers) = config.line_numbers
-    {
+    // Apply line_numbers from config (matches run_with_args behavior)
+    if let Some(line_numbers) = config.line_numbers {
         second_args.line_numbers = line_numbers;
     }
 
     // Apply diff_only from config
-    if !second_args.diff_only
-        && let Some(diff_only) = config.diff_only
-    {
+    if let Some(diff_only) = config.diff_only {
         second_args.diff_only = diff_only;
     }
 
@@ -605,17 +597,13 @@ line_numbers = true
     // Apply config merging manually since we're bypassing run()
     let mut second_args = args_base;
 
-    // Apply line_numbers from config
-    if !second_args.line_numbers
-        && let Some(line_numbers) = config.line_numbers
-    {
+    // Apply line_numbers from config (matches run_with_args behavior)
+    if let Some(line_numbers) = config.line_numbers {
         second_args.line_numbers = line_numbers;
     }
 
     // Apply diff_only from config
-    if !second_args.diff_only
-        && let Some(diff_only) = config.diff_only
-    {
+    if let Some(diff_only) = config.diff_only {
         second_args.diff_only = diff_only;
     }
 

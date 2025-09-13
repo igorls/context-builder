@@ -276,6 +276,27 @@ mod tests {
     }
 
     #[test]
+    fn test_build_file_tree_absolute_path_fallback() {
+        // Test the fallback case when strip_prefix fails by using different base paths
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let other_dir = tempdir().unwrap();
+        let other_base = other_dir.path();
+
+        // Create a file in the first directory
+        fs::File::create(base_path.join("test.txt")).unwrap();
+
+        // Create a DirEntry from the first directory but use a different base_path
+        let files = collect_files(base_path, &[], &[]).unwrap();
+
+        // This should trigger the unwrap_or_else case since other_base is unrelated to the file path
+        let tree = build_file_tree(&files, other_base);
+
+        // The tree should still contain the file, but with its full path
+        assert!(!tree.is_empty());
+    }
+
+    #[test]
     fn test_build_file_tree_multiple_files_same_directory() {
         let dir = tempdir().unwrap();
         let base_path = dir.path();

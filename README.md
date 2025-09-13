@@ -1,10 +1,31 @@
+<div align="center">
+
 # Context Builder
 
 A blazing-fast CLI for creating LLM context from your entire codebase.
 
 [![Crates.io](https://img.shields.io/crates/v/context-builder.svg)](https://crates.io/crates/context-builder)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/igorls/context-builder/blob/main/LICENSE)
+![Crates.io Size](https://img.shields.io/crates/size/context-builder)
+![Deps.rs Crate Dependencies (latest)](https://img.shields.io/deps-rs/context-builder/latest)
+![Crates.io Total Downloads](https://img.shields.io/crates/d/context-builder)
+
+</div>
+
+<div align="center">
+
+[![Coverage Status](https://coveralls.io/repos/github/igorls/context-builder/badge.svg?branch=master)](https://coveralls.io/github/igorls/context-builder?branch=master)
 [![CI](https://github.com/igorls/context-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/igorls/context-builder/actions/workflows/ci.yml)
+![docs.rs](https://img.shields.io/docsrs/context-builder)
+
+</div>
+
+<div align="center">
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/igorls/context-builder/blob/main/LICENSE)
+
+</div>
+
+<br/>
 
 Tired of manually copy-pasting files into your LLM prompts? Context Builder automates this tedious process, creating a single, clean, and context-rich markdown file from any directory.
 
@@ -70,11 +91,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 Follow the prompt, then restart your shell
 
-#### Windows (PowerShell):
-
-```powershell
-irm https://sh.rustup.rs -UseBasicParsing | Invoke-Expression
-```
+#### Windows: https://www.rust-lang.org/tools/install
 
 After installation, ensure Cargo is on your PATH:
 

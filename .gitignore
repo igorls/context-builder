@@ -19,4 +19,4 @@ samples/
 docs/*.md
 
 .context-builder
-cobertura.xml
+check_coverage.ps1

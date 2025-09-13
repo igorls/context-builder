@@ -109,6 +109,11 @@ impl CacheManager {
         ))
     }
 
+    /// Public helper primarily for debugging/tests to inspect the resolved cache path
+    pub fn debug_cache_file_path(&self) -> PathBuf {
+        self.get_cache_path()
+    }
+
     /// Migrate old markdown-based cache files to new JSON format
     fn migrate_old_cache(&self) {
         let old_cache_patterns = ["last_canonical.md", "last_output.md", "current_output.md"];
