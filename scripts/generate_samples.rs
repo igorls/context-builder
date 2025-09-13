@@ -507,8 +507,12 @@ mod tests {
 
     #[test]
     fn test_expect_value() {
-        let mut args = vec!["--out".to_string(), "samples".to_string()].into_iter();
-        let value = expect_value("--out", &mut args);
+        let mut it = vec!["--out".to_string(), "samples".to_string()]
+            .into_iter()
+            .peekable();
+        let flag = it.next().unwrap();
+        assert_eq!(flag, "--out");
+        let value = expect_value(&flag, &mut it);
         assert_eq!(value, "samples");
     }
 }
