@@ -367,7 +367,6 @@ fn test_auto_diff_added_and_removed_files() {
 }
 
 #[test]
-#[serial]
 fn test_diff_only_mode() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
@@ -520,7 +519,6 @@ diff_only = true
 }
 
 #[test]
-#[serial]
 fn test_cache_invalidation_on_config_change() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");

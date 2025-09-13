@@ -14,4 +14,4 @@ no-fail-fast = true
 color = "Auto"
 
 [report]
-out = ["Html"]
+out = ["Html", "Xml"]

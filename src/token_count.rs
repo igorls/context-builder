@@ -149,4 +149,144 @@ mod tests {
             difference
         );
     }
+
+    #[test]
+    fn test_estimate_tokens_empty_string() {
+        let tokens = estimate_tokens("");
+        assert_eq!(tokens, 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_whitespace_only() {
+        let tokens = estimate_tokens("   \n\t  ");
+        assert!(tokens > 0); // Whitespace still counts as tokens
+    }
+
+    #[test]
+    fn test_estimate_tokens_unicode() {
+        let tokens = estimate_tokens("Hello 世界! 🌍");
+        assert!(tokens > 0);
+        // Unicode characters may be encoded as multiple tokens
+        assert!(tokens >= 4);
+    }
+
+    #[test]
+    fn test_count_file_tokens_with_line_numbers() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("test.rs");
+        std::fs::write(&test_file, "line 1\nline 2\nline 3").unwrap();
+
+        let entry = ignore::WalkBuilder::new(&test_file)
+            .build()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        let tokens_without_line_numbers = count_file_tokens(dir.path(), &entry, false);
+        let tokens_with_line_numbers = count_file_tokens(dir.path(), &entry, true);
+
+        // With line numbers should have more tokens due to line number prefixes
+        assert!(tokens_with_line_numbers > tokens_without_line_numbers);
+    }
+
+    #[test]
+    fn test_count_file_tokens_unreadable_file() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("nonexistent.txt");
+
+        // Create a mock DirEntry for a file that doesn't exist
+        // This simulates what happens when a file is deleted between discovery and processing
+        let walker = ignore::WalkBuilder::new(dir.path());
+        let mut found_entry = None;
+
+        // Create the file temporarily to get a DirEntry
+        std::fs::write(&test_file, "temp").unwrap();
+        for entry in walker.build() {
+            if let Ok(entry) = entry
+                && entry.path() == test_file
+            {
+                found_entry = Some(entry);
+                break;
+            }
+        }
+
+        // Now delete the file
+        std::fs::remove_file(&test_file).unwrap();
+
+        if let Some(entry) = found_entry {
+            let tokens = count_file_tokens(dir.path(), &entry, false);
+            // Should still return some tokens for the file header even if content can't be read
+            assert!(tokens > 0);
+        }
+    }
+
+    #[test]
+    fn test_count_tree_tokens_empty_tree() {
+        let tree = BTreeMap::new();
+        let tokens = count_tree_tokens(&tree, 0);
+        assert_eq!(tokens, 0);
+    }
+
+    #[test]
+    fn test_count_tree_tokens_nested_directories() {
+        let mut tree = BTreeMap::new();
+
+        // Create deeply nested structure
+        let mut level3 = BTreeMap::new();
+        level3.insert("deep_file.txt".to_string(), crate::tree::FileNode::File);
+
+        let mut level2 = BTreeMap::new();
+        level2.insert(
+            "level3".to_string(),
+            crate::tree::FileNode::Directory(level3),
+        );
+
+        let mut level1 = BTreeMap::new();
+        level1.insert(
+            "level2".to_string(),
+            crate::tree::FileNode::Directory(level2),
+        );
+
+        tree.insert(
+            "level1".to_string(),
+            crate::tree::FileNode::Directory(level1),
+        );
+
+        let tokens = count_tree_tokens(&tree, 0);
+        assert!(tokens > 0);
+
+        // Should account for indentation at different levels
+        let tokens_with_depth = count_tree_tokens(&tree, 2);
+        assert!(tokens_with_depth > tokens); // More indentation = more tokens
+    }
+
+    #[test]
+    fn test_count_tree_tokens_mixed_content() {
+        let mut tree = BTreeMap::new();
+
+        // Add files with various name lengths and characters
+        tree.insert("a.txt".to_string(), crate::tree::FileNode::File);
+        tree.insert(
+            "very_long_filename_with_underscores.rs".to_string(),
+            crate::tree::FileNode::File,
+        );
+        tree.insert("файл.txt".to_string(), crate::tree::FileNode::File); // Unicode filename
+
+        let mut subdir = BTreeMap::new();
+        subdir.insert("nested.md".to_string(), crate::tree::FileNode::File);
+        tree.insert(
+            "directory".to_string(),
+            crate::tree::FileNode::Directory(subdir),
+        );
+
+        let tokens = count_tree_tokens(&tree, 0);
+        assert!(tokens > 0);
+
+        // Verify it handles unicode filenames without crashing
+        assert!(tokens > 20); // Should be substantial given the content
+    }
 }

@@ -351,4 +351,164 @@ mod tests {
         assert!(out.contains("_Status: Added_"));
         assert!(out.contains("+ new file"));
     }
+
+    #[test]
+    fn test_empty_files() {
+        let prev = map(&[("empty.txt", "")]);
+        let curr = map(&[("empty.txt", "")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn test_empty_to_content() {
+        let prev = map(&[("file.txt", "")]);
+        let curr = map(&[("file.txt", "new content\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("+ new content"));
+    }
+
+    #[test]
+    fn test_content_to_empty() {
+        let prev = map(&[("file.txt", "old content\n")]);
+        let curr = map(&[("file.txt", "")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("- old content"));
+    }
+
+    #[test]
+    fn test_multiline_modifications() {
+        let prev = map(&[("file.txt", "line1\nline2\nline3\nline4\n")]);
+        let curr = map(&[("file.txt", "line1\nmodified2\nline3\nline4\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, Some(2));
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("- line2"));
+        assert!(diffs[0].diff.contains("+ modified2"));
+    }
+
+    #[test]
+    fn test_windows_line_endings() {
+        let prev = map(&[("file.txt", "line1\r\nline2\r\n")]);
+        let curr = map(&[("file.txt", "line1\r\nmodified2\r\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("- line2"));
+        assert!(diffs[0].diff.contains("+ modified2"));
+    }
+
+    #[test]
+    fn test_per_file_diff_is_changed() {
+        let added = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Added,
+            diff: "test".to_string(),
+        };
+        assert!(added.is_changed());
+
+        let removed = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Removed,
+            diff: "test".to_string(),
+        };
+        assert!(removed.is_changed());
+
+        let modified = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Modified,
+            diff: "test".to_string(),
+        };
+        assert!(modified.is_changed());
+
+        let unchanged = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Unchanged,
+            diff: String::new(),
+        };
+        assert!(!unchanged.is_changed());
+    }
+
+    #[test]
+    fn test_generate_diff_identical_content() {
+        let content = "line1\nline2\nline3\n";
+        let diff = generate_diff(content, content);
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_generate_diff_with_changes() {
+        let old = "line1\nline2\nline3\n";
+        let new = "line1\nmodified2\nline3\n";
+        let diff = generate_diff(old, new);
+        assert!(diff.contains("## File Differences"));
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("- line2"));
+        assert!(diff.contains("+ modified2"));
+    }
+
+    #[test]
+    fn test_resolve_context_lines_default() {
+        let context = resolve_context_lines(None);
+        assert_eq!(context, 3);
+    }
+
+    #[test]
+    fn test_resolve_context_lines_explicit() {
+        let context = resolve_context_lines(Some(5));
+        assert_eq!(context, 5);
+    }
+
+    #[test]
+    fn test_resolve_context_lines_zero_fallback() {
+        let context = resolve_context_lines(Some(0));
+        assert_eq!(context, 3); // Should fallback to default
+    }
+
+    #[test]
+    fn test_unicode_content_diff() {
+        let prev = map(&[("unicode.txt", "Hello 世界\n")]);
+        let curr = map(&[("unicode.txt", "Hello 世界! 🌍\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("Hello 世界"));
+        assert!(diffs[0].diff.contains("🌍"));
+    }
+
+    #[test]
+    fn test_render_per_file_diffs_empty() {
+        let diffs = vec![];
+        let output = render_per_file_diffs(&diffs);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_render_per_file_diffs_unchanged() {
+        let diffs = vec![PerFileDiff {
+            path: "unchanged.txt".to_string(),
+            status: PerFileStatus::Unchanged,
+            diff: String::new(),
+        }];
+        let output = render_per_file_diffs(&diffs);
+        assert!(output.contains("### Diff: `unchanged.txt`"));
+        assert!(output.contains("_Status: Unchanged_"));
+    }
+
+    #[test]
+    fn test_render_per_file_diffs_without_trailing_newline() {
+        let diffs = vec![PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Modified,
+            diff: "```diff\n+ line\n```".to_string(), // No trailing newline
+        }];
+        let output = render_per_file_diffs(&diffs);
+        assert!(output.contains("### Diff: `test.txt`"));
+        assert!(output.contains("_Status: Modified_"));
+        assert!(output.ends_with("\n\n")); // Should add newlines
+    }
 }

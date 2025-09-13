@@ -19,3 +19,4 @@ samples/
 docs/*.md
 
 .context-builder
+cobertura.xml

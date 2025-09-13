@@ -94,3 +94,139 @@ pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_config_nonexistent_file() {
+        // Test loading config when file doesn't exist by temporarily changing directory
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        // Change to temp directory where no config file exists
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let result = load_config();
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_nonexistent_file() {
+        let dir = tempdir().unwrap();
+        let result = load_config_from_path(dir.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_valid_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        let config_content = r#"
+output = "test-output.md"
+filter = ["rs", "toml"]
+ignore = ["target", ".git"]
+line_numbers = true
+preview = false
+token_count = true
+timestamped_output = true
+yes = false
+auto_diff = true
+diff_context_lines = 5
+diff_only = false
+encoding_strategy = "detect"
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert_eq!(config.output.unwrap(), "test-output.md");
+        assert_eq!(config.filter.unwrap(), vec!["rs", "toml"]);
+        assert_eq!(config.ignore.unwrap(), vec!["target", ".git"]);
+        assert!(config.line_numbers.unwrap());
+        assert!(!config.preview.unwrap());
+        assert!(config.token_count.unwrap());
+        assert!(config.timestamped_output.unwrap());
+        assert!(!config.yes.unwrap());
+        assert!(config.auto_diff.unwrap());
+        assert_eq!(config.diff_context_lines.unwrap(), 5);
+        assert!(!config.diff_only.unwrap());
+        assert_eq!(config.encoding_strategy.unwrap(), "detect");
+    }
+
+    #[test]
+    fn load_config_from_path_partial_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        let config_content = r#"
+output = "minimal.md"
+filter = ["py"]
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert_eq!(config.output.unwrap(), "minimal.md");
+        assert_eq!(config.filter.unwrap(), vec!["py"]);
+        assert!(config.ignore.is_none());
+        assert!(config.line_numbers.is_none());
+        assert!(config.auto_diff.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_invalid_toml() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        // Invalid TOML content
+        let config_content = r#"
+output = "test.md"
+invalid_toml [
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let config = load_config_from_path(dir.path());
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_empty_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        fs::write(&config_path, "").unwrap();
+
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert!(config.output.is_none());
+        assert!(config.filter.is_none());
+        assert!(config.ignore.is_none());
+    }
+
+    #[test]
+    fn config_default_implementation() {
+        let config = Config::default();
+        assert!(config.output.is_none());
+        assert!(config.filter.is_none());
+        assert!(config.ignore.is_none());
+        assert!(config.line_numbers.is_none());
+        assert!(config.preview.is_none());
+        assert!(config.token_count.is_none());
+        assert!(config.output_folder.is_none());
+        assert!(config.timestamped_output.is_none());
+        assert!(config.yes.is_none());
+        assert!(config.auto_diff.is_none());
+        assert!(config.diff_context_lines.is_none());
+        assert!(config.diff_only.is_none());
+        assert!(config.encoding_strategy.is_none());
+    }
+}

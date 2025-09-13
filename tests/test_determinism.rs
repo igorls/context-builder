@@ -473,8 +473,7 @@ fn test_configuration_affects_cache_key() {
     // but the actual file content sections should be filtered
 }
 
-#[test]
-#[serial] // Ensure tests don't interfere with each other
+#[test] // Ensure tests don't interfere with each other
 fn test_edge_case_filenames_no_panic() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");

@@ -6,7 +6,6 @@
 use context_builder::cli::Args;
 use context_builder::config::Config;
 use context_builder::{Prompter, run_with_args};
-use serial_test::serial;
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
@@ -50,7 +49,6 @@ fn write_binary_file(path: &Path, data: &[u8]) {
 }
 
 #[test]
-#[serial]
 fn test_phase4_features_integration() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");

@@ -75,7 +75,6 @@ fn run_with_resolved_config(
 }
 
 #[test]
-#[serial]
 fn test_cli_arguments_override_config_file() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
@@ -151,7 +150,6 @@ output = "from_config.md"
 }
 
 #[test]
-#[serial]
 fn test_config_applies_when_cli_uses_defaults() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
@@ -231,7 +229,6 @@ ignore = ["target"]
 }
 
 #[test]
-#[serial]
 fn test_timestamped_output_and_output_folder() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");

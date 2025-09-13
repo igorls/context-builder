@@ -252,7 +252,6 @@ fn test_configuration_precedence_edge_cases() {
 }
 
 #[test]
-#[serial]
 fn test_cache_consistency_edge_cases() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");

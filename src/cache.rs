@@ -336,4 +336,228 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_normalize_path_format() {
+        // Test Windows UNC path normalization
+        if cfg!(windows) {
+            let unc_path = Path::new("\\\\?\\C:\\test\\path");
+            let normalized = CacheManager::normalize_path_format(unc_path);
+            assert_eq!(normalized, PathBuf::from("C:\\test\\path"));
+        }
+
+        // Test normal path (should remain unchanged)
+        let normal_path = Path::new("/normal/path");
+        let normalized = CacheManager::normalize_path_format(normal_path);
+        assert_eq!(normalized, normal_path);
+    }
+
+    #[test]
+    fn test_cache_read_nonexistent_file() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("nonexistent_project");
+
+        let config = Config::default();
+        let cache_manager = CacheManager::new(&project_path, &config);
+
+        let result = cache_manager.read_cache().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_cache_read_corrupted_file() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config = Config::default();
+        let cache_manager = CacheManager::new(&project_path, &config);
+        let cache_path = cache_manager.get_cache_path();
+
+        // Create a corrupted cache file
+        let _ = fs::create_dir_all(cache_path.parent().unwrap());
+        let _ = fs::write(&cache_path, "invalid json content {{{");
+
+        let result = cache_manager.read_cache();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_write_read_roundtrip() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string(), ".git".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
+        };
+
+        let cache_manager = CacheManager::new(&project_path, &config);
+
+        use crate::state::ProjectMetadata;
+        use std::collections::BTreeMap;
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            PathBuf::from("test.rs"),
+            crate::state::FileState {
+                content: "fn main() {}".to_string(),
+                size: 12,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                content_hash: "test_hash".to_string(),
+            },
+        );
+
+        let original_state = ProjectState {
+            timestamp: "2023-01-01T12:00:00Z".to_string(),
+            config_hash: "test_config_hash".to_string(),
+            files,
+            metadata: ProjectMetadata {
+                project_name: "test_project".to_string(),
+                file_count: 1,
+                filters: vec!["rs".to_string(), "toml".to_string()],
+                ignores: vec!["target".to_string(), ".git".to_string()],
+                line_numbers: true,
+            },
+        };
+
+        // Write and read back
+        cache_manager.write_cache(&original_state).unwrap();
+        let cached_state = cache_manager.read_cache().unwrap().unwrap();
+
+        assert_eq!(cached_state.timestamp, original_state.timestamp);
+        assert_eq!(cached_state.config_hash, original_state.config_hash);
+        assert_eq!(cached_state.files.len(), original_state.files.len());
+        assert_eq!(
+            cached_state.metadata.project_name,
+            original_state.metadata.project_name
+        );
+        assert_eq!(
+            cached_state.metadata.file_count,
+            original_state.metadata.file_count
+        );
+        assert_eq!(
+            cached_state.metadata.filters,
+            original_state.metadata.filters
+        );
+        assert_eq!(
+            cached_state.metadata.ignores,
+            original_state.metadata.ignores
+        );
+        assert_eq!(
+            cached_state.metadata.line_numbers,
+            original_state.metadata.line_numbers
+        );
+    }
+
+    #[test]
+    fn test_different_configs_different_cache_files() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config1 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["py".to_string()]),
+            ..Default::default()
+        };
+
+        let cache_manager1 = CacheManager::new(&project_path, &config1);
+        let cache_manager2 = CacheManager::new(&project_path, &config2);
+
+        let cache_path1 = cache_manager1.get_cache_path();
+        let cache_path2 = cache_manager2.get_cache_path();
+
+        assert_ne!(
+            cache_path1, cache_path2,
+            "Different configs should have different cache files"
+        );
+    }
+
+    #[test]
+    fn test_normalize_project_path_absolute() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let normalized = CacheManager::normalize_project_path(&project_path);
+        assert!(normalized.is_absolute());
+    }
+
+    #[test]
+    fn test_normalize_project_path_relative() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        // Change to temp directory
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        // Create a project directory
+        let project_name = "relative_project";
+        let _ = fs::create_dir(project_name);
+
+        let relative_path = Path::new(project_name);
+        let normalized = CacheManager::normalize_project_path(relative_path);
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(normalized.is_absolute());
+        assert!(normalized.to_string_lossy().contains(project_name));
+    }
+
+    #[test]
+    fn test_hash_config_same_values() {
+        let config1 = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(false),
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(false),
+            ..Default::default()
+        };
+
+        let hash1 = CacheManager::hash_config(&config1);
+        let hash2 = CacheManager::hash_config(&config2);
+
+        assert_eq!(
+            hash1, hash2,
+            "Identical configs should produce identical hashes"
+        );
+    }
+
+    #[test]
+    fn test_migrate_old_cache_preserves_new_files() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let cache_dir = project_path.join(".context-builder").join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+
+        // Create both old and new cache files
+        let _ = fs::write(cache_dir.join("last_canonical.md"), "old content");
+        let _ = fs::write(cache_dir.join("state_abc123_def456.json"), "new content");
+
+        let config = Config::default();
+        let _cache_manager = CacheManager::new(&project_path, &config);
+
+        // Old file should be removed
+        assert!(!cache_dir.join("last_canonical.md").exists());
+
+        // New file should be preserved
+        assert!(cache_dir.join("state_abc123_def456.json").exists());
+    }
 }

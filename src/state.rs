@@ -404,4 +404,236 @@ mod tests {
         assert_eq!(file_state.size, 8);
         assert!(!file_state.content_hash.is_empty());
     }
+
+    #[test]
+    fn test_has_changes_identical_states() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            PathBuf::from("test.txt"),
+            FileState::from_path(&base_path.join("test.txt")).unwrap(),
+        );
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files.clone(),
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        assert!(!state1.has_changes(&state2));
+    }
+
+    #[test]
+    fn test_has_changes_different_file_count() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test1.txt"), "content1").unwrap();
+        fs::write(base_path.join("test2.txt"), "content2").unwrap();
+
+        let mut files1 = BTreeMap::new();
+        files1.insert(
+            PathBuf::from("test1.txt"),
+            FileState::from_path(&base_path.join("test1.txt")).unwrap(),
+        );
+
+        let mut files2 = BTreeMap::new();
+        files2.insert(
+            PathBuf::from("test1.txt"),
+            FileState::from_path(&base_path.join("test1.txt")).unwrap(),
+        );
+        files2.insert(
+            PathBuf::from("test2.txt"),
+            FileState::from_path(&base_path.join("test2.txt")).unwrap(),
+        );
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files1,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files2,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 2,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        assert!(state1.has_changes(&state2));
+    }
+
+    #[test]
+    fn test_has_changes_content_different() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content1").unwrap();
+
+        let file_state1 = FileState::from_path(&base_path.join("test.txt")).unwrap();
+
+        fs::write(base_path.join("test.txt"), "content2").unwrap();
+        let file_state2 = FileState::from_path(&base_path.join("test.txt")).unwrap();
+
+        let mut files1 = BTreeMap::new();
+        files1.insert(PathBuf::from("test.txt"), file_state1);
+
+        let mut files2 = BTreeMap::new();
+        files2.insert(PathBuf::from("test.txt"), file_state2);
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files1,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files2,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        assert!(state1.has_changes(&state2));
+    }
+
+    #[test]
+    fn test_config_hash_generation() {
+        let config1 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(false),
+            diff_context_lines: Some(3),
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(false),
+            diff_context_lines: Some(3),
+            ..Default::default()
+        };
+
+        let config3 = Config {
+            filter: Some(vec!["py".to_string()]), // Different filter
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(false),
+            diff_context_lines: Some(3),
+            ..Default::default()
+        };
+
+        let hash1 = ProjectState::compute_config_hash(&config1);
+        let hash2 = ProjectState::compute_config_hash(&config2);
+        let hash3 = ProjectState::compute_config_hash(&config3);
+
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_change_summary_no_changes() {
+        let summary = ChangeSummary {
+            added: vec![],
+            removed: vec![],
+            modified: vec![],
+            total_changes: 0,
+        };
+
+        assert!(!summary.has_changes());
+        assert_eq!(summary.to_markdown(), "");
+    }
+
+    #[test]
+    fn test_from_files_with_config() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("README.md"), "# Test").unwrap();
+
+        let entries = vec![
+            create_mock_dir_entry(&base_path.join("test.rs")),
+            create_mock_dir_entry(&base_path.join("README.md")),
+        ];
+
+        let config = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
+        };
+
+        let state = ProjectState::from_files(&entries, base_path, &config, true).unwrap();
+
+        assert_eq!(state.files.len(), 2);
+        assert_eq!(state.metadata.file_count, 2);
+        assert_eq!(state.metadata.filters, vec!["rs"]);
+        assert_eq!(state.metadata.ignores, vec!["target"]);
+        assert!(state.metadata.line_numbers);
+        assert!(!state.timestamp.is_empty());
+        assert!(!state.config_hash.is_empty());
+    }
+
+    // Helper function to create a mock DirEntry for testing
+    fn create_mock_dir_entry(path: &std::path::Path) -> ignore::DirEntry {
+        // This is a bit of a hack since DirEntry doesn't have a public constructor
+        // We use the ignore crate's WalkBuilder to create a real DirEntry
+        let walker = ignore::WalkBuilder::new(path.parent().unwrap());
+        walker
+            .build()
+            .filter_map(Result::ok)
+            .find(|entry| entry.path() == path)
+            .expect("Failed to create DirEntry for test")
+    }
 }
