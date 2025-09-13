@@ -20,3 +20,5 @@ docs/*.md
 
 .context-builder
 check_coverage.ps1
+tarpaulin-report.html
+cobertura.xml
