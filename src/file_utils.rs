@@ -1,4 +1,4 @@
-use ignore::{DirEntry, WalkBuilder};
+use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -9,13 +9,38 @@ pub fn collect_files(
     filters: &[String],
     ignores: &[String],
 ) -> io::Result<Vec<DirEntry>> {
-    let mut ignores = ignores.to_vec();
-    ignores.push(".context-builder.toml".to_string());
-
     let mut walker = WalkBuilder::new(base_path);
     // By default, the "ignore" crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
 
-    // Apply custom ignore filtering later during iteration since `add_ignore` expects file paths to ignore files, not patterns.
+    // Build overrides for custom ignore patterns
+    let mut override_builder = OverrideBuilder::new(base_path);
+    for pattern in ignores {
+        // Add the pattern to the override builder with ! prefix to ignore matching files.
+        // In OverrideBuilder, patterns without ! are whitelist (include) patterns,
+        // while patterns with ! are ignore patterns.
+        let ignore_pattern = format!("!{}", pattern);
+        if let Err(e) = override_builder.add(&ignore_pattern) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Invalid ignore pattern '{}': {}", pattern, e),
+            ));
+        }
+    }
+    // Also, always ignore the config file itself
+    if let Err(e) = override_builder.add("!.context-builder.toml") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Failed to add config ignore: {}", e),
+        ));
+    }
+
+    let overrides = override_builder.build().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Failed to build overrides: {}", e),
+        )
+    })?;
+    walker.overrides(overrides);
 
     if !filters.is_empty() {
         let mut type_builder = ignore::types::TypesBuilder::new();
@@ -28,21 +53,16 @@ pub fn collect_files(
         walker.types(types);
     }
 
-    Ok(walker
+    let mut files: Vec<DirEntry> = walker
         .build()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-        .filter(|e| {
-            let path = e.path();
-            // Exclude any entry that contains an ignored directory or file name as a path component
-            !path.components().any(|c| {
-                let comp = c.as_os_str();
-                ignores
-                    .iter()
-                    .any(|name| comp == std::ffi::OsStr::new(name))
-            })
-        })
-        .collect())
+        .collect();
+
+    // FIX: Sort files deterministically by path to ensure consistent output order
+    files.sort_by(|a, b| a.path().cmp(b.path()));
+
+    Ok(files)
 }
 
 /// Asks for user confirmation if the number of files is large.

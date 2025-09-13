@@ -4,6 +4,7 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
+use context_builder::config::Config;
 use context_builder::{Prompter, cli::Args, run_with_args};
 
 struct TestPrompter {
@@ -76,7 +77,7 @@ fn preview_mode_does_not_create_output_file() {
     let prompter = TestPrompter::new(true, true);
 
     // Run in preview mode
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(res.is_ok(), "preview mode should succeed");
 
     // No output file created
@@ -123,7 +124,7 @@ fn preview_mode_skips_overwrite_confirmation() {
     let prompter = TestPrompter::new(false, true);
 
     // Run in preview mode - should succeed even with overwrite denied
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(
         res.is_ok(),
         "preview mode should succeed without overwrite confirmation"
@@ -174,7 +175,7 @@ fn token_count_mode_skips_overwrite_confirmation() {
     let prompter = TestPrompter::new(false, true);
 
     // Run in token count mode - should succeed even with overwrite denied
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(
         res.is_ok(),
         "token count mode should succeed without overwrite confirmation"
@@ -221,7 +222,7 @@ fn both_preview_and_token_count_modes_work_together() {
     let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
 
     // Run with both modes
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(res.is_ok(), "both modes should work together");
 
     // No output file created
@@ -282,18 +283,40 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
     // Always proceed without interactive prompts
     let prompter = TestPrompter::new(true, true);
 
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(res.is_ok(), "end-to-end generation should succeed");
 
-    // Output file exists
-    assert!(
-        output_path.exists(),
-        "output file should be created at {}",
-        output_path.display()
-    );
+    // Find the actual output file (may have timestamp appended)
+    let actual_output_path = if output_path.exists() {
+        output_path
+    } else {
+        // Look for timestamped version
+        let parent = output_path.parent().unwrap();
+        let stem = output_path.file_stem().unwrap().to_string_lossy();
+        let ext = output_path.extension().unwrap().to_string_lossy();
+
+        let mut found_file = None;
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                if name.starts_with(&format!("{}_", stem)) && name.ends_with(&format!(".{}", ext)) {
+                    found_file = Some(entry.path());
+                    break;
+                }
+            }
+        }
+
+        found_file.unwrap_or_else(|| {
+            panic!(
+                "No output file found. Expected {} or timestamped version",
+                output_path.display()
+            )
+        })
+    };
 
     // Basic content checks
-    let out = fs::read_to_string(&output_path).unwrap();
+    let out = fs::read_to_string(&actual_output_path).unwrap();
 
     // Has file tree section
     assert!(
@@ -353,7 +376,7 @@ fn overwrite_prompt_is_respected() {
     // Deny overwrite
     let prompter = TestPrompter::new(false, true);
 
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(
         res.is_ok(),
         "run should exit gracefully when overwrite denied"
@@ -397,7 +420,7 @@ fn confirm_processing_receives_large_count() {
 
     let prompter = TestPrompter::new(true, true);
 
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(res.is_ok(), "run should succeed with many files");
 
     // Ensure our injected prompter saw the large count (>= 150)
@@ -440,7 +463,7 @@ fn token_count_mode_does_not_create_output_file() {
     let prompter = TestPrompter::new(true, true);
 
     // Run in token count mode
-    let res = run_with_args(args, &prompter);
+    let res = run_with_args(args, Config::default(), &prompter);
     assert!(res.is_ok(), "token count mode should succeed");
 
     // No output file created

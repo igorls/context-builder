@@ -19,7 +19,7 @@ use std::path::Path;
 /// line_numbers = false
 /// diff_context_lines = 5
 /// ```
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Debug, Default, Clone)]
 pub struct Config {
     /// Output file name (or base name when `timestamped_output = true`)
     pub output: Option<String>,

@@ -7,14 +7,14 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use tempfile::tempdir;
 
 use context_builder::cli::Args;
+use context_builder::config::Config;
 use context_builder::{Prompter, run_with_args};
 
 static INIT: Once = Once::new();
 
 fn init_bench_env() {
     INIT.call_once(|| {
-        // Make benches silent by default so console I/O doesn't skew measurements.
-        // Wrapped in `unsafe` to satisfy diagnostics in this environment.
+        // Note: set_var now requires unsafe block from Rust 2024 onwards
         unsafe {
             std::env::set_var("CB_SILENT", "1");
         }
@@ -250,6 +250,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     yes: true,
                     diff_only: false,
                 },
+                Config::default(),
                 &prompter,
             ));
         });

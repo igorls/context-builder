@@ -93,11 +93,41 @@ pub fn generate_markdown(
             })
             .collect();
 
-        for chunk in results {
+        let mut errors = Vec::new();
+        for (index, chunk) in results.into_iter().enumerate() {
             match chunk {
-                Ok(buf) => output.write_all(&buf)?,
-                Err(e) => return Err(e),
+                Ok(buf) => {
+                    if let Err(e) = output.write_all(&buf) {
+                        errors.push(format!(
+                            "Failed to write output for file {}: {}",
+                            files[index].path().display(),
+                            e
+                        ));
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!(
+                        "Failed to process file {}: {}",
+                        files[index].path().display(),
+                        e
+                    ));
+                }
             }
+        }
+
+        if !errors.is_empty() {
+            error!(
+                "Encountered {} errors during parallel processing:",
+                errors.len()
+            );
+            for err in &errors {
+                error!("  {}", err);
+            }
+            return Err(std::io::Error::other(format!(
+                "Failed to process {} files: {}",
+                errors.len(),
+                errors.join("; ")
+            )));
         }
     }
 

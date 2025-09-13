@@ -1,7 +1,7 @@
 use clap::Parser;
 
 /// CLI tool to aggregate directory contents into a single Markdown file optimized for LLM consumption
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[clap(author, version, about)]
 pub struct Args {
     /// Directory path to process

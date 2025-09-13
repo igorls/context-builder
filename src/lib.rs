@@ -1,28 +1,48 @@
 use chrono::Utc;
 use clap::{CommandFactory, Parser};
 
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use tempfile::NamedTempFile;
 
+pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod diff;
 pub mod file_utils;
 pub mod markdown;
+pub mod state;
 pub mod token_count;
 pub mod tree;
 
+use cache::CacheManager;
 use cli::Args;
-use config::load_config;
-use diff::{PerFileStatus, diff_file_contents, render_per_file_diffs};
+use config::{Config, load_config};
+use diff::{PerFileStatus, render_per_file_diffs};
 use file_utils::{collect_files, confirm_overwrite, confirm_processing};
 use markdown::generate_markdown;
+use state::{ProjectState, StateComparison};
 use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
 use tree::{build_file_tree, print_tree};
+
+/// Configuration for diff operations
+#[derive(Debug, Clone)]
+pub struct DiffConfig {
+    pub context_lines: usize,
+    pub enabled: bool,
+    pub diff_only: bool,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self {
+            context_lines: 3,
+            enabled: false,
+            diff_only: false,
+        }
+    }
+}
 
 pub trait Prompter {
     fn confirm_processing(&self, file_count: usize) -> io::Result<bool>;
@@ -40,40 +60,43 @@ impl Prompter for DefaultPrompter {
     }
 }
 
-pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
+pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
     let start_time = Instant::now();
 
     let silent = std::env::var("CB_SILENT")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let base_path = Path::new(&args.input);
+    // Use the finalized args passed in from run()
+    let final_args = args;
+    let base_path = Path::new(&final_args.input);
 
     if !base_path.exists() || !base_path.is_dir() {
         if !silent {
             eprintln!(
                 "Error: The specified input directory '{}' does not exist or is not a directory.",
-                args.input
+                final_args.input
             );
         }
         return Ok(());
     }
 
-    let config = load_config().unwrap_or_default();
-    // Expose configured diff context lines (if provided) to the diff generator through env
-    if let Some(diff_ctx) = config.diff_context_lines
-        && std::env::var("CB_DIFF_CONTEXT_LINES").is_err()
-    {
-        unsafe {
-            std::env::set_var("CB_DIFF_CONTEXT_LINES", diff_ctx.to_string());
-        }
-    }
+    // Create diff configuration from config
+    let diff_config = if config.auto_diff.unwrap_or(false) {
+        Some(DiffConfig {
+            context_lines: config.diff_context_lines.unwrap_or(3),
+            enabled: true,
+            diff_only: final_args.diff_only,
+        })
+    } else {
+        None
+    };
 
-    if !args.preview
-        && !args.token_count
-        && Path::new(&args.output).exists()
-        && !args.yes
-        && !prompter.confirm_overwrite(&args.output)?
+    if !final_args.preview
+        && !final_args.token_count
+        && Path::new(&final_args.output).exists()
+        && !final_args.yes
+        && !prompter.confirm_overwrite(&final_args.output)?
     {
         if !silent {
             println!("Operation cancelled.");
@@ -81,40 +104,40 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
         return Ok(());
     }
 
-    let files = collect_files(base_path, &args.filter, &args.ignore)?;
+    let files = collect_files(base_path, &final_args.filter, &final_args.ignore)?;
     let file_tree = build_file_tree(&files, base_path);
 
-    if args.preview {
+    if final_args.preview {
         if !silent {
             println!("\n# File Tree Structure (Preview)\n");
             print_tree(&file_tree, 0);
         }
-        if !args.token_count {
+        if !final_args.token_count {
             return Ok(());
         }
     }
 
-    if args.token_count {
+    if final_args.token_count {
         if !silent {
             println!("\n# Token Count Estimation\n");
             let mut total_tokens = 0;
             total_tokens += estimate_tokens("# Directory Structure Report\n\n");
-            if !args.filter.is_empty() {
+            if !final_args.filter.is_empty() {
                 total_tokens += estimate_tokens(&format!(
                     "This document contains files from the `{}` directory with extensions: {} \n",
-                    args.input,
-                    args.filter.join(", ")
+                    final_args.input,
+                    final_args.filter.join(", ")
                 ));
             } else {
                 total_tokens += estimate_tokens(&format!(
                     "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
-                    args.input
+                    final_args.input
                 ));
             }
-            if !args.ignore.is_empty() {
+            if !final_args.ignore.is_empty() {
                 total_tokens += estimate_tokens(&format!(
                     "Custom ignored patterns: {} \n",
-                    args.ignore.join(", ")
+                    final_args.ignore.join(", ")
                 ));
             }
             total_tokens += estimate_tokens(&format!(
@@ -126,7 +149,7 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
             total_tokens += tree_tokens;
             let file_tokens: usize = files
                 .iter()
-                .map(|entry| count_file_tokens(base_path, entry, args.line_numbers))
+                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers))
                 .sum();
             total_tokens += file_tokens;
             println!("Estimated total tokens: {}", total_tokens);
@@ -136,219 +159,79 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
         return Ok(());
     }
 
-    if !args.yes && !prompter.confirm_processing(files.len())? {
+    if !final_args.yes && !prompter.confirm_processing(files.len())? {
         if !silent {
             println!("Operation cancelled.");
         }
         return Ok(());
     }
 
-    if config.auto_diff.unwrap_or(false) && config.timestamped_output.unwrap_or(false) {
-        // 1. Generate current canonical (no diff) into temp file
-        let output_path = Path::new(&args.output);
-        let temp_file = NamedTempFile::new()?;
+    if config.auto_diff.unwrap_or(false) {
+        // 1. Create current project state
+        let current_state =
+            ProjectState::from_files(&files, base_path, &config, final_args.line_numbers)?;
 
-        generate_markdown(
-            temp_file.path().to_str().unwrap(),
-            &args.input,
-            &args.filter,
-            &args.ignore,
+        // 2. Initialize cache manager and load previous state
+        let cache_manager = CacheManager::new(base_path, &config);
+        let previous_state = match cache_manager.read_cache() {
+            Ok(state) => state,
+            Err(e) => {
+                if !silent {
+                    eprintln!(
+                        "Warning: Failed to read cache (proceeding without diff): {}",
+                        e
+                    );
+                }
+                None
+            }
+        };
+
+        let diff_cfg = diff_config.as_ref().unwrap();
+
+        // 3. Compare states and generate diff if previous state exists
+        let comparison = previous_state
+            .as_ref()
+            .map(|prev_state| current_state.compare_with(prev_state));
+
+        // 4. Generate markdown with diff annotations
+        let final_doc = generate_markdown_with_diff(
+            &current_state,
+            comparison.as_ref(),
+            &final_args,
             &file_tree,
-            &files,
-            base_path,
-            args.line_numbers,
+            diff_cfg,
         )?;
 
-        // 2. Load previous canonical (if any)
-        let cache_dir = Path::new(".context-builder").join("cache");
-        if !cache_dir.exists() {
-            let _ = fs::create_dir_all(&cache_dir);
-        }
-        let cache_file = cache_dir.join("last_canonical.md");
-        let previous_canonical = fs::read_to_string(&cache_file).unwrap_or_default();
-        let new_canonical = fs::read_to_string(temp_file.path())?;
-
-        // 3. Extract per-file pure contents (only code blocks) for both versions
-        fn extract_file_contents(text: &str) -> (String, String, HashMap<String, String>) {
-            let mut prefix_end = text.len();
-            if let Some(idx) = text.find("\n### File: `") {
-                prefix_end = idx;
-            }
-            let (prefix, rest) = text.split_at(prefix_end);
-            let mut files_map: HashMap<String, String> = HashMap::new();
-            let files_raw = rest.trim_start().to_string();
-
-            let mut current_path: Option<String> = None;
-            let mut in_code = false;
-            let mut current_lines: Vec<String> = Vec::new();
-
-            fn strip_line_number(line: &str) -> &str {
-                let trimmed = line.trim_start();
-                if let Some(pipe_idx) = trimmed.find('|') {
-                    let (left, right) = trimmed.split_at(pipe_idx);
-                    if left.trim().chars().all(|c| c.is_ascii_digit()) {
-                        return right.trim_start_matches('|').trim_start();
-                    }
-                }
-                line
-            }
-
-            for line in rest.lines() {
-                if line.starts_with("### File: `") {
-                    if let Some(p) = current_path.take() {
-                        files_map.insert(p, current_lines.join("\n"));
-                        current_lines.clear();
-                    }
-                    if let Some(after) = line.strip_prefix("### File: `")
-                        && let Some(end) = after.find('`')
-                    {
-                        current_path = Some(after[..end].to_string());
-                    }
-                    in_code = false;
-                    continue;
-                }
-
-                if line.starts_with("```") {
-                    in_code = !in_code;
-                    continue;
-                }
-
-                if in_code {
-                    current_lines.push(strip_line_number(line).to_string());
-                }
-            }
-
-            if let Some(p) = current_path.take() {
-                files_map.insert(p, current_lines.join("\n"));
-            }
-
-            (prefix.trim_end().to_string(), files_raw, files_map)
-        }
-
-        let (_prev_prefix, _prev_files_raw, prev_map) = extract_file_contents(&previous_canonical);
-        let (new_prefix, new_files_raw, new_map) = extract_file_contents(&new_canonical);
-
-        // 4. Compute per-file diffs (skip unchanged)
-        let per_file_diffs = diff_file_contents(&prev_map, &new_map, true, None);
-
-        // 5. Partition changes
-        let mut added_paths: HashSet<&str> = HashSet::new();
-        let mut removed_paths: HashSet<&str> = HashSet::new();
-        let mut modified_paths: HashSet<&str> = HashSet::new();
-
-        for d in &per_file_diffs {
-            match d.status {
-                PerFileStatus::Added => {
-                    added_paths.insert(d.path.as_str());
-                }
-                PerFileStatus::Removed => {
-                    removed_paths.insert(d.path.as_str());
-                }
-                PerFileStatus::Modified => {
-                    modified_paths.insert(d.path.as_str());
-                }
-                PerFileStatus::Unchanged => {}
-            }
-        }
-
-        // 6. Prepare Files section with annotations for added files
-        // We only annotate the display; added files produce no diff section.
-        let mut files_section = new_files_raw.trim_start().to_string();
-        if !added_paths.is_empty() {
-            // For safety do replacements on a line-by-line rebuild to avoid nested replacements.
-            let mut rebuilt = String::new();
-            let lines = files_section.lines().peekable();
-            for line in lines {
-                if let Some(after) = line.strip_prefix("### File: `")
-                    && let Some(end) = after.find('`')
-                {
-                    let path = &after[..end];
-                    rebuilt.push_str(line);
-                    rebuilt.push('\n');
-                    // The original generator emits a blank line after heading; we add status before metadata
-                    if added_paths.contains(path) {
-                        rebuilt.push('\n');
-                        rebuilt.push_str("_Status: Added_\n");
-                    }
-                    continue;
-                }
-                rebuilt.push_str(line);
-                rebuilt.push('\n');
-            }
-            files_section = rebuilt;
-        }
-
-        // 7. Build final document
-        let mut final_doc = String::new();
-        final_doc.push_str(&new_prefix);
-        final_doc.push_str("\n\n");
-
-        // Change Summary always shows additions/removals/modifications if any
-        if !(added_paths.is_empty() && removed_paths.is_empty() && modified_paths.is_empty()) {
-            final_doc.push_str("## Change Summary\n\n");
-            for p in added_paths.iter().copied().collect::<Vec<_>>() {
-                final_doc.push_str(&format!("- Added: `{}`\n", p));
-            }
-            for p in removed_paths.iter().copied().collect::<Vec<_>>() {
-                final_doc.push_str(&format!("- Removed: `{}`\n", p));
-            }
-            for p in modified_paths.iter().copied().collect::<Vec<_>>() {
-                final_doc.push_str(&format!("- Modified: `{}`\n", p));
-            }
-            final_doc.push('\n');
-        }
-
-        // File Differences: ONLY modified files (no added / removed)
-        let modified_diffs: Vec<_> = per_file_diffs
-            .iter()
-            .filter(|d| matches!(d.status, PerFileStatus::Modified))
-            .collect();
-
-        if !modified_diffs.is_empty() {
-            final_doc.push_str("## File Differences\n\n");
-            // Render only modified diffs
-            final_doc.push_str(&render_per_file_diffs(
-                &modified_diffs
-                    .iter()
-                    .map(|d| (*d).clone())
-                    .collect::<Vec<_>>(),
-            ));
-            final_doc.push('\n');
-        }
-
-        // Only include full file bodies when not in diff-only mode
-        if !args.diff_only && !files_section.is_empty() {
-            final_doc.push_str("## Files\n\n");
-
-            final_doc.push_str(&files_section);
-
-            if !final_doc.ends_with('\n') {
-                final_doc.push('\n');
-            }
-        }
-
-        // 8. Write output
+        // 5. Write output
+        let output_path = Path::new(&final_args.output);
         let mut final_output = fs::File::create(output_path)?;
         final_output.write_all(final_doc.as_bytes())?;
 
-        // 9. Update canonical cache
-        if let Err(e) = fs::write(&cache_file, &new_canonical)
+        // 6. Update cache with current state
+        if let Err(e) = cache_manager.write_cache(&current_state)
             && !silent
         {
-            eprintln!("Warning: failed to update canonical cache: {e}");
+            eprintln!("Warning: failed to update state cache: {}", e);
         }
 
         let duration = start_time.elapsed();
         if !silent {
-            if modified_diffs.is_empty() {
-                println!(
-                    "Documentation created successfully (no modified file content): {}",
-                    args.output
-                );
+            if let Some(comp) = &comparison {
+                if comp.summary.has_changes() {
+                    println!(
+                        "Documentation created successfully with {} changes: {}",
+                        comp.summary.total_changes, final_args.output
+                    );
+                } else {
+                    println!(
+                        "Documentation created successfully (no changes detected): {}",
+                        final_args.output
+                    );
+                }
             } else {
                 println!(
-                    "Documentation created successfully with modified file diffs: {}",
-                    args.output
+                    "Documentation created successfully (initial state): {}",
+                    final_args.output
                 );
             }
             println!("Processing time: {:.2?}", duration);
@@ -358,23 +241,170 @@ pub fn run_with_args(args: Args, prompter: &impl Prompter) -> io::Result<()> {
 
     // Standard (non auto-diff) generation
     generate_markdown(
-        &args.output,
-        &args.input,
-        &args.filter,
-        &args.ignore,
+        &final_args.output,
+        &final_args.input,
+        &final_args.filter,
+        &final_args.ignore,
         &file_tree,
         &files,
         base_path,
-        args.line_numbers,
+        final_args.line_numbers,
     )?;
 
     let duration = start_time.elapsed();
     if !silent {
-        println!("Documentation created successfully: {}", args.output);
+        println!("Documentation created successfully: {}", final_args.output);
         println!("Processing time: {:.2?}", duration);
     }
 
     Ok(())
+}
+
+/// Generate markdown document with diff annotations
+fn generate_markdown_with_diff(
+    current_state: &ProjectState,
+    comparison: Option<&StateComparison>,
+    _args: &Args,
+    file_tree: &crate::tree::FileTree,
+    diff_config: &DiffConfig,
+) -> io::Result<String> {
+    let mut output = String::new();
+
+    // Header
+    output.push_str("# Directory Structure Report\n\n");
+
+    if !current_state.metadata.filters.is_empty() {
+        output.push_str(&format!(
+            "This document contains files from the `{}` directory with extensions: {}\n",
+            current_state.metadata.project_name,
+            current_state.metadata.filters.join(", ")
+        ));
+    } else {
+        output.push_str(&format!(
+            "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
+            current_state.metadata.project_name
+        ));
+    }
+
+    if !current_state.metadata.ignores.is_empty() {
+        output.push_str(&format!(
+            "Custom ignored patterns: {}\n",
+            current_state.metadata.ignores.join(", ")
+        ));
+    }
+
+    output.push_str(&format!("Processed at: {}\n\n", current_state.timestamp));
+
+    // File Tree
+    output.push_str("## File Tree Structure\n\n");
+    output.push_str(&format_file_tree(file_tree));
+    output.push('\n');
+
+    // Change Summary and Diffs (if comparison available)
+    match comparison {
+        Some(comp) if comp.summary.has_changes() => {
+            // Change Summary
+            output.push_str(&comp.summary.to_markdown());
+
+            // File Differences: only modified files
+            let modified_diffs: Vec<_> = comp
+                .file_diffs
+                .iter()
+                .filter(|d| matches!(d.status, PerFileStatus::Modified))
+                .collect();
+
+            if !modified_diffs.is_empty() {
+                output.push_str("## File Differences\n\n");
+                output.push_str(&render_per_file_diffs(
+                    &modified_diffs
+                        .iter()
+                        .map(|d| (*d).clone())
+                        .collect::<Vec<_>>(),
+                ));
+                output.push('\n');
+            }
+        }
+        _ => {}
+    }
+
+    // Files section (unless diff_only mode)
+    if !diff_config.diff_only {
+        output.push_str("## Files\n\n");
+
+        for (path, file_state) in &current_state.files {
+            output.push_str(&format!("\n### File: `{}`\n\n", path.display()));
+
+            // Check if this file was added
+            let is_added = comparison
+                .as_ref()
+                .map(|c| c.summary.added.contains(path))
+                .unwrap_or(false);
+
+            if is_added {
+                output.push_str("_Status: Added_\n\n");
+            }
+
+            output.push_str(&format!("- Size: {} bytes\n", file_state.size));
+            let modified_time = file_state
+                .modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+            output.push_str(&format!("- Modified: {}\n\n", modified_time));
+
+            // Determine language for syntax highlighting
+            let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
+            let language = match extension {
+                "rs" => "rust",
+                "js" => "javascript",
+                "ts" => "typescript",
+                "jsx" => "jsx",
+                "tsx" => "tsx",
+                "json" => "json",
+                "toml" => "toml",
+                "md" => "markdown",
+                "yaml" | "yml" => "yaml",
+                "html" => "html",
+                "css" => "css",
+                "py" => "python",
+                "java" => "java",
+                "cpp" => "cpp",
+                "c" => "c",
+                "h" => "c",
+                "hpp" => "cpp",
+                "sql" => "sql",
+                "sh" => "bash",
+                "xml" => "xml",
+                "lock" => "toml",
+                _ => extension,
+            };
+
+            output.push_str(&format!("```{}\n", language));
+
+            if current_state.metadata.line_numbers {
+                for (i, line) in file_state.content.lines().enumerate() {
+                    output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                }
+            } else {
+                output.push_str(&file_state.content);
+                if !file_state.content.ends_with('\n') {
+                    output.push('\n');
+                }
+            }
+
+            output.push_str("```\n");
+        }
+    }
+
+    Ok(output)
+}
+
+fn format_file_tree(tree: &crate::tree::FileTree) -> String {
+    let mut output = Vec::new();
+    crate::tree::write_tree_to_file(&mut output, tree, 0).unwrap();
+    String::from_utf8(output).unwrap()
 }
 
 pub fn run() -> io::Result<()> {
@@ -387,19 +417,19 @@ pub fn run() -> io::Result<()> {
         return Ok(());
     }
 
-    if let Some(config) = config {
+    let final_config = if let Some(config) = config {
         if args.output == "output.md"
-            && let Some(output) = config.output
+            && let Some(output) = config.output.clone()
         {
             args.output = output;
         }
         if args.filter.is_empty()
-            && let Some(filter) = config.filter
+            && let Some(filter) = config.filter.clone()
         {
             args.filter = filter;
         }
         if args.ignore.is_empty()
-            && let Some(ignore) = config.ignore
+            && let Some(ignore) = config.ignore.clone()
         {
             args.ignore = ignore;
         }
@@ -425,7 +455,7 @@ pub fn run() -> io::Result<()> {
         }
 
         let mut output_folder_path: Option<PathBuf> = None;
-        if let Some(output_folder) = config.output_folder {
+        if let Some(output_folder) = config.output_folder.clone() {
             let mut path = PathBuf::from(output_folder.clone());
             path.push(&args.output);
             args.output = path.to_str().unwrap().to_string();
@@ -437,9 +467,12 @@ pub fn run() -> io::Result<()> {
 
             let path = Path::new(&args.output);
 
-            let stem = path.file_stem().unwrap().to_str().unwrap();
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("output");
 
-            let extension = path.extension().unwrap().to_str().unwrap();
+            let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
 
             let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
 
@@ -460,6 +493,10 @@ pub fn run() -> io::Result<()> {
         if let Some(true) = config.diff_only {
             args.diff_only = true;
         }
-    }
-    run_with_args(args, &DefaultPrompter)
+
+        config
+    } else {
+        Config::default()
+    };
+    run_with_args(args, final_config, &DefaultPrompter)
 }

@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.0
+
+- **BREAKING CHANGES**
+  - Environment variable `CB_DIFF_CONTEXT_LINES` is no longer used; diff configuration is now handled explicitly through `DiffConfig`
+  - Cache file locations changed to project-specific paths to prevent collisions
+
+- **Critical Bug Fixes**
+  - **Fixed inverted ignore logic**: Corrected critical bug where ignore patterns were being treated as include patterns, causing files/directories meant to be ignored to be explicitly included instead
+  - **Fixed cache read panics**: Improved error handling for corrupted cache files to prevent application crashes
+  - **Fixed potential panics in path manipulation**: Added safe handling for edge case filenames without extensions or stems
+
+- **Major Improvements**
+  - **Deterministic Output**: Files are now sorted consistently, ensuring identical output for the same input across multiple runs
+  - **Robust Caching Architecture**: Complete rewrite of caching system with:
+    - Project-specific cache keys based on absolute path hash to prevent collisions
+    - JSON-based structured caching replacing fragile markdown parsing
+    - File locking with `fs2` crate for thread-safe concurrent access
+    - Configuration changes now properly invalidate cache
+  - **Enhanced Auto-Diff System**: 
+    - Structured state representation before markdown generation
+    - Eliminated fragile text parsing with `extract_file_contents` and `strip_line_number` functions
+    - Cache structured data (JSON) instead of markdown for reliability
+  - **Thread Safety**: Removed all `unsafe` blocks and explicit configuration passing replaces environment variables
+
+- **Performance Optimizations**
+  - **Custom Ignores**: Now uses `ignore::overrides::OverrideBuilder` with glob pattern support for better performance
+  - **Parallel Processing**: Improved error handling to collect all errors and continue processing other files
+  - **Directory Traversal**: Let `ignore` crate optimize directory traversal instead of custom logic
+
+- **Bug Fixes**
+  - Fixed non-deterministic output order that caused inconsistent LLM context generation
+  - Removed incorrect triple-backtick filtering in diff logic that was corrupting file content
+  - Fixed cache corruption issues in concurrent access scenarios
+  - Improved error recovery for partial failures and corrupted cache
+  - Fixed inconsistent file tree visualization between auto-diff and standard modes
+
+- **Testing & Quality**
+  - Added comprehensive integration test suite with 11 tests covering:
+    - Determinism verification (5 tests)
+    - Auto-diff workflows (6 tests) 
+    - Cache collision prevention
+    - Configuration change detection
+    - Error recovery scenarios
+  - All tests use `#[serial]` attribute to prevent race conditions
+  - Added `pretty_assertions` for better test output
+
+- **Dependencies**
+  - Added `fs2 = "0.4.3"` for file locking
+  - Added `serde_json = "1.0"` for structured cache format
+  - Added `serial_test = "3.0"` for test serialization
+  - Added `pretty_assertions = "1.4"` for enhanced test output
+
+- **Migration**
+  - Automatic detection and cleanup of old markdown-based cache files (`last_canonical.md`, etc.)
+  - First run after upgrade will clear old cache format to prevent conflicts
+  - CLI interface remains fully backward compatible
+
 ## v0.4.0
 
 

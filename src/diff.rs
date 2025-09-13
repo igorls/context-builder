@@ -62,9 +62,7 @@ pub fn generate_diff(old_content: &str, new_content: &str) -> String {
                         line.pop();
                     }
                 }
-                if line.trim_start().starts_with("```") {
-                    continue;
-                }
+
                 match tag {
                     ChangeTag::Delete => {
                         out.push_str("- ");
@@ -137,9 +135,7 @@ fn unified_no_header(old: &str, new: &str, context_lines: usize) -> String {
                         line.pop();
                     }
                 }
-                if line.trim_start().starts_with("```") {
-                    continue;
-                }
+
                 match tag {
                     ChangeTag::Delete => {
                         out.push_str("- ");
@@ -197,9 +193,6 @@ pub fn diff_file_contents(
                 let mut diff = String::new();
                 diff.push_str("```diff\n");
                 for line in new_content.lines() {
-                    if line.trim_start().starts_with("```") {
-                        continue;
-                    }
                     diff.push_str("+ ");
                     diff.push_str(line);
                     diff.push('\n');
@@ -217,9 +210,6 @@ pub fn diff_file_contents(
                 let mut diff = String::new();
                 diff.push_str("```diff\n");
                 for line in old_content.lines() {
-                    if line.trim_start().starts_with("```") {
-                        continue;
-                    }
                     diff.push_str("- ");
                     diff.push_str(line);
                     diff.push('\n');
