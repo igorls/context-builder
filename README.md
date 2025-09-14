@@ -56,9 +56,13 @@ It's a command-line utility that recursively processes directories and creates c
   Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
 
 
-- ⚙️ **Configuration-First:**
 
-  Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs. Initialize a new config file with `--init`.
+ - ⚙️ **Configuration-First:**
+
+
+  Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs. Initialize a new config file with `--init`, which will detect the major file types in your project (respecting `.gitignore` patterns) and suggest appropriate filters.
+
+
 
 
 - 🔁 **Automatic Per-File Diffs:**
@@ -126,9 +130,13 @@ cargo install --path .
 
 ### Basic Usage
 
-```bash
-# Initialize a new context-builder.toml config file with sensible defaults
-context-builder --init
+
+
+ # Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
+
+ context-builder --init
+
+
 
 # Process current directory and create output.md
 context-builder
@@ -231,7 +239,10 @@ encoding_strategy = "detect"
 
 ```
 
-You can initialize a new configuration file using the `--init` command. This will create a `context-builder.toml` file in your current directory with sensible defaults that you can then customize according to your project needs.
+
+
+ You can initialize a new configuration file using the `--init` command. This will create a `context-builder.toml` file in your current directory with sensible defaults based on the file types detected in your project. The filter suggestions will be automatically tailored to your project's most common file extensions while respecting `.gitignore` patterns and common ignore directories like `target`, `node_modules`, etc. This makes it more likely to include the files you actually want to process.
+
 
 
 ---

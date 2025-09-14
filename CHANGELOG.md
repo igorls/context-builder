@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.2
+
+- Enhanced `--init` command to detect major file types in the current directory and suggest appropriate filters instead of using generic defaults
+- Fixed file type detection to respect .gitignore patterns and common ignore directories (target, node_modules, etc.)
+
 ## v0.5.1
 
 - Added `--init` command to create a new `context-builder.toml` configuration file in the current directory with sensible defaults

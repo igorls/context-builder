@@ -593,6 +593,41 @@ pub fn run() -> io::Result<()> {
     run_with_args(final_args, final_config, &DefaultPrompter)
 }
 
+/// Detect major file types in the current directory respecting .gitignore and default ignore patterns
+fn detect_major_file_types() -> io::Result<Vec<String>> {
+    use std::collections::HashMap;
+    let mut extension_counts = HashMap::new();
+
+    // Use the same default ignore patterns as the main application
+    let default_ignores = vec![
+        "docs".to_string(),
+        "target".to_string(),
+        ".git".to_string(),
+        "node_modules".to_string(),
+    ];
+
+    // Collect files using the same logic as the main application
+    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores)?;
+
+    // Count extensions from the filtered file list
+    for entry in files {
+        let path = entry.path();
+        if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+            // Count the extension occurrences
+            *extension_counts.entry(extension.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    // Convert to vector of (extension, count) pairs and sort by count
+    let mut extensions: Vec<(String, usize)> = extension_counts.into_iter().collect();
+    extensions.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Take the top 5 extensions or all if less than 5
+    let top_extensions: Vec<String> = extensions.into_iter().take(5).map(|(ext, _)| ext).collect();
+
+    Ok(top_extensions)
+}
+
 /// Initialize a new context-builder.toml config file in the current directory with sensible defaults
 fn init_config() -> io::Result<()> {
     let config_path = Path::new("context-builder.toml");
@@ -603,8 +638,21 @@ fn init_config() -> io::Result<()> {
         return Ok(());
     }
 
-    let default_config_content = r#"# Context Builder Configuration File
-# This file was generated with sensible defaults
+    // Detect major file types in the current directory
+    let filter_suggestions = match detect_major_file_types() {
+        Ok(extensions) => extensions,
+        _ => vec!["rs".to_string(), "toml".to_string()], // fallback to defaults
+    };
+
+    let filter_string = if filter_suggestions.is_empty() {
+        r#"["rs", "toml"]"#.to_string()
+    } else {
+        format!(r#"["{}"]"#, filter_suggestions.join(r#"", ""#))
+    };
+
+    let default_config_content = format!(
+        r#"# Context Builder Configuration File
+# This file was generated with sensible defaults based on the file types detected in your project
 
 # Output file name (or base name when timestamped_output is true)
 output = "context.md"
@@ -622,19 +670,22 @@ auto_diff = true
 diff_only = false
 
 # File extensions to include (no leading dot, e.g. "rs", "toml")
-filter = ["rs", "toml"]
+filter = {}
 
 # File / directory names to ignore (exact name matches)
 ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
 line_numbers = false
-"#;
+"#,
+        filter_string
+    );
 
     let mut file = File::create(config_path)?;
     file.write_all(default_config_content.as_bytes())?;
 
     println!("Config file created at {}", config_path.display());
+    println!("Detected file types: {}", filter_suggestions.join(", "));
     println!("You can now customize it according to your project needs.");
 
     Ok(())

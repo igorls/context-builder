@@ -1,5 +1,5 @@
 # Context Builder Configuration File
-# This file was generated with sensible defaults
+# This file was generated with sensible defaults based on the file types detected in your project
 
 # Output file name (or base name when timestamped_output is true)
 output = "context.md"
@@ -17,7 +17,7 @@ auto_diff = true
 diff_only = false
 
 # File extensions to include (no leading dot, e.g. "rs", "toml")
-filter = ["rs", "toml"]
+filter = ["rs", "md", "toml"]
 
 # File / directory names to ignore (exact name matches)
 ignore = ["docs", "target", ".git", "node_modules"]
