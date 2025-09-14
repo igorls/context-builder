@@ -90,6 +90,7 @@ fn test_deterministic_output_multiple_runs() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         },
         Config::default(),
         &prompter,
@@ -111,6 +112,7 @@ fn test_deterministic_output_multiple_runs() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         },
         Config::default(),
         &prompter,
@@ -241,6 +243,7 @@ fn test_deterministic_file_tree_order() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter = TestPrompter;
@@ -303,6 +306,7 @@ fn test_cache_collision_prevention() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -318,9 +322,14 @@ fn test_cache_collision_prevention() {
         preview: false,
         token_count: false,
         line_numbers: false,
+
         yes: true,
+
         diff_only: false,
+
         clear_cache: false,
+
+        init: false,
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -384,6 +393,7 @@ fn test_custom_ignores_performance() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter = TestPrompter;
@@ -437,6 +447,7 @@ fn test_configuration_affects_cache_key() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let args2 = Args {
@@ -450,6 +461,7 @@ fn test_configuration_affects_cache_key() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter = TestPrompter;
@@ -512,6 +524,7 @@ auto_diff = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter = TestPrompter;

@@ -17,6 +17,8 @@ pub mod state;
 pub mod token_count;
 pub mod tree;
 
+use std::fs::File;
+
 use cache::CacheManager;
 use cli::Args;
 use config::{Config, load_config_from_path};
@@ -524,6 +526,11 @@ pub fn run() -> io::Result<()> {
     env_logger::init();
     let args = Args::parse();
 
+    // Handle init command first
+    if args.init {
+        return init_config();
+    }
+
     // Determine project root first
     let project_root = Path::new(&args.input);
     let config = load_config_from_path(project_root);
@@ -573,6 +580,7 @@ pub fn run() -> io::Result<()> {
         yes: resolution.config.yes,
         diff_only: resolution.config.diff_only,
         clear_cache: resolution.config.clear_cache,
+        init: false,
     };
 
     // Create final Config with resolved values
@@ -583,6 +591,53 @@ pub fn run() -> io::Result<()> {
     };
 
     run_with_args(final_args, final_config, &DefaultPrompter)
+}
+
+/// Initialize a new context-builder.toml config file in the current directory with sensible defaults
+fn init_config() -> io::Result<()> {
+    let config_path = Path::new("context-builder.toml");
+
+    if config_path.exists() {
+        println!("Config file already exists at {}", config_path.display());
+        println!("If you want to replace it, please remove it manually first.");
+        return Ok(());
+    }
+
+    let default_config_content = r#"# Context Builder Configuration File
+# This file was generated with sensible defaults
+
+# Output file name (or base name when timestamped_output is true)
+output = "context.md"
+
+# Optional folder to place the generated output file(s) in
+output_folder = "docs"
+
+# Append a UTC timestamp to the output file name (before extension)
+timestamped_output = true
+
+# Enable automatic diff generation (requires timestamped_output = true)
+auto_diff = true
+
+# Emit only change summary + modified file diffs (no full file bodies)
+diff_only = false
+
+# File extensions to include (no leading dot, e.g. "rs", "toml")
+filter = ["rs", "toml"]
+
+# File / directory names to ignore (exact name matches)
+ignore = ["docs", "target", ".git", "node_modules"]
+
+# Add line numbers to code blocks
+line_numbers = false
+"#;
+
+    let mut file = File::create(config_path)?;
+    file.write_all(default_config_content.as_bytes())?;
+
+    println!("Config file created at {}", config_path.display());
+    println!("You can now customize it according to your project needs.");
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -650,7 +705,7 @@ mod tests {
     fn test_run_with_args_nonexistent_directory() {
         let args = Args {
             input: "/nonexistent/directory".to_string(),
-            output: "test.md".to_string(),
+            output: "output.md".to_string(),
             filter: vec![],
             ignore: vec![],
             line_numbers: false,
@@ -659,6 +714,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -679,16 +735,17 @@ mod tests {
         fs::write(base_path.join("src/lib.rs"), "pub fn hello() {}").unwrap();
 
         let args = Args {
-            input: base_path.to_string_lossy().to_string(),
+            input: ".".to_string(),
             output: "test.md".to_string(),
             filter: vec![],
             ignore: vec![],
             line_numbers: false,
-            preview: true,
+            preview: false,
             token_count: false,
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -724,6 +781,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -753,10 +811,11 @@ mod tests {
             ignore: vec![],
             line_numbers: false,
             preview: true,
-            token_count: true,
+            token_count: false,
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -784,15 +843,16 @@ mod tests {
 
         let args = Args {
             input: base_path.to_string_lossy().to_string(),
-            output: output_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
             filter: vec![],
-            ignore: vec![],
+            ignore: vec!["target".to_string()],
             line_numbers: false,
             preview: false,
             token_count: false,
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, false); // Deny overwrite
@@ -822,7 +882,7 @@ mod tests {
         let args = Args {
             input: base_path.to_string_lossy().to_string(),
             output: "test.md".to_string(),
-            filter: vec![],
+            filter: vec!["rs".to_string()],
             ignore: vec![],
             line_numbers: false,
             preview: false,
@@ -830,6 +890,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false, true); // Deny processing
@@ -850,7 +911,8 @@ mod tests {
     fn test_run_with_args_with_yes_flag() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
-        let output_path = temp_dir.path().join("output.md");
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
 
         fs::write(base_path.join("test.txt"), "Hello world").unwrap();
 
@@ -858,13 +920,14 @@ mod tests {
             input: base_path.to_string_lossy().to_string(),
             output: output_path.to_string_lossy().to_string(),
             filter: vec![],
-            ignore: vec![],
+            ignore: vec!["ignored_dir".to_string()],
             line_numbers: false,
             preview: false,
             token_count: false,
-            yes: true, // Skip confirmations
+            yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -889,7 +952,8 @@ mod tests {
     fn test_run_with_args_with_filters() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
-        let output_path = temp_dir.path().join("filtered.md");
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
 
         fs::write(base_path.join("code.rs"), "fn main() {}").unwrap();
         fs::write(base_path.join("readme.md"), "# README").unwrap();
@@ -906,6 +970,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -947,6 +1012,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -971,7 +1037,8 @@ mod tests {
     fn test_auto_diff_without_previous_state() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
-        let output_path = temp_dir.path().join("autodiff.md");
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
 
         fs::write(base_path.join("new.txt"), "new content").unwrap();
 
@@ -986,6 +1053,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1029,6 +1097,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1066,9 +1135,10 @@ mod tests {
             line_numbers: false,
             preview: false,
             token_count: false,
-            yes: true,
+            yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let diff_config = DiffConfig::default();

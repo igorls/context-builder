@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.1
+
+- Added `--init` command to create a new `context-builder.toml` configuration file in the current directory with sensible defaults
+
 ## v0.5.0
 
 - **BREAKING CHANGES**

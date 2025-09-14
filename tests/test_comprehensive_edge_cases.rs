@@ -117,6 +117,7 @@ fn test_comprehensive_binary_file_edge_cases() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let prompter = TestPrompter::new(true, true);
@@ -200,6 +201,7 @@ fn test_configuration_precedence_edge_cases() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -234,6 +236,7 @@ fn test_configuration_precedence_edge_cases() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -287,6 +290,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
@@ -387,6 +391,7 @@ fn test_error_conditions_and_exit_codes() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -411,6 +416,7 @@ fn test_error_conditions_and_exit_codes() {
         yes: false, // Don't auto-confirm
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter_deny = TestPrompter::new(false, true); // Deny overwrite
@@ -432,6 +438,7 @@ fn test_error_conditions_and_exit_codes() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter_cancel = TestPrompter::new(true, false); // Allow overwrite, deny processing
@@ -475,6 +482,7 @@ fn test_memory_usage_under_parallel_processing() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -560,6 +568,7 @@ line_numbers = true
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let config =
@@ -656,6 +665,7 @@ fn test_edge_case_filenames_and_paths() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let prompter = TestPrompter::new(true, true);

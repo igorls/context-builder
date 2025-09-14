@@ -43,6 +43,10 @@ pub struct Args {
     /// Clear the cached project state and exit
     #[clap(long)]
     pub clear_cache: bool,
+
+    /// Initialize a new context-builder.toml config file in the current directory
+    #[clap(long)]
+    pub init: bool,
 }
 
 #[cfg(test)]

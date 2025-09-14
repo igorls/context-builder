@@ -55,8 +55,11 @@ It's a command-line utility that recursively processes directories and creates c
 - 🔍 **Powerful Filtering & Preview:**
   Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
 
+
 - ⚙️ **Configuration-First:**
-  Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs.
+
+  Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs. Initialize a new config file with `--init`.
+
 
 - 🔁 **Automatic Per-File Diffs:**
   When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
@@ -124,6 +127,9 @@ cargo install --path .
 ### Basic Usage
 
 ```bash
+# Initialize a new context-builder.toml config file with sensible defaults
+context-builder --init
+
 # Process current directory and create output.md
 context-builder
 
@@ -158,7 +164,9 @@ context-builder --yes
 # Output only diffs (requires auto-diff & timestamped output)
 context-builder --diff-only
 
+
 # Clear cached project state (resets auto-diff baseline & removes stored state)
+
 context-builder --clear-cache
 
 # Combine multiple options for a powerful workflow
@@ -208,13 +216,23 @@ preview = false
 # Token counting mode
 token_count = false
 
+
 # Automatically answer yes to all prompts
+
 yes = false
 
+
+
 # Encoding handling strategy for non-UTF-8 files
+
 # Options: "detect" (default), "strict", "skip"
+
 encoding_strategy = "detect"
+
 ```
+
+You can initialize a new configuration file using the `--init` command. This will create a `context-builder.toml` file in your current directory with sensible defaults that you can then customize according to your project needs.
+
 
 ---
 

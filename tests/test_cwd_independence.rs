@@ -92,6 +92,7 @@ filter = ["txt"]
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     // Apply config settings to args (mimicking the run() function logic)
@@ -177,6 +178,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     // Apply timestamping manually since we're bypassing run()

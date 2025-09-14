@@ -64,6 +64,7 @@ fn test_streaming_parallel_processing() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = Config::default();
@@ -176,6 +177,7 @@ fn test_parallel_error_handling() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = Config::default();
@@ -232,6 +234,7 @@ fn test_memory_efficiency_with_large_files() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = Config::default();

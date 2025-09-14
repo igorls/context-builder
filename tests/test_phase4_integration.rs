@@ -120,6 +120,7 @@ filter = ["rs", "txt"]
         yes: true,
         diff_only: false, // Will be overridden by config
         clear_cache: false,
+        init: false,
     };
 
     // Apply config manually (simulating what happens in the real application)
@@ -292,6 +293,7 @@ fn test_encoding_strategy_configuration() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let result = run_with_args(args, config, &prompter);

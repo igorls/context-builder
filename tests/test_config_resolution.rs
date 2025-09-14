@@ -62,6 +62,7 @@ fn run_with_resolved_config(
         yes: resolution.config.yes,
         diff_only: resolution.config.diff_only,
         clear_cache: resolution.config.clear_cache,
+        init: resolution.config.init,
     };
 
     // Create final Config with resolved values
@@ -115,6 +116,7 @@ output = "from_config.md"
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -190,6 +192,7 @@ ignore = ["target"]
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -269,6 +272,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -344,6 +348,7 @@ yes = true
         yes: false,          // Default - should use config
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -414,6 +419,7 @@ timestamped_output = false
         yes: true,
         diff_only: false,
         clear_cache: false,
+        init: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();

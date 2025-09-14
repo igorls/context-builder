@@ -25,6 +25,7 @@ pub struct ResolvedConfig {
     pub clear_cache: bool,
     pub auto_diff: bool,
     pub diff_context_lines: usize,
+    pub init: bool,
 }
 
 /// Result of configuration resolution including the final config and any warnings
@@ -70,6 +71,7 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
         clear_cache: args.clear_cache,
         auto_diff: final_config.auto_diff.unwrap_or(false),
         diff_context_lines: final_config.diff_context_lines.unwrap_or(3),
+        init: args.init,
     };
 
     ConfigResolution {
@@ -244,6 +246,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let config = Config {
@@ -275,6 +278,7 @@ mod tests {
             yes: false,                      // Default value
             diff_only: false,                // Default value
             clear_cache: false,
+            init: false,
         };
 
         let config = Config {
@@ -317,6 +321,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let config = Config {
@@ -345,6 +350,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let config = Config {
@@ -371,6 +377,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let config = Config {
@@ -399,6 +406,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let config = Config {
@@ -427,6 +435,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            init: false,
         };
 
         let resolution = resolve_final_config(args.clone(), None);
