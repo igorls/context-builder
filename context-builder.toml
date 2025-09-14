@@ -1,8 +1,26 @@
+# Context Builder Configuration File
+# This file was generated with sensible defaults
+
+# Output file name (or base name when timestamped_output is true)
 output = "context.md"
+
+# Optional folder to place the generated output file(s) in
 output_folder = "docs"
+
+# Append a UTC timestamp to the output file name (before extension)
 timestamped_output = true
+
+# Enable automatic diff generation (requires timestamped_output = true)
 auto_diff = true
+
+# Emit only change summary + modified file diffs (no full file bodies)
 diff_only = false
+
+# File extensions to include (no leading dot, e.g. "rs", "toml")
 filter = ["rs", "toml"]
-ignore = ["docs"]
+
+# File / directory names to ignore (exact name matches)
+ignore = ["docs", "target", ".git", "node_modules"]
+
+# Add line numbers to code blocks
 line_numbers = false
