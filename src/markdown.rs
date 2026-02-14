@@ -1,5 +1,3 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use chrono::Utc;
 use ignore::DirEntry;
 use log::{error, info, warn};
@@ -72,17 +70,19 @@ pub fn generate_markdown(
     }
 
     // Deterministic content hash (enables LLM prompt caching across runs)
-    let mut hasher = DefaultHasher::new();
+    // Uses xxh3 over file content bytes — stable across Rust versions and machines.
+    // Previous implementation hashed mtime (broken by git checkout, cp, etc.)
+    let mut content_hasher = xxhash_rust::xxh3::Xxh3::new();
     for entry in files {
-        entry.path().hash(&mut hasher);
-        if let Ok(meta) = std::fs::metadata(entry.path()) {
-            meta.len().hash(&mut hasher);
-            if let Ok(modified) = meta.modified() {
-                modified.hash(&mut hasher);
-            }
+        // Hash path for file ordering sensitivity
+        let path_bytes = entry.path().to_string_lossy();
+        content_hasher.update(path_bytes.as_bytes());
+        // Hash actual file content (not mtime!) for determinism
+        if let Ok(bytes) = std::fs::read(entry.path()) {
+            content_hasher.update(&bytes);
         }
     }
-    writeln!(output, "Content hash: {:016x}", hasher.finish())?;
+    writeln!(output, "Content hash: {:016x}", content_hasher.digest())?;
     writeln!(output)?;
 
     // --- File Tree --- //
@@ -108,11 +108,14 @@ pub fn generate_markdown(
         let writer_handle = {
             let mut output = output;
             let total_files = files.len();
+            let budget = max_tokens;
 
             thread::spawn(move || -> io::Result<()> {
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
+                let mut tokens_used: usize = 0;
+                let mut budget_exceeded = false;
 
                 // Receive chunks and write them in order
                 while next_index < total_files {
@@ -122,8 +125,36 @@ pub fn generate_markdown(
 
                             // Write all consecutive chunks starting from next_index
                             while let Some(chunk_result) = completed_chunks.remove(&next_index) {
+                                if budget_exceeded {
+                                    // Already over budget — skip remaining chunks
+                                    next_index += 1;
+                                    continue;
+                                }
+
                                 match chunk_result {
                                     Ok(buf) => {
+                                        // Estimate tokens for this chunk (~4 bytes per token)
+                                        let chunk_tokens = buf.len() / 4;
+
+                                        if let Some(max) = budget {
+                                            if tokens_used + chunk_tokens > max && tokens_used > 0 {
+                                                let remaining = total_files - next_index;
+                                                let notice = format!(
+                                                    "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
+                                                    max, remaining
+                                                );
+                                                if let Err(e) = output.write_all(notice.as_bytes()) {
+                                                    errors.push(format!(
+                                                        "Failed to write truncation notice: {}", e
+                                                    ));
+                                                }
+                                                budget_exceeded = true;
+                                                next_index += 1;
+                                                continue;
+                                            }
+                                        }
+
+                                        tokens_used += chunk_tokens;
                                         if let Err(e) = output.write_all(&buf) {
                                             errors.push(format!(
                                                 "Failed to write output for file index {}: {}",

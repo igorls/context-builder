@@ -6,10 +6,9 @@
 
 use fs2::FileExt;
 
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::fs::File;
-use std::hash::{Hash, Hasher};
+
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -74,9 +73,9 @@ impl CacheManager {
 
     /// Generate a hash from the normalized project path
     fn hash_path(path: &Path) -> String {
-        let mut hasher = DefaultHasher::new();
-        path.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        let path_str = path.to_string_lossy();
+        let hash = xxhash_rust::xxh3::xxh3_64(path_str.as_bytes());
+        format!("{:x}", hash)
     }
 
     /// Normalize path format to handle Windows UNC prefixes
@@ -93,12 +92,19 @@ impl CacheManager {
 
     /// Generate a hash from the configuration
     fn hash_config(config: &Config) -> String {
-        let mut hasher = DefaultHasher::new();
-        // Hash the relevant configuration parameters that affect output
-        config.filter.hash(&mut hasher);
-        config.ignore.hash(&mut hasher);
-        config.line_numbers.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        // Build a stable string representation of config for hashing
+        let mut config_str = String::new();
+        if let Some(ref filters) = config.filter {
+            config_str.push_str(&filters.join(","));
+        }
+        config_str.push('|');
+        if let Some(ref ignores) = config.ignore {
+            config_str.push_str(&ignores.join(","));
+        }
+        config_str.push('|');
+        config_str.push_str(&format!("{:?}", config.line_numbers));
+        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
+        format!("{:x}", hash)
     }
 
     /// Get the cache file path for this specific project and configuration

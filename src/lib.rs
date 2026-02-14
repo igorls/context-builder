@@ -412,6 +412,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             }
         }
 
+        // Build relevance-sorted path list from the DirEntry list (which is
+        // already sorted by file_relevance_category). This preserves ordering
+        // instead of using BTreeMap's alphabetical iteration.
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|entry| {
+                entry.path()
+                    .strip_prefix(base_path)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| {
+                        entry.path()
+                            .file_name()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| entry.path().to_path_buf())
+                    })
+            })
+            .collect();
+
         // 4. Generate markdown with diff annotations
         let final_doc = generate_markdown_with_diff(
             &current_state,
@@ -419,6 +437,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             &final_args,
             &file_tree,
             diff_cfg,
+            &sorted_paths,
         )?;
 
         // 5. Write output
@@ -498,6 +517,7 @@ fn generate_markdown_with_diff(
     args: &Args,
     file_tree: &tree::FileTree,
     diff_config: &DiffConfig,
+    sorted_paths: &[PathBuf],
 ) -> io::Result<String> {
     let mut output = String::new();
 
@@ -588,41 +608,45 @@ fn generate_markdown_with_diff(
     if !diff_config.diff_only {
         output.push_str("## File Contents\n\n");
 
-        for (path, file_state) in &current_state.files {
-            output.push_str(&format!("### File: `{}`\n\n", path.display()));
-            output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-            output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+        // Iterate in relevance order (from sorted_paths) instead of
+        // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
+        for path in sorted_paths {
+            if let Some(file_state) = current_state.files.get(path) {
+                output.push_str(&format!("### File: `{}`\n\n", path.display()));
+                output.push_str(&format!("- Size: {} bytes\n", file_state.size));
+                output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
 
-            // Determine language from file extension
-            let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
-            let language = match extension {
-                "rs" => "rust",
-                "js" => "javascript",
-                "ts" => "typescript",
-                "py" => "python",
-                "json" => "json",
-                "toml" => "toml",
-                "md" => "markdown",
-                "yaml" | "yml" => "yaml",
-                "html" => "html",
-                "css" => "css",
-                _ => extension,
-            };
+                // Determine language from file extension
+                let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
+                let language = match extension {
+                    "rs" => "rust",
+                    "js" => "javascript",
+                    "ts" => "typescript",
+                    "py" => "python",
+                    "json" => "json",
+                    "toml" => "toml",
+                    "md" => "markdown",
+                    "yaml" | "yml" => "yaml",
+                    "html" => "html",
+                    "css" => "css",
+                    _ => extension,
+                };
 
-            output.push_str(&format!("```{}\n", language));
+                output.push_str(&format!("```{}\n", language));
 
-            if args.line_numbers {
-                for (i, line) in file_state.content.lines().enumerate() {
-                    output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                if args.line_numbers {
+                    for (i, line) in file_state.content.lines().enumerate() {
+                        output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                    }
+                } else {
+                    output.push_str(&file_state.content);
+                    if !file_state.content.ends_with('\n') {
+                        output.push('\n');
+                    }
                 }
-            } else {
-                output.push_str(&file_state.content);
-                if !file_state.content.ends_with('\n') {
-                    output.push('\n');
-                }
+
+                output.push_str("```\n\n");
             }
-
-            output.push_str("```\n\n");
         }
     }
 
@@ -1314,7 +1338,12 @@ mod tests {
 
         let diff_config = DiffConfig::default();
 
-        let result = generate_markdown_with_diff(&state, None, &args, &file_tree, &diff_config);
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| e.path().strip_prefix(base_path).unwrap_or(e.path()).to_path_buf())
+            .collect();
+
+        let result = generate_markdown_with_diff(&state, None, &args, &file_tree, &diff_config, &sorted_paths);
         assert!(result.is_ok());
 
         let content = result.unwrap();

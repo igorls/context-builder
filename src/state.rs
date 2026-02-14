@@ -210,26 +210,28 @@ impl ProjectState {
 
     /// Generate a configuration hash for cache validation
     fn compute_config_hash(config: &Config) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        // Build a stable string representation for hashing
+        let mut config_str = String::new();
+        if let Some(ref filters) = config.filter {
+            config_str.push_str(&filters.join(","));
+        }
+        config_str.push('|');
+        if let Some(ref ignores) = config.ignore {
+            config_str.push_str(&ignores.join(","));
+        }
+        config_str.push('|');
+        config_str.push_str(&format!("{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines));
 
-        let mut hasher = DefaultHasher::new();
-        config.filter.hash(&mut hasher);
-        config.ignore.hash(&mut hasher);
-        config.line_numbers.hash(&mut hasher);
-        config.auto_diff.hash(&mut hasher);
-        config.diff_context_lines.hash(&mut hasher);
-
-        format!("{:x}", hasher.finish())
+        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
+        format!("{:x}", hash)
     }
 }
 
 impl FileState {
     /// Create a file state from a file path
     pub fn from_path(path: &Path) -> std::io::Result<Self> {
-        use std::collections::hash_map::DefaultHasher;
         use std::fs;
-        use std::hash::{Hash, Hasher};
         use std::io::ErrorKind;
 
         let metadata = fs::metadata(path)?;
@@ -244,10 +246,9 @@ impl FileState {
             Err(e) => return Err(e),
         };
 
-        // Compute content hash
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
-        let content_hash = format!("{:x}", hasher.finish());
+        // Compute content hash using stable xxh3
+        let content_hash = format!("{:016x}",
+            xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
 
         Ok(FileState {
             content,

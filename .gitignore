@@ -22,3 +22,4 @@ docs/*.md
 check_coverage.ps1
 tarpaulin-report.html
 cobertura.xml
+test.md

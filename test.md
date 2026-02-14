@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 587cfca8caa38319
+Content hash: 5172ede1a852ae42
 
 ## File Tree Structure
 
@@ -14,6 +14,9 @@ Content hash: 587cfca8caa38319
 - 📄 README.md
 - 📁 benches
   - 📄 context_bench.rs
+- 📁 docs
+  - 📁 research
+    - 📄 multi-model-code-review-analysis.md
 - 📁 scripts
   - 📄 generate_samples.rs
 - 📁 src
@@ -45,8 +48,8 @@ Content hash: 587cfca8caa38319
 
 ### File: `Cargo.toml`
 
-- Size: 1409 bytes
-- Modified: 2026-02-14 19:59:54 UTC
+- Size: 1464 bytes
+- Modified: 2026-02-14 22:06:10 UTC
 
 ```toml
 [package]
@@ -82,6 +85,7 @@ crossbeam-channel = "0.5.15"
 num_cpus = "1.17.0"
 encoding_rs = "0.8.35"
 walkdir = "2.5.0"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [features]
 default = ["parallel"]
@@ -106,8 +110,8 @@ required-features = ["samples-bin"]
 
 ### File: `src/cache.rs`
 
-- Size: 19081 bytes
-- Modified: 2026-02-14 19:30:03 UTC
+- Size: 19309 bytes
+- Modified: 2026-02-14 22:08:51 UTC
 
 ```rust
 //! Cache management for context-builder.
@@ -118,10 +122,9 @@ required-features = ["samples-bin"]
 
 use fs2::FileExt;
 
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::fs::File;
-use std::hash::{Hash, Hasher};
+
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -186,9 +189,9 @@ impl CacheManager {
 
     /// Generate a hash from the normalized project path
     fn hash_path(path: &Path) -> String {
-        let mut hasher = DefaultHasher::new();
-        path.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        let path_str = path.to_string_lossy();
+        let hash = xxhash_rust::xxh3::xxh3_64(path_str.as_bytes());
+        format!("{:x}", hash)
     }
 
     /// Normalize path format to handle Windows UNC prefixes
@@ -205,12 +208,19 @@ impl CacheManager {
 
     /// Generate a hash from the configuration
     fn hash_config(config: &Config) -> String {
-        let mut hasher = DefaultHasher::new();
-        // Hash the relevant configuration parameters that affect output
-        config.filter.hash(&mut hasher);
-        config.ignore.hash(&mut hasher);
-        config.line_numbers.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        // Build a stable string representation of config for hashing
+        let mut config_str = String::new();
+        if let Some(ref filters) = config.filter {
+            config_str.push_str(&filters.join(","));
+        }
+        config_str.push('|');
+        if let Some(ref ignores) = config.ignore {
+            config_str.push_str(&ignores.join(","));
+        }
+        config_str.push('|');
+        config_str.push_str(&format!("{:?}", config.line_numbers));
+        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
+        format!("{:x}", hash)
     }
 
     /// Get the cache file path for this specific project and configuration
@@ -2668,8 +2678,8 @@ mod tests {
 
 ### File: `src/lib.rs`
 
-- Size: 45261 bytes
-- Modified: 2026-02-14 19:54:23 UTC
+- Size: 46593 bytes
+- Modified: 2026-02-14 22:09:26 UTC
 
 ```rust
 use clap::{CommandFactory, Parser};
@@ -3086,6 +3096,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             }
         }
 
+        // Build relevance-sorted path list from the DirEntry list (which is
+        // already sorted by file_relevance_category). This preserves ordering
+        // instead of using BTreeMap's alphabetical iteration.
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|entry| {
+                entry.path()
+                    .strip_prefix(base_path)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| {
+                        entry.path()
+                            .file_name()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| entry.path().to_path_buf())
+                    })
+            })
+            .collect();
+
         // 4. Generate markdown with diff annotations
         let final_doc = generate_markdown_with_diff(
             &current_state,
@@ -3093,6 +3121,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             &final_args,
             &file_tree,
             diff_cfg,
+            &sorted_paths,
         )?;
 
         // 5. Write output
@@ -3172,6 +3201,7 @@ fn generate_markdown_with_diff(
     args: &Args,
     file_tree: &tree::FileTree,
     diff_config: &DiffConfig,
+    sorted_paths: &[PathBuf],
 ) -> io::Result<String> {
     let mut output = String::new();
 
@@ -3262,41 +3292,45 @@ fn generate_markdown_with_diff(
     if !diff_config.diff_only {
         output.push_str("## File Contents\n\n");
 
-        for (path, file_state) in &current_state.files {
-            output.push_str(&format!("### File: `{}`\n\n", path.display()));
-            output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-            output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+        // Iterate in relevance order (from sorted_paths) instead of
+        // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
+        for path in sorted_paths {
+            if let Some(file_state) = current_state.files.get(path) {
+                output.push_str(&format!("### File: `{}`\n\n", path.display()));
+                output.push_str(&format!("- Size: {} bytes\n", file_state.size));
+                output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
 
-            // Determine language from file extension
-            let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
-            let language = match extension {
-                "rs" => "rust",
-                "js" => "javascript",
-                "ts" => "typescript",
-                "py" => "python",
-                "json" => "json",
-                "toml" => "toml",
-                "md" => "markdown",
-                "yaml" | "yml" => "yaml",
-                "html" => "html",
-                "css" => "css",
-                _ => extension,
-            };
+                // Determine language from file extension
+                let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
+                let language = match extension {
+                    "rs" => "rust",
+                    "js" => "javascript",
+                    "ts" => "typescript",
+                    "py" => "python",
+                    "json" => "json",
+                    "toml" => "toml",
+                    "md" => "markdown",
+                    "yaml" | "yml" => "yaml",
+                    "html" => "html",
+                    "css" => "css",
+                    _ => extension,
+                };
 
-            output.push_str(&format!("```{}\n", language));
+                output.push_str(&format!("```{}\n", language));
 
-            if args.line_numbers {
-                for (i, line) in file_state.content.lines().enumerate() {
-                    output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                if args.line_numbers {
+                    for (i, line) in file_state.content.lines().enumerate() {
+                        output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                    }
+                } else {
+                    output.push_str(&file_state.content);
+                    if !file_state.content.ends_with('\n') {
+                        output.push('\n');
+                    }
                 }
-            } else {
-                output.push_str(&file_state.content);
-                if !file_state.content.ends_with('\n') {
-                    output.push('\n');
-                }
+
+                output.push_str("```\n\n");
             }
-
-            output.push_str("```\n\n");
         }
     }
 
@@ -3988,7 +4022,12 @@ mod tests {
 
         let diff_config = DiffConfig::default();
 
-        let result = generate_markdown_with_diff(&state, None, &args, &file_tree, &diff_config);
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| e.path().strip_prefix(base_path).unwrap_or(e.path()).to_path_buf())
+            .collect();
+
+        let result = generate_markdown_with_diff(&state, None, &args, &file_tree, &diff_config, &sorted_paths);
         assert!(result.is_ok());
 
         let content = result.unwrap();
@@ -4013,12 +4052,10 @@ fn main() -> io::Result<()> {
 
 ### File: `src/markdown.rs`
 
-- Size: 37587 bytes
-- Modified: 2026-02-14 19:58:13 UTC
+- Size: 39662 bytes
+- Modified: 2026-02-14 22:08:53 UTC
 
 ```rust
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use chrono::Utc;
 use ignore::DirEntry;
 use log::{error, info, warn};
@@ -4091,17 +4128,19 @@ pub fn generate_markdown(
     }
 
     // Deterministic content hash (enables LLM prompt caching across runs)
-    let mut hasher = DefaultHasher::new();
+    // Uses xxh3 over file content bytes — stable across Rust versions and machines.
+    // Previous implementation hashed mtime (broken by git checkout, cp, etc.)
+    let mut content_hasher = xxhash_rust::xxh3::Xxh3::new();
     for entry in files {
-        entry.path().hash(&mut hasher);
-        if let Ok(meta) = std::fs::metadata(entry.path()) {
-            meta.len().hash(&mut hasher);
-            if let Ok(modified) = meta.modified() {
-                modified.hash(&mut hasher);
-            }
+        // Hash path for file ordering sensitivity
+        let path_bytes = entry.path().to_string_lossy();
+        content_hasher.update(path_bytes.as_bytes());
+        // Hash actual file content (not mtime!) for determinism
+        if let Ok(bytes) = std::fs::read(entry.path()) {
+            content_hasher.update(&bytes);
         }
     }
-    writeln!(output, "Content hash: {:016x}", hasher.finish())?;
+    writeln!(output, "Content hash: {:016x}", content_hasher.digest())?;
     writeln!(output)?;
 
     // --- File Tree --- //
@@ -4127,11 +4166,14 @@ pub fn generate_markdown(
         let writer_handle = {
             let mut output = output;
             let total_files = files.len();
+            let budget = max_tokens;
 
             thread::spawn(move || -> io::Result<()> {
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
+                let mut tokens_used: usize = 0;
+                let mut budget_exceeded = false;
 
                 // Receive chunks and write them in order
                 while next_index < total_files {
@@ -4141,8 +4183,36 @@ pub fn generate_markdown(
 
                             // Write all consecutive chunks starting from next_index
                             while let Some(chunk_result) = completed_chunks.remove(&next_index) {
+                                if budget_exceeded {
+                                    // Already over budget — skip remaining chunks
+                                    next_index += 1;
+                                    continue;
+                                }
+
                                 match chunk_result {
                                     Ok(buf) => {
+                                        // Estimate tokens for this chunk (~4 bytes per token)
+                                        let chunk_tokens = buf.len() / 4;
+
+                                        if let Some(max) = budget {
+                                            if tokens_used + chunk_tokens > max && tokens_used > 0 {
+                                                let remaining = total_files - next_index;
+                                                let notice = format!(
+                                                    "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
+                                                    max, remaining
+                                                );
+                                                if let Err(e) = output.write_all(notice.as_bytes()) {
+                                                    errors.push(format!(
+                                                        "Failed to write truncation notice: {}", e
+                                                    ));
+                                                }
+                                                budget_exceeded = true;
+                                                next_index += 1;
+                                                continue;
+                                            }
+                                        }
+
+                                        tokens_used += chunk_tokens;
                                         if let Err(e) = output.write_all(&buf) {
                                             errors.push(format!(
                                                 "Failed to write output for file index {}: {}",
@@ -5091,8 +5161,8 @@ mod tests {
 
 ### File: `src/state.rs`
 
-- Size: 25891 bytes
-- Modified: 2026-02-14 18:55:16 UTC
+- Size: 25997 bytes
+- Modified: 2026-02-14 22:06:43 UTC
 
 ```rust
 //! Project state representation for context-builder.
@@ -5307,26 +5377,28 @@ impl ProjectState {
 
     /// Generate a configuration hash for cache validation
     fn compute_config_hash(config: &Config) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        // Build a stable string representation for hashing
+        let mut config_str = String::new();
+        if let Some(ref filters) = config.filter {
+            config_str.push_str(&filters.join(","));
+        }
+        config_str.push('|');
+        if let Some(ref ignores) = config.ignore {
+            config_str.push_str(&ignores.join(","));
+        }
+        config_str.push('|');
+        config_str.push_str(&format!("{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines));
 
-        let mut hasher = DefaultHasher::new();
-        config.filter.hash(&mut hasher);
-        config.ignore.hash(&mut hasher);
-        config.line_numbers.hash(&mut hasher);
-        config.auto_diff.hash(&mut hasher);
-        config.diff_context_lines.hash(&mut hasher);
-
-        format!("{:x}", hasher.finish())
+        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
+        format!("{:x}", hash)
     }
 }
 
 impl FileState {
     /// Create a file state from a file path
     pub fn from_path(path: &Path) -> std::io::Result<Self> {
-        use std::collections::hash_map::DefaultHasher;
         use std::fs;
-        use std::hash::{Hash, Hasher};
         use std::io::ErrorKind;
 
         let metadata = fs::metadata(path)?;
@@ -5341,10 +5413,9 @@ impl FileState {
             Err(e) => return Err(e),
         };
 
-        // Compute content hash
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
-        let content_hash = format!("{:x}", hasher.finish());
+        // Compute content hash using stable xxh3
+        let content_hash = format!("{:016x}",
+            xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
 
         Ok(FileState {
             content,
@@ -12621,6 +12692,339 @@ See **[CHANGELOG.md](CHANGELOG.md)** for a complete history of releases and chan
 ## License
 
 This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** file for details.
+```
+
+### File: `docs/research/multi-model-code-review-analysis.md`
+
+- Size: 19787 bytes
+- Modified: 2026-02-14 21:36:34 UTC
+
+```markdown
+# Multi-Model AI Code Review: 10 LLMs Analyze context-builder v0.7.0
+
+> **Date**: February 14, 2026  
+> **Project**: [context-builder](https://github.com/igorls/context-builder) v0.7.0  
+> **Prompt**: Deep Think v2 — code review + relevance ordering evaluation  
+> **Context file**: ~460KB, generated by context-builder itself (self-referential review)
+
+## Abstract
+
+We submitted context-builder v0.7.0's full source code to 10 AI models using a structured code review prompt. The context was generated by context-builder itself, creating a self-referential test: the tool's output quality directly affected the models' ability to review it. This exposed real bugs (e.g., lockfile starvation) that only manifested *because* the models consumed the tool's own output.
+
+The models collectively identified **10 unique bugs**, achieved **universal consensus** on 4 architectural improvements, and proposed a clear roadmap for v2 output format. This document captures the full comparative analysis.
+
+---
+
+## 1. Methodology
+
+### 1.1 Prompt Design
+
+All models received the same structured prompt ("Deep Think v2") containing:
+1. **Role**: Senior Rust developer and CLI tool architect
+2. **Task**: Review context-builder v0.7.0 with focus on correctness, architecture, and a new relevance ordering feature
+3. **Context**: The full output of `context-builder -d . --filter rs,toml,md` run against its own repository
+4. **Specific asks**: Verify 5 bug fixes from v0.6.1→v0.7.0, evaluate relevance ordering, propose v2 output format
+
+### 1.2 Model Access Methods
+
+| Method | Models | Description |
+|--------|--------|-------------|
+| 🧠 **One-shot** | Gemini Deep Think, Gemini Pro, Grok 4.1, Qwen-3-Max, GLM-5 (×2), ChatGPT 5.2, Kimi K2.5 | Single prompt + context file, no tool access |
+| 🤖 **Agentic** | Claude Opus 4.6, MiniMax Agent 2.5 | Multi-step sessions with file search, workspace tools, iterative reasoning |
+
+> **Why this matters**: One-shot models that found deep bugs did so purely through reasoning over 460KB of context in a single pass. Agentic models could iteratively search, grep, and verify — giving them a structural advantage for precision but not necessarily for discovery depth.
+
+### 1.3 Lockfile Fix (Mid-Experiment)
+
+GLM-5's first run (pre-fix) was truncated because `Cargo.lock` (39KB) was classified as config (category 0), consuming the entire context window before source code appeared. We fixed this bug (moving lockfiles to category 4) and re-ran GLM-5, creating a natural A/B test of the fix's effectiveness.
+
+Post-fix models (ChatGPT 5.2, Kimi K2.5, Claude Opus 4.6, MiniMax Agent, GLM-5 run 2) reviewed the corrected ordering.
+
+---
+
+## 2. Models Tested
+
+| # | Model | Method | Context | Lockfile Fix | Quality |
+|---|-------|--------|---------|-------------|---------|
+| 1 | **Gemini 3 Deep Think** | 🧠 One-shot | Full | Pre-fix | 🟢 Excellent |
+| 2 | **Gemini 3 Pro** | 🧠 One-shot | Full | Pre-fix | 🟢 Good |
+| 3 | **Grok 4.1** | 🧠 One-shot | Full | Pre-fix | 🟡 Average |
+| 4 | **Qwen-3-Max** | 🧠 One-shot | Full | Pre-fix | 🟢 Good |
+| 5 | **GLM-5** (run 1, pre-fix) | 🧠 One-shot | Truncated | Pre-fix | 🔴 Truncated |
+| 6 | **GLM-5** (run 2, post-fix) | 🧠 One-shot | Partial | Post-fix | 🟡 Partial |
+| 7 | **ChatGPT 5.2** | 🧠 One-shot | Full | Post-fix | 🟢 Excellent |
+| 8 | **Kimi K2.5** | 🧠 One-shot | Full | Post-fix | 🟢 Good |
+| 9 | **Claude Opus 4.6** | 🤖 Agentic | Full | Post-fix | 🟢 Excellent |
+| 10 | **MiniMax Agent 2.5** | 🤖 Agentic | Full | Post-fix | 🟢 Good |
+
+> **Response files**: Each model's raw response is archived in [`docs/`](../):
+> `context_v2_resp-gemini-3-deepthink.md`, `context_v2_resp-gemini-3-pro.md`, `context_v2_resp-grok-4.1.md`, `context_v2_resp-qwen-3-max.md`, `context_v2_resp-glm5.md`, `context_v2_resp-glm5-run2.md`, `context_v2_resp-chat-gpt-5.2.md`, `context_v2_resp-kimi-k2.5.md`, `context_v2_resp-claude-opus-4.6.md`, `context_v2_resp-minimax-agent.md`
+
+---
+
+## 3. Results: Model Rankings
+
+### 3.1 Overall (Raw Output Quality)
+
+| Rank | Model | Method | Unique Bugs | Novel Ideas | v0.6.1 Fix Verification |
+|------|-------|--------|------------|-------------|------------------------|
+| 🥇 | **Claude Opus 4.6** | 🤖 Agentic | 2 | Signatures-first format, `[category:N]` tags | 5/5 ✅ |
+| 🥈 | **Gemini Deep Think** | 🧠 One-shot | 2 | XML CDATA format, BTreeMap ordering bug | 5/5 ✅ |
+| 🥉 | **ChatGPT 5.2** | 🧠 One-shot | 1 | Tests-before-source ordering | 5/5 ✅ |
+| 4th | **Qwen-3-Max** | 🧠 One-shot | 1 | Progressive disclosure | 5/5 ✅ |
+| 5th | **MiniMax Agent 2.5** | 🤖 Agentic | 0 | XML w/ purpose summaries | 5/5 ✅ |
+| 6th | **Kimi K2.5** | 🧠 One-shot | 0 | `--docs-first` flag, heat map | 5/5 ✅ |
+| 7th | **Gemini Pro** | 🧠 One-shot | 0 | — | 5/5 ✅ |
+| 8th | **GLM-5** (run 2) | 🧠 One-shot | 1 | Reliability column concept | 2/5 |
+| 9th | **Grok 4.1** | 🧠 One-shot | 0 | — | 5/5 ✅ |
+| 10th | **GLM-5** (run 1) | 🧠 One-shot | 1 (accidental) | — | 0/5 (truncated) |
+
+### 3.2 Adjusted (Normalized for Methodology)
+
+When accounting for the agentic advantage (tool access, iterative search, workspace), the efficiency picture changes:
+
+| Rank | Model | Reasoning |
+|------|-------|-----------|
+| 🥇 | **Gemini Deep Think** 🧠 | Found 2 unique *architectural* bugs (BTreeMap ordering, DefaultHasher non-determinism) in a single reasoning pass — no tools, no iteration. The auto-diff BTreeMap bug was the deepest finding across all 10 models, found by no other. |
+| 🥈 | **ChatGPT 5.2** 🧠 | Most original thinker. Proposed tests-before-source ordering that no other model considered. One unique bug. Entirely one-shot. |
+| 🥉 | **Claude Opus 4.6** 🤖 | Highest raw quality, but had agentic advantage. Line-level citations and signatures-first v2 format are best-in-class, but required multi-step tool-assisted processing. |
+| 4th | **Qwen-3-Max** 🧠 | Strong one-shot. Caught parallel `max_tokens` and header token omission bugs independently. |
+| 5th | **Kimi K2.5** 🧠 | Solid one-shot with practical, implementable suggestions (`--docs-first` flag). |
+
+**Key insight**: Deep Think matched Claude Opus in bug *discovery depth* with zero tool access — pure one-shot reasoning over 460KB of context. This suggests extended reasoning traces are competitive with agentic tool-use for code review tasks. The agentic advantage primarily manifests in citation precision (exact line numbers), not bug discovery.
+
+---
+
+## 4. Bug Matrix
+
+### 4.1 All Bugs Found (10 unique)
+
+| # | Bug | Severity | DT | GP | GR | QW | G5 | G5² | GPT | K2 | CO | MM | Consensus |
+|---|-----|----------|----|----|----|----|----|----|-----|----|----|----|----|
+| 1 | `max_tokens` ignored in parallel mode | 🔴 Critical | ✅ | | | ✅ | | | | ✅ | ✅ | | 4/10 |
+| 2 | mtime hash ≠ content hash (breaks determinism) | 🔴 Critical | ✅ | ✅ | | ✅ | | | ✅ | | ✅ | ✅ | 6/10 |
+| 3 | `DefaultHasher` non-deterministic across Rust versions | 🟡 High | ✅ | | | | | | ✅ | | ✅ | ✅ | 4/10 |
+| 4 | Auto-diff `BTreeMap` destroys relevance ordering | 🔴 Critical | ✅ | | | | | | | | | | 1/10 |
+| 5 | Header/tree tokens not counted in budget | 🟡 High | | | | ✅ | | | | | ✅ | | 2/10 |
+| 6 | `contains("test")` substring false positives | 🟡 Medium | | | | ✅ | | | | ✅ | ✅ | | 3/10 |
+| 7 | `strip_prefix('+')` incomplete for diff indentation | 🟢 Low | ✅ | | | | | | | | | | 1/10 |
+| 8 | 4-byte/token estimate ~20% off for code | 🟡 High | | | | | | | ✅ | ✅ | ✅ | ✅ | 4/10 |
+| 9 | Binary file content stored as `String` in cache | 🟢 Low | | | | | | ✅ | | | | | 1/10 |
+| 10 | `starts_with("test_")` matches root-level helpers | 🟡 Medium | | | | | | | | | ✅ | | 1/10 |
+
+**Legend**: DT=Deep Think, GP=Gemini Pro, GR=Grok, QW=Qwen, G5=GLM-5 run 1, G5²=GLM-5 run 2, GPT=ChatGPT 5.2, K2=Kimi K2.5, CO=Claude Opus, MM=MiniMax
+
+### 4.2 Bug Descriptions
+
+**#1 — `max_tokens` ignored in parallel mode** (4/10): The `--max-tokens` flag is only enforced in the sequential code path. When parallel processing is used, files are concatenated without budget enforcement, potentially exceeding the token limit.
+
+**#2 — mtime hash ≠ content hash** (6/10): The cache uses `file.modified()` timestamp for hashing. A `git checkout` or `cp` changes mtime without changing content → different hash → broken prompt caching across machines, CI environments, or even consecutive runs.
+
+**#3 — `DefaultHasher` non-deterministic** (4/10): Rust's `std::hash::DefaultHasher` explicitly does not guarantee stable output across compiler versions or architectures. This silently breaks cache invalidation when the binary is compiled with different toolchains.
+
+**#4 — Auto-diff BTreeMap destroys relevance** (1/10, Deep Think only): When `auto_diff = true` and full file content is rendered, the code iterates over `BTreeMap<PathBuf, FileState>` — which is alphabetically ordered by path, completely overriding the relevance-based sort from `file_utils.rs`. Since `auto_diff = true` is the recommended config, **relevance ordering doesn't work in the primary usage path**.
+
+**#5 — Header/tree tokens not in budget** (2/10): The file tree header and section headers consume tokens but aren't deducted from `max_tokens`, meaning the actual file content budget is smaller than specified.
+
+**#6 — Test substring false positives** (3/10): `rel_str.contains("test")` matches files like `latest_results.rs` or `contest_entry.rs`. Fixed during this experiment by switching to path boundary matching.
+
+**#7 — `strip_prefix('+')` incomplete** (1/10, Deep Think only): Unified diff format uses `+ code` (plus, space, code). `strip_prefix('+')` removes the `+` but leaves the leading space, causing indentation mismatch.
+
+**#8 — 4-byte/token estimate inaccurate** (4/10): The hardcoded 4 bytes/token ratio is an average across natural language. Code (which has more symbols, shorter identifiers) typically runs closer to 3.2 bytes/token, making estimates ~20% off.
+
+**#9 — Binary content as String** (1/10, GLM-5 run 2 only): Binary file content passed through `String` type in the cache layer, potentially causing encoding issues or silent corruption.
+
+**#10 — `starts_with("test_")` matches root helpers** (1/10, Claude Opus only): Root-level test helper files (e.g., `test_utils.rs`) in the project root would be classified as test files even if they're shared helpers used by production code.
+
+---
+
+## 5. Consensus: Relevance Ordering
+
+### 5.1 Universal Agreement
+
+All 10 models agreed on these points:
+- ✅ Config-first ordering is correct (10/10)
+- ✅ Lockfiles should be last or excluded (10/10)
+- ✅ Entry points (`main.rs`, `lib.rs`) should be elevated within source (9/10)
+- ✅ Alphabetical ordering within categories is suboptimal (9/10)
+
+### 5.2 Where Should Docs Go?
+
+| Position | Models | Count |
+|----------|--------|-------|
+| Core docs FIRST (README before source) | Deep Think, ChatGPT 5.2, GLM-5², Claude Opus | 4 |
+| Docs after config, before source | Qwen, Kimi K2.5, MiniMax | 3 |
+| Docs LAST (current behavior) | Grok, Gemini Pro | 2 |
+| Configurable via flag | Kimi K2.5 (`--docs-first`) | 1 |
+
+**Winner (7/10)**: Core docs (README, AGENTS.md) should appear before source code.
+
+### 5.3 Proposed Category System
+
+Based on consensus across all models:
+
+```
+0 — Core Docs      (README.md, AGENTS.md, ARCHITECTURE.md)
+1 — Config/Manifest (Cargo.toml, package.json, pyproject.toml)
+2 — Build/CI        (.github/, Dockerfile, build.rs, Makefile)
+3 — Source          (src/*, entry points elevated)
+4 — Tests/Benches   (tests/*, benches/*)
+5 — Other Docs      (CHANGELOG, DEVELOPMENT, etc.)
+6 — Generated/Lock  (Cargo.lock, package-lock.json — or excluded)
+```
+
+### 5.4 Intra-Category Ordering
+
+| Approach | Models Proposing | Feasibility |
+|----------|-----------------|-------------|
+| Entry points first (`main.rs`, `lib.rs`) | DT, GPT, K2, CO, G5², QW | Simple |
+| Dependency/topological sort | DT, GPT, K2, CO, G5², MM | Medium |
+| File size ascending | CO | Simple |
+| Centrality score (most-imported) | CO, GPT | Medium-Large |
+
+### 5.5 Novel Proposal: Tests Before Source
+
+ChatGPT 5.2 proposed a radical reordering unique among all models:
+
+```
+config → public API source → TESTS → internal source → docs
+```
+
+**Rationale**: "LLM reasoning improves when expectation is known *before* implementation." Tests encode invariants, usage intent, and hidden contracts — reading them first allows deductive (not inductive) code comprehension.
+
+---
+
+## 6. Consensus: Tier 2 Features
+
+| Feature | Models Proposing | Total |
+|---------|-----------------|-------|
+| **Dependency graph / module map** | DT, GP, GR, QW, G5, G5², GPT, K2, CO | **9/10** |
+| **Signature-only / skeleton mode** | DT, GP, QW, G5, G5², K2, CO, MM | **8/10** |
+| **Git-aware context / change heatmap** | DT, GP, GR, G5, G5², K2, MM | **7/10** |
+| **Semantic chunking (AST-aware)** | QW, G5, K2, CO, MM | **5/10** |
+| **Structured output (XML/JSON)** | DT, G5, MM | **3/10** |
+| **Smart diff (move/rename detection)** | GR, CO, MM | **3/10** |
+| **Cross-reference annotations** | QW, GPT, CO | **3/10** |
+| **Interactive query mode** | DT, MM | **2/10** |
+
+**Top 3 for next implementation cycle**:
+1. 🥇 Dependency graph / module map (9/10 — near-universal consensus)
+2. 🥈 Signature-only mode (8/10 — critical for token budget management)
+3. 🥉 Git-aware context (7/10 — recent changes as relevance signal)
+
+---
+
+## 7. Consensus: Output Format v2
+
+### 7.1 Format Preference
+
+| Format | Models | Argument |
+|--------|--------|----------|
+| Enhanced Markdown | GPT, K2, CO, G5² | Human-readable AND LLM-friendly |
+| XML with CDATA | DT, MM | Prevents code block inception, machine-parseable |
+| Markdown default + `--format` flag | K2, MM | Backward compatible |
+
+### 7.2 Structural Consensus
+
+Every model independently proposed a v2 format following this general structure:
+
+```
+1. Project metadata (name, version, hash, token count)
+2. Architecture overview (natural language + dependency graph)
+3. File manifest table (path, category, size, tokens, purpose)
+4. Optional: Public API / signatures section
+5. Full file contents (with per-file metadata headers)
+6. Truncation notice if budget exceeded
+```
+
+### 7.3 Most Innovative Proposals
+
+| Innovation | Model | Impact |
+|-----------|-------|--------|
+| Signatures-first progressive disclosure | Claude Opus | ~40% token reduction for large files |
+| `<![CDATA[]]>` for code content | Gemini Deep Think | Eliminates markdown-in-markdown inception |
+| Per-file `[category:N]` tags | Claude Opus | Machine-parseable relevance metadata |
+| Commit heatmap (🔥) | Kimi K2.5 | Visual frequency signal |
+| Reliability column | GLM-5 run 2 | Inferred trust score per module |
+| Centrality scores | Kimi K2.5 | Quantitative module importance |
+| Tests-before-source | ChatGPT 5.2 | Deductive comprehension flow |
+
+---
+
+## 8. Methodology Analysis: Agentic vs One-Shot
+
+### 8.1 Comparison
+
+| Aspect | 🤖 Agentic (Opus, MiniMax) | 🧠 One-Shot (8 others) |
+|--------|---------------------------|------------------------|
+| Bug verification | Can search/grep for exact lines | Must infer from context window |
+| Line citations | Exact (tool-verified) | Approximate or absent |
+| Missing context | Can request more files | Must work with what's given |
+| False positives | Lower (can verify claims) | Higher (inferring from memory) |
+| Cost per review | Higher (many API calls) | Lower (single inference) |
+| Latency | Minutes (multi-step) | Seconds to minutes |
+
+### 8.2 Conclusion
+
+For code review of context-builder's pre-packaged context files, **one-shot reasoning was surprisingly competitive with agentic sessions**. The key differentiator was not *finding* bugs (Deep Think matched Opus in depth with 2 unique architectural bugs each) but *citing* them precisely (Opus could grep for exact line numbers).
+
+This has implications for context-builder itself: **if the context file is well-structured with good relevance ordering, one-shot models can perform at near-agentic quality** — which validates the tool's core value proposition.
+
+---
+
+## 9. Model Personality Profiles
+
+| Model | Method | Style | Strength | Weakness |
+|-------|--------|-------|----------|----------|
+| **Claude Opus 4.6** | 🤖 | Surgical, evidence-based | Line-level citations, exact locations | Agentic overhead; verbose |
+| **Gemini Deep Think** | 🧠 | Adversarial auditor | Deepest bugs in one shot (BTreeMap, DefaultHasher) | Slightly speculative on edge cases |
+| **ChatGPT 5.2** | 🧠 | Systems thinker | Most original ideas (deductive ordering) | Brief on verification details |
+| **Qwen-3-Max** | 🧠 | Technically precise | Thorough on new bugs, token math | Less creative on format proposals |
+| **Kimi K2.5** | 🧠 | Pragmatic engineer | Balanced analysis, implementable suggestions | Less aggressive on bug hunting |
+| **MiniMax Agent** | 🤖 | Academic reviewer | Thorough, systematic structure | Conservative despite tool access |
+| **GLM-5** (run 2) | 🧠 | Context-limited analyst | Unique binary cache bug | Missing core source files |
+| **Gemini Pro** | 🧠 | Balanced reviewer | Good verification of known fixes | Fewer unique insights |
+| **Grok 4.1** | 🧠 | Conservative reviewer | Safe, accurate | Fewest bugs, least novel proposals |
+| **GLM-5** (run 1) | 🧠 | Truncation victim | Accidentally exposed lockfile starvation bug | Couldn't review actual code |
+
+---
+
+## 10. Immediate Action Items (Prioritized)
+
+| Priority | Fix | Models | Effort |
+|----------|-----|--------|--------|
+| 🔴 P0 | Implement `max_tokens` enforcement in parallel path | 4/10 | Medium |
+| 🔴 P0 | Replace mtime hash with content hash | 6/10 | Small-Medium |
+| 🔴 P0 | Replace `DefaultHasher` with stable hasher (blake3/xxhash) | 4/10 | Small |
+| 🔴 P0 | Fix auto-diff BTreeMap ordering (use relevance-sorted Vec) | 1/10 | Small |
+| 🟡 P1 | Elevate README/AGENTS.md to category 0 | 7/10 | Small |
+| 🟡 P1 | Elevate entry points (main.rs, lib.rs) within source | 9/10 | Small |
+| 🟡 P1 | Account for header/tree tokens in budget | 2/10 | Small |
+| ✅ Done | Fix lockfile starvation (Cargo.lock → category 4) | 10/10 | Done |
+| ✅ Done | Fix test substring false positives (path boundaries) | 3/10 | Done |
+
+---
+
+## Appendix A: Raw Response Files
+
+| Model | Response File |
+|-------|--------------|
+| Gemini 3 Deep Think | [`context_v2_resp-gemini-3-deepthink.md`](../context_v2_resp-gemini-3-deepthink.md) |
+| Gemini 3 Pro | [`context_v2_resp-gemini-3-pro.md`](../context_v2_resp-gemini-3-pro.md) |
+| Grok 4.1 | [`context_v2_resp-grok-4.1.md`](../context_v2_resp-grok-4.1.md) |
+| Qwen-3-Max | [`context_v2_resp-qwen-3-max.md`](../context_v2_resp-qwen-3-max.md) |
+| GLM-5 (run 1) | [`context_v2_resp-glm5.md`](../context_v2_resp-glm5.md) |
+| GLM-5 (run 2) | [`context_v2_resp-glm5-run2.md`](../context_v2_resp-glm5-run2.md) |
+| ChatGPT 5.2 | [`context_v2_resp-chat-gpt-5.2.md`](../context_v2_resp-chat-gpt-5.2.md) |
+| Kimi K2.5 | [`context_v2_resp-kimi-k2.5.md`](../context_v2_resp-kimi-k2.5.md) |
+| Claude Opus 4.6 | [`context_v2_resp-claude-opus-4.6.md`](../context_v2_resp-claude-opus-4.6.md) |
+| MiniMax Agent 2.5 | [`context_v2_resp-minimax-agent.md`](../context_v2_resp-minimax-agent.md) |
+
+## Appendix B: Context File Used
+
+- **Pre-fix context**: [`deepthink_context_v2.md`](../deepthink_context_v2.md) (original, Cargo.lock at position 0)
+- **Post-fix context**: [`deepthink_context_v2_fixed.md`](../deepthink_context_v2_fixed.md) (lockfile fix applied, Cargo.lock at position last)
+- **Prompt template**: [`deep_think_prompt_v2.md`](../deep_think_prompt_v2.md)
 ```
 
 ### File: `scripts/generate_samples.rs`

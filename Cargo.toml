@@ -31,6 +31,7 @@ crossbeam-channel = "0.5.15"
 num_cpus = "1.17.0"
 encoding_rs = "0.8.35"
 walkdir = "2.5.0"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [features]
 default = ["parallel"]
