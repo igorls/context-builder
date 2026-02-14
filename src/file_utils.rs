@@ -3,6 +3,62 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+/// Returns a numeric category for file relevance ordering.
+/// Lower numbers appear first in output. Categories:
+/// 0 = Project config (Cargo.toml, package.json, pyproject.toml, etc.)
+/// 1 = Source code (src/, lib/)
+/// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
+/// 3 = Documentation and everything else
+fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
+    let relative = path.strip_prefix(base_path).unwrap_or(path);
+    let rel_str = relative.to_string_lossy();
+
+    // Check filename for config files
+    if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
+        let config_names = [
+            "Cargo.toml", "Cargo.lock", "package.json", "package-lock.json",
+            "tsconfig.json", "pyproject.toml", "setup.py", "setup.cfg",
+            "Makefile", "CMakeLists.txt", "build.gradle", "pom.xml",
+            "go.mod", "go.sum", "Gemfile", "Gemfile.lock",
+            "context-builder.toml", ".gitignore",
+        ];
+        if config_names.contains(&name) {
+            return 0;
+        }
+    }
+
+    // Check path prefix for category
+    let first_component = relative.components().next()
+        .and_then(|c| c.as_os_str().to_str())
+        .unwrap_or("");
+
+    match first_component {
+        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
+        "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
+        "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
+        _ => {
+            // Check extensions for additional heuristics
+            if let Some(ext) = relative.extension().and_then(|e| e.to_str()) {
+                match ext {
+                    "rs" | "go" | "py" | "ts" | "js" | "java" | "c" | "cpp" | "h" | "hpp"
+                    | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
+                        // Source file not in a recognized dir — check if it's a test
+                        if rel_str.contains("test") || rel_str.contains("spec") {
+                            2
+                        } else {
+                            1
+                        }
+                    }
+                    "md" | "txt" | "rst" | "adoc" => 3,
+                    _ => 1, // Unknown extension in root — treat as source
+                }
+            } else {
+                3 // No extension — docs/other
+            }
+        }
+    }
+}
+
 /// Collects all files to be processed using `ignore` crate for efficient traversal.
 ///
 /// `auto_ignores` are runtime-computed exclusion patterns (e.g., the tool's own
@@ -72,8 +128,14 @@ pub fn collect_files(
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
         .collect();
 
-    // FIX: Sort files deterministically by path to ensure consistent output order
-    files.sort_by(|a, b| a.path().cmp(b.path()));
+    // Sort files by relevance category, then alphabetically within each category.
+    // This puts config files first, then source code, then tests, then docs/other.
+    // LLMs comprehend codebases better when core source appears before test scaffolding.
+    files.sort_by(|a, b| {
+        let cat_a = file_relevance_category(a.path(), base_path);
+        let cat_b = file_relevance_category(b.path(), base_path);
+        cat_a.cmp(&cat_b).then_with(|| a.path().cmp(b.path()))
+    });
 
     Ok(files)
 }

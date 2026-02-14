@@ -36,6 +36,10 @@ pub struct Args {
     #[clap(short = 'y', long)]
     pub yes: bool,
 
+    /// Maximum token budget for the output. Files are truncated/skipped when exceeded.
+    #[clap(long)]
+    pub max_tokens: Option<usize>,
+
     /// Output only diffs (omit full file contents; requires auto-diff & timestamped output)
     #[clap(long, default_value_t = false)]
     pub diff_only: bool,

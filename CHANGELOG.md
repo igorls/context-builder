@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.0
+
+- **Deterministic Output**
+  - Replaced volatile timestamp (`Processed at: <timestamp>`) with a content hash (`Content hash: <hex>`) in the Markdown header
+  - Identical project states now produce byte-for-byte identical output files, enabling LLM prompt caching
+
+- **Context Budgeting (`--max-tokens N`)**
+  - New CLI argument `--max-tokens` and `context-builder.toml` config option to cap the output token budget
+  - Files are processed until the budget is exhausted, with a `<truncated>` marker appended
+  - Prevents API errors from excessively large contexts and reduces costs
+
+- **Relevance-Based File Ordering**
+  - Files are now sorted by relevance category: config files (0) → source code (1) → tests (2) → docs/other (3)
+  - Within each category, files remain alphabetically sorted
+  - Helps LLMs prioritize core logic and configuration over supporting files
+
 ## v0.6.1
 
 - **Bug Fixes** (identified by Gemini Deep Think code review)

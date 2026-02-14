@@ -84,6 +84,7 @@ fn test_auto_diff_workflow_basic() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
     let prompter = TestPrompter;
 
@@ -238,6 +239,7 @@ fn test_auto_diff_added_and_removed_files() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;
@@ -397,6 +399,7 @@ diff_only = true
         diff_only: false, // Config file should override this
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;
@@ -540,6 +543,7 @@ fn test_cache_invalidation_on_config_change() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;
@@ -690,6 +694,7 @@ fn test_concurrent_cache_access() {
                     diff_only: false,
                     clear_cache: false,
                     init: false,
+                    max_tokens: None,
                 };
 
                 let prompter = TestPrompter;
@@ -740,6 +745,7 @@ fn test_corrupted_cache_recovery() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;
@@ -906,6 +912,7 @@ diff_only = true
         diff_only: false, // Will be overridden by config
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();

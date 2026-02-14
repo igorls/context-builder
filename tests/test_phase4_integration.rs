@@ -121,6 +121,7 @@ filter = ["rs", "txt"]
         diff_only: false, // Will be overridden by config
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     // Apply config manually (simulating what happens in the real application)
@@ -294,6 +295,7 @@ fn test_encoding_strategy_configuration() {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let result = run_with_args(args, config, &prompter);

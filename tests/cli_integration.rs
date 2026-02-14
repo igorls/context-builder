@@ -66,6 +66,7 @@ fn preview_mode_does_not_create_output_file() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -106,6 +107,7 @@ fn preview_mode_skips_overwrite_confirmation() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -151,6 +153,7 @@ fn token_count_mode_skips_overwrite_confirmation() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -193,6 +196,7 @@ fn both_preview_and_token_count_modes_work_together() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
@@ -248,6 +252,7 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     // Always proceed without interactive prompts
@@ -335,6 +340,7 @@ fn overwrite_prompt_is_respected() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     // Deny overwrite
@@ -374,6 +380,7 @@ fn confirm_processing_receives_large_count() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -410,6 +417,7 @@ fn token_count_mode_does_not_create_output_file() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter::new(true, true);

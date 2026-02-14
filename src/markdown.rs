@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use chrono::Utc;
 use ignore::DirEntry;
 use log::{error, info, warn};
@@ -14,7 +16,7 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use std::thread;
 
 /// Generates the final Markdown file.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, unused_variables)]
 pub fn generate_markdown(
     output_path: &str,
     input_dir: &str,
@@ -25,6 +27,7 @@ pub fn generate_markdown(
     base_path: &Path,
     line_numbers: bool,
     encoding_strategy: Option<&str>,
+    max_tokens: Option<usize>,
 ) -> io::Result<()> {
     if let Some(parent) = Path::new(output_path).parent()
         && !parent.exists()
@@ -68,11 +71,18 @@ pub fn generate_markdown(
         writeln!(output, "Custom ignored patterns: {}", ignores.join(", "))?;
     }
 
-    writeln!(
-        output,
-        "Processed at: {}",
-        Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
-    )?;
+    // Deterministic content hash (enables LLM prompt caching across runs)
+    let mut hasher = DefaultHasher::new();
+    for entry in files {
+        entry.path().hash(&mut hasher);
+        if let Ok(meta) = std::fs::metadata(entry.path()) {
+            meta.len().hash(&mut hasher);
+            if let Ok(modified) = meta.modified() {
+                modified.hash(&mut hasher);
+            }
+        }
+    }
+    writeln!(output, "Content hash: {:016x}", hasher.finish())?;
     writeln!(output)?;
 
     // --- File Tree --- //
@@ -181,7 +191,27 @@ pub fn generate_markdown(
 
     #[cfg(not(feature = "parallel"))]
     {
-        for entry in files {
+        let mut tokens_used: usize = 0;
+
+        for (idx, entry) in files.iter().enumerate() {
+            // Estimate tokens for this file (~4 bytes per token)
+            let file_size = std::fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
+            let estimated_file_tokens = (file_size as usize) / 4;
+
+            if let Some(budget) = max_tokens {
+                if tokens_used + estimated_file_tokens > budget && tokens_used > 0 {
+                    let remaining = files.len() - idx;
+                    writeln!(output, "---\n")?;
+                    writeln!(
+                        output,
+                        "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
+                        budget, remaining
+                    )?;
+                    break;
+                }
+            }
+
+            tokens_used += estimated_file_tokens;
             process_file(
                 base_path,
                 entry.path(),
@@ -809,6 +839,7 @@ mod tests {
             base_path,
             false,
             None,
+            None, // max_tokens
         );
 
         // Restore original directory
@@ -841,6 +872,7 @@ mod tests {
             base_path,
             false,
             None,
+            None, // max_tokens
         );
 
         assert!(result.is_ok());
@@ -871,6 +903,7 @@ mod tests {
             base_path,
             true,
             Some("strict"),
+            None, // max_tokens
         );
 
         assert!(result.is_ok());

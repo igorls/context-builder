@@ -91,6 +91,7 @@ fn test_deterministic_output_multiple_runs() {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         },
         Config::default(),
         &prompter,
@@ -113,6 +114,7 @@ fn test_deterministic_output_multiple_runs() {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         },
         Config::default(),
         &prompter,
@@ -211,12 +213,24 @@ fn test_deterministic_output_multiple_runs() {
         "Should have found some file entries"
     );
 
-    // Check that files are sorted alphabetically
-    let mut sorted_files = file_lines.clone();
-    sorted_files.sort();
+    // Check that files are sorted by relevance category (config → source → tests → docs)
+    // Within each category, files should be alphabetically sorted
+    // Category 0: Cargo.toml (config)
+    // Category 1: src/* (source code)
+    // Category 2: tests/* (tests)
+    // Category 3: docs/* (documentation)
+    let expected_order = vec![
+        "### File: `Cargo.toml`",
+        "### File: `src/lib.rs`",
+        "### File: `src/main.rs`",
+        "### File: `src/utils.rs`",
+        "### File: `tests/integration.rs`",
+        "### File: `tests/unit.rs`",
+        "### File: `docs/README.md`",
+    ];
     assert_eq!(
-        file_lines, sorted_files,
-        "Files should be listed in alphabetical order"
+        file_lines, expected_order,
+        "Files should be listed in relevance order (config → source → tests → docs)"
     );
 }
 #[test]
@@ -244,6 +258,7 @@ fn test_deterministic_file_tree_order() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;
@@ -307,6 +322,7 @@ fn test_cache_collision_prevention() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -330,6 +346,7 @@ fn test_cache_collision_prevention() {
         clear_cache: false,
 
         init: false,
+        max_tokens: None,
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -394,6 +411,7 @@ fn test_custom_ignores_performance() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;
@@ -448,6 +466,7 @@ fn test_configuration_affects_cache_key() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let args2 = Args {
@@ -462,6 +481,7 @@ fn test_configuration_affects_cache_key() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;
@@ -526,6 +546,7 @@ auto_diff = true
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter;

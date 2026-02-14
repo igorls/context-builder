@@ -1,4 +1,3 @@
-use chrono::Utc;
 use clap::{CommandFactory, Parser};
 
 use std::fs;
@@ -294,10 +293,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     final_args.ignore.join(", ")
                 ));
             }
-            total_tokens += estimate_tokens(&format!(
-                "Processed at: {}\n\n",
-                Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
-            ));
+            total_tokens += estimate_tokens("Content hash: 0000000000000000\n\n");
             total_tokens += estimate_tokens("## File Tree Structure\n\n");
             let tree_tokens = count_tree_tokens(&file_tree, 0);
             total_tokens += tree_tokens;
@@ -483,6 +479,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         base_path,
         final_args.line_numbers,
         config.encoding_strategy.as_deref(),
+        final_args.max_tokens,
     )?;
 
     let duration = start_time.elapsed();
@@ -690,6 +687,7 @@ pub fn run() -> io::Result<()> {
         yes: resolution.config.yes,
         diff_only: resolution.config.diff_only,
         clear_cache: resolution.config.clear_cache,
+        max_tokens: resolution.config.max_tokens,
         init: false,
     };
 
@@ -876,6 +874,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -907,6 +906,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -943,6 +943,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -977,6 +978,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1014,6 +1016,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, false); // Deny overwrite
@@ -1052,6 +1055,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false, true); // Deny processing
@@ -1089,6 +1093,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1132,6 +1137,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1174,6 +1180,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1215,6 +1222,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1259,6 +1267,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1300,6 +1309,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let diff_config = DiffConfig::default();

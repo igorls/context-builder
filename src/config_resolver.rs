@@ -25,6 +25,7 @@ pub struct ResolvedConfig {
     pub clear_cache: bool,
     pub auto_diff: bool,
     pub diff_context_lines: usize,
+    pub max_tokens: Option<usize>,
     pub init: bool,
 }
 
@@ -71,6 +72,7 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
         clear_cache: args.clear_cache,
         auto_diff: final_config.auto_diff.unwrap_or(false),
         diff_context_lines: final_config.diff_context_lines.unwrap_or(3),
+        max_tokens: args.max_tokens.or(final_config.max_tokens),
         init: args.init,
     };
 
@@ -247,6 +249,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let config = Config {
@@ -279,6 +282,7 @@ mod tests {
             diff_only: false,                // Default value
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let config = Config {
@@ -322,6 +326,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let config = Config {
@@ -351,6 +356,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let config = Config {
@@ -378,6 +384,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let config = Config {
@@ -407,6 +414,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let config = Config {
@@ -436,6 +444,7 @@ mod tests {
             diff_only: false,
             clear_cache: false,
             init: false,
+            max_tokens: None,
         };
 
         let resolution = resolve_final_config(args.clone(), None);

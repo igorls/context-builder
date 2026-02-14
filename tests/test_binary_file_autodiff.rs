@@ -110,6 +110,7 @@ fn test_binary_files_dont_crash_autodiff() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -188,6 +189,7 @@ fn test_mixed_text_and_binary_files_autodiff() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -250,6 +252,7 @@ fn test_large_binary_file_autodiff() {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = TestPrompter::new(true, true);

@@ -69,6 +69,9 @@ pub struct Config {
     /// - "strict": Only include valid UTF-8 files, skip others
     /// - "skip": Skip all non-UTF-8 files without transcoding attempts
     pub encoding_strategy: Option<String>,
+
+    /// Maximum token budget for the output. Files are truncated/skipped when exceeded.
+    pub max_tokens: Option<usize>,
 }
 
 /// Load configuration from `context-builder.toml` in the current working directory.
