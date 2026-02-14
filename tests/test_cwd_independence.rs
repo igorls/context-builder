@@ -3,6 +3,7 @@
 //! This test verifies that the application loads config and creates cache
 //! relative to the project root, not the current working directory.
 
+use serial_test::serial;
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
@@ -41,6 +42,7 @@ fn write_file(path: &Path, contents: &str) {
 }
 
 #[test]
+#[serial]
 fn test_config_loaded_from_project_root_not_cwd() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
@@ -129,6 +131,7 @@ filter = ["txt"]
 }
 
 #[test]
+#[serial]
 fn test_cache_created_in_project_root_not_cwd() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
@@ -305,6 +308,7 @@ timestamped_output = true
 }
 
 #[test]
+#[serial]
 fn test_clear_cache_uses_project_root() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
@@ -357,6 +361,7 @@ fn test_clear_cache_uses_project_root() {
 }
 
 #[test]
+#[serial]
 fn test_load_config_from_path_function() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");

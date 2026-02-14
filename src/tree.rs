@@ -110,7 +110,7 @@ mod tests {
         fs::File::create(base_path.join(".env")).unwrap();
 
         // 2. Collect files using the actual function
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
 
         // 3. Assert that the correct files were collected (a hidden file is ignored)
         assert_eq!(files.len(), 2);
@@ -133,7 +133,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let base_path = dir.path();
 
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
         let tree = build_file_tree(&files, base_path);
 
         assert!(tree.is_empty());
@@ -146,7 +146,7 @@ mod tests {
 
         fs::File::create(base_path.join("single.txt")).unwrap();
 
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
         let tree = build_file_tree(&files, base_path);
 
         let mut expected: FileTree = BTreeMap::new();
@@ -164,7 +164,7 @@ mod tests {
         fs::File::create(base_path.join("a/b/c/deep.txt")).unwrap();
         fs::File::create(base_path.join("a/shallow.txt")).unwrap();
 
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
         let tree = build_file_tree(&files, base_path);
 
         // Build expected structure
@@ -193,7 +193,7 @@ mod tests {
         fs::File::create(base_path.join("测试目录/文件.txt")).unwrap();
         fs::File::create(base_path.join("🦀.rs")).unwrap();
 
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
         let tree = build_file_tree(&files, base_path);
 
         let mut test_dir = BTreeMap::new();
@@ -287,7 +287,7 @@ mod tests {
         fs::File::create(base_path.join("test.txt")).unwrap();
 
         // Create a DirEntry from the first directory but use a different base_path
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
 
         // This should trigger the unwrap_or_else case since other_base is unrelated to the file path
         let tree = build_file_tree(&files, other_base);
@@ -306,7 +306,7 @@ mod tests {
         fs::File::create(base_path.join("docs/guide.md")).unwrap();
         fs::File::create(base_path.join("docs/api.md")).unwrap();
 
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
         let tree = build_file_tree(&files, base_path);
 
         let mut docs_tree = BTreeMap::new();

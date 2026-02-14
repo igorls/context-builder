@@ -132,14 +132,131 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         ));
     }
 
-    let files = collect_files(base_path, &final_args.filter, &final_args.ignore)?;
+    // Compute auto-ignore patterns to exclude the tool's own output and cache
+    let mut auto_ignores: Vec<String> = vec![".context-builder".to_string()];
+
+    // Exclude the resolved output file (or its timestamped glob pattern)
+    let output_path = Path::new(&final_args.output);
+    if let Ok(rel_output) = output_path.strip_prefix(base_path) {
+        // Output is inside the project — exclude it
+        if config.timestamped_output == Some(true) {
+            // Timestamped outputs: create a glob like "docs/context_*.md"
+            if let (Some(parent), Some(stem), Some(ext)) = (
+                rel_output.parent(),
+                output_path.file_stem().and_then(|s| s.to_str()),
+                output_path.extension().and_then(|s| s.to_str()),
+            ) {
+                // Strip the timestamp suffix to get the base stem
+                // Timestamped names look like "context_20260214175028.md"
+                // The stem from config is the part before the timestamp
+                let base_stem = if let Some(ref cfg_output) = config.output {
+                    Path::new(cfg_output)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(stem)
+                        .to_string()
+                } else {
+                    stem.to_string()
+                };
+                let glob = if parent == Path::new("") {
+                    format!("{}_*.{}", base_stem, ext)
+                } else {
+                    format!("{}/{}_*.{}", parent.display(), base_stem, ext)
+                };
+                auto_ignores.push(glob);
+            }
+        } else {
+            // Non-timestamped: exclude the exact output file
+            auto_ignores.push(rel_output.to_string_lossy().to_string());
+        }
+    } else {
+        // Output might be a relative path not under base_path — try using it directly
+        let output_str = final_args.output.clone();
+        if config.timestamped_output == Some(true) {
+            if let (Some(stem), Some(ext)) = (
+                output_path.file_stem().and_then(|s| s.to_str()),
+                output_path.extension().and_then(|s| s.to_str()),
+            ) {
+                let base_stem = if let Some(ref cfg_output) = config.output {
+                    Path::new(cfg_output)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(stem)
+                        .to_string()
+                } else {
+                    stem.to_string()
+                };
+                if let Some(parent) = output_path.parent() {
+                    let parent_str = parent.to_string_lossy();
+                    if parent_str.is_empty() || parent_str == "." {
+                        auto_ignores.push(format!("{}_*.{}", base_stem, ext));
+                    } else {
+                        auto_ignores.push(format!("{}/{}_*.{}", parent_str, base_stem, ext));
+                    }
+                }
+            }
+        } else {
+            auto_ignores.push(output_str);
+        }
+    }
+
+    // Also exclude the output folder itself if configured
+    if let Some(ref output_folder) = config.output_folder {
+        auto_ignores.push(output_folder.clone());
+    }
+
+    let files = collect_files(base_path, &final_args.filter, &final_args.ignore, &auto_ignores)?;
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
         eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
         eprintln!("[DEBUG][CONFIG] Raw Config: {:?}", config);
+        eprintln!("[DEBUG][CONFIG] Auto-ignores: {:?}", auto_ignores);
         eprintln!("[DEBUG][CONFIG] Collected {} files", files.len());
         for f in &files {
             eprintln!("[DEBUG][CONFIG]  - {}", f.path().display());
+        }
+    }
+
+    // Smart large-file detection: warn about files that may bloat the context
+    if !silent {
+        const LARGE_FILE_THRESHOLD: u64 = 100 * 1024; // 100 KB
+        let mut large_files: Vec<(String, u64)> = Vec::new();
+        let mut total_size: u64 = 0;
+
+        for entry in &files {
+            if let Ok(metadata) = entry.path().metadata() {
+                let size = metadata.len();
+                total_size += size;
+                if size > LARGE_FILE_THRESHOLD {
+                    let rel_path = entry
+                        .path()
+                        .strip_prefix(base_path)
+                        .unwrap_or(entry.path())
+                        .to_string_lossy()
+                        .to_string();
+                    large_files.push((rel_path, size));
+                }
+            }
+        }
+
+        if !large_files.is_empty() {
+            large_files.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by size descending
+            eprintln!(
+                "\n⚠  {} large file(s) detected (>{} KB):",
+                large_files.len(),
+                LARGE_FILE_THRESHOLD / 1024
+            );
+            for (path, size) in large_files.iter().take(5) {
+                eprintln!("   {:>8} KB  {}", size / 1024, path);
+            }
+            if large_files.len() > 5 {
+                eprintln!("   ... and {} more", large_files.len() - 5);
+            }
+            eprintln!(
+                "   Total context size: {} KB across {} files\n",
+                total_size / 1024,
+                files.len()
+            );
         }
     }
     let file_tree = build_file_tree(&files, base_path);
@@ -607,7 +724,7 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
     ];
 
     // Collect files using the same logic as the main application
-    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores)?;
+    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores, &[])?;
 
     // Count extensions from the filtered file list
     for entry in files {
@@ -1173,7 +1290,7 @@ mod tests {
 
         fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
 
-        let files = collect_files(base_path, &[], &[]).unwrap();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
         let file_tree = build_file_tree(&files, base_path);
         let config = Config::default();
         let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();

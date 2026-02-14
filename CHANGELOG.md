@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.0
+
+- **Smart Defaults**
+  - Auto-exclude output files: the tool now automatically excludes its own generated output file, output folder, and `.context-builder/` cache directory from context collection without requiring manual `--ignore` flags
+  - Timestamped output glob patterns (e.g., `docs/context_*.md`) are auto-excluded when `timestamped_output` is enabled
+  - Large-file detection: warns about files exceeding 100 KB with a sorted top-5 list and total context size summary
+  - Improved project name detection: canonicalizes relative paths (like `.`) to resolve the actual directory name instead of showing "unknown"
+
+- **Testing & Stability**
+  - Added `#[serial]` annotations to integration tests that mutate CWD, fixing intermittent test failures in parallel execution
+  - All 146 tests pass consistently with `--test-threads=1`
+
+- **Dependencies**
+  - Updated `criterion` to 0.8.2
+  - Updated `tiktoken-rs` to 0.9.1
+  - Updated `toml` to 1.0.1
+
 ## v0.5.2
 
 - Enhanced `--init` command to detect major file types in the current directory and suggest appropriate filters instead of using generic defaults

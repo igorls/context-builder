@@ -485,7 +485,8 @@ fn test_configuration_affects_cache_key() {
     // but the actual file content sections should be filtered
 }
 
-#[test] // Ensure tests don't interfere with each other
+#[test]
+#[serial] // Ensure tests don't interfere with each other
 fn test_edge_case_filenames_no_panic() {
     let temp_dir = tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
@@ -582,7 +583,8 @@ auto_diff = true
         .filter(|entry| {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            name_str.starts_with("no_extension_output_") && name_str.contains("2025")
+            let year = Utc::now().format("%Y").to_string();
+            name_str.starts_with("no_extension_output_") && name_str.contains(&year)
         })
         .collect();
 

@@ -1,6 +1,6 @@
 [package]
 name = "context-builder"
-version = "0.5.2"
+version = "0.6.0"
 default-run = "context-builder"
 edition = "2024"
 authors = ["Igor Lins e Silva"]
@@ -13,17 +13,17 @@ keywords = ["cli", "markdown", "documentation", "llm", "context"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-clap = { version = "4.5.47", features = ["derive"] }
-chrono = { version = "0.4.42", features = ["serde"] }
-ignore = "0.4.23"
-log = "0.4.28"
-env_logger = "0.11.8"
+clap = { version = "4.5.58", features = ["derive"] }
+chrono = { version = "0.4.43", features = ["serde"] }
+ignore = "0.4.25"
+log = "0.4.29"
+env_logger = "0.11.9"
 rayon = { version = "1.10", optional = true }
-serde = { version = "1.0.219", features = ["derive"] }
-toml = "0.9.5"
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.0.1"
 similar = "2.7.0"
-tempfile = "3.22.0"
-tiktoken-rs = "0.7.0"
+tempfile = "3.25.0"
+tiktoken-rs = "0.9.1"
 once_cell = "1.21.3"
 fs2 = "0.4.3"
 serde_json = "1.0.143"
@@ -38,8 +38,8 @@ parallel = ["rayon"]
 samples-bin = []
 
 [dev-dependencies]
-tempfile = "3.22.0"
-criterion = { version = "0.7.0", features = ["html_reports"] }
+tempfile = "3.25.0"
+criterion = { version = "0.8.2", features = ["html_reports"] }
 pretty_assertions = "1.4.1"
 serial_test = "3.0"
 

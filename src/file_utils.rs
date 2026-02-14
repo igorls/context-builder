@@ -4,10 +4,15 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// Collects all files to be processed using `ignore` crate for efficient traversal.
+///
+/// `auto_ignores` are runtime-computed exclusion patterns (e.g., the tool's own
+/// output file or cache directory). They are processed identically to user ignores
+/// but kept separate to avoid polluting user-facing configuration.
 pub fn collect_files(
     base_path: &Path,
     filters: &[String],
     ignores: &[String],
+    auto_ignores: &[String],
 ) -> io::Result<Vec<DirEntry>> {
     let mut walker = WalkBuilder::new(base_path);
     // By default, the "ignore" crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
@@ -25,6 +30,13 @@ pub fn collect_files(
                 io::ErrorKind::InvalidInput,
                 format!("Invalid ignore pattern '{}': {}", pattern, e),
             ));
+        }
+    }
+    // Apply auto-computed ignore patterns (output file, cache dir, etc.)
+    for pattern in auto_ignores {
+        let ignore_pattern = format!("!{}", pattern);
+        if let Err(e) = override_builder.add(&ignore_pattern) {
+            log::warn!("Skipping invalid auto-ignore pattern '{}': {}", pattern, e);
         }
     }
     // Also, always ignore the config file itself
@@ -158,7 +170,7 @@ mod tests {
         let filters = vec!["rs".to_string(), "toml".to_string()];
         let ignores: Vec<String> = vec![];
 
-        let files = collect_files(base, &filters, &ignores).unwrap();
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         let relative_paths = to_rel_paths(files, base);
 
         assert!(relative_paths.contains(&"src/main.rs".to_string()));
@@ -184,7 +196,7 @@ mod tests {
         let filters: Vec<String> = vec![];
         let ignores: Vec<String> = vec!["target".into(), "node_modules".into(), "README.md".into()];
 
-        let files = collect_files(base, &filters, &ignores).unwrap();
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         let relative_paths = to_rel_paths(files, base);
 
         assert!(relative_paths.contains(&"src/main.rs".to_string()));
@@ -204,7 +216,7 @@ mod tests {
         let filters: Vec<String> = vec![];
         let ignores: Vec<String> = vec!["[".into()]; // Invalid regex pattern
 
-        let result = collect_files(base, &filters, &ignores);
+        let result = collect_files(base, &filters, &ignores, &[]);
         assert!(result.is_err());
         assert!(
             result
@@ -222,7 +234,7 @@ mod tests {
         let filters: Vec<String> = vec![];
         let ignores: Vec<String> = vec![];
 
-        let files = collect_files(base, &filters, &ignores).unwrap();
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         assert!(files.is_empty());
     }
 
@@ -237,7 +249,7 @@ mod tests {
         let filters = vec!["rs".to_string()]; // Only Rust files
         let ignores: Vec<String> = vec![];
 
-        let files = collect_files(base, &filters, &ignores).unwrap();
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         assert!(files.is_empty());
     }
 
@@ -252,7 +264,7 @@ mod tests {
         let filters: Vec<String> = vec![];
         let ignores: Vec<String> = vec![];
 
-        let files = collect_files(base, &filters, &ignores).unwrap();
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         let relative_paths = to_rel_paths(files, base);
 
         assert!(!relative_paths.contains(&"context-builder.toml".to_string()));
@@ -374,7 +386,7 @@ mod tests {
         let filters: Vec<String> = vec![];
         let ignores: Vec<String> = vec!["[invalid".into()]; // Incomplete bracket
 
-        let result = collect_files(base, &filters, &ignores);
+        let result = collect_files(base, &filters, &ignores, &[]);
         assert!(result.is_err());
     }
 
@@ -418,7 +430,7 @@ mod tests {
         let filters: Vec<String> = vec![];
         let ignores: Vec<String> = vec![];
 
-        let files = collect_files(base, &filters, &ignores).unwrap();
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         // Should find at least the regular file
         assert!(!files.is_empty());
     }

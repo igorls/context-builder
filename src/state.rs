@@ -111,11 +111,20 @@ impl ProjectState {
             file_states.insert(relative_path, file_state);
         }
 
-        let project_name = base_path
+        // Resolve project name robustly: canonicalize to handle "." and relative paths
+        let canonical = base_path.canonicalize().ok();
+        let resolved = canonical.as_deref().unwrap_or(base_path);
+        let project_name = resolved
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                // Fallback: try CWD if base_path has no file_name (e.g., root path)
+                std::env::current_dir()
+                    .ok()
+                    .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
 
         let metadata = ProjectMetadata {
             project_name,

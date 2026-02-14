@@ -778,7 +778,7 @@ mod tests {
         fs::write(base_path.join("readme.txt"), "Hello world").unwrap();
 
         // Collect files
-        let files = crate::file_utils::collect_files(base_path, &[], &[]).unwrap();
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
         let file_tree = crate::tree::build_file_tree(&files, base_path);
 
         // Change to the test directory
@@ -815,7 +815,7 @@ mod tests {
         // Create test files
         fs::write(base_path.join("test.txt"), "content").unwrap();
 
-        let files = crate::file_utils::collect_files(base_path, &[], &[]).unwrap();
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
         let file_tree = crate::tree::build_file_tree(&files, base_path);
 
         let result = generate_markdown(
@@ -845,7 +845,7 @@ mod tests {
         fs::write(base_path.join("config.toml"), "[package]").unwrap();
         fs::write(base_path.join("readme.md"), "# README").unwrap();
 
-        let files = crate::file_utils::collect_files(base_path, &[], &[]).unwrap();
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
         let file_tree = crate::tree::build_file_tree(&files, base_path);
 
         let result = generate_markdown(
