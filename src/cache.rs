@@ -166,9 +166,14 @@ impl CacheManager {
     pub fn write_cache(&self, state: &ProjectState) -> Result<(), Box<dyn std::error::Error>> {
         let cache_path = self.get_cache_path();
 
-        let file = File::create(&cache_path)?;
-        // Acquire exclusive lock to prevent concurrent writes
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&cache_path)?;
+        // Acquire exclusive lock BEFORE truncating to prevent TOCTOU races
         file.lock_exclusive()?;
+        file.set_len(0)?;
 
         let json = serde_json::to_string_pretty(state)?;
         let mut file = std::io::BufWriter::new(file);

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.1
+
+- **Bug Fixes** (identified by Gemini Deep Think code review)
+  - Fixed TOCTOU race in cache writes: `File::create` was truncating before acquiring lock, risking data loss for concurrent readers
+  - Fixed indentation destruction in `diff_only` mode: `trim_start()` was stripping all leading whitespace from added files, corrupting Python/YAML
+  - Fixed UTF-8 boundary corruption: 8KB sniff buffer could split multi-byte characters, misclassifying valid UTF-8 files as binary
+  - Fixed CLI flags silently overwritten: config file values were unconditionally overriding CLI arguments post-resolution
+  - Removed duplicate file seek block (copy-paste error)
+
 ## v0.6.0
 
 - **Smart Defaults**

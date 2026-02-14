@@ -295,8 +295,36 @@ pub fn process_file(
             };
             let slice = &sniff[..n];
 
+            // Find a valid UTF-8 boundary by backtracking up to 3 bytes.
+            // If the sniff buffer cuts a multi-byte char (e.g., emoji at byte 8191),
+            // from_utf8 would falsely classify the file as non-UTF-8.
+            let check_len = if n == sniff.len() {
+                // Buffer is full — may have split a multi-byte char at the end
+                let mut end = n;
+                while end > 0 && end > n.saturating_sub(4) && sniff[end - 1] & 0xC0 == 0x80 {
+                    end -= 1; // skip continuation bytes
+                }
+                // If we landed on a leading byte, check if the sequence is complete
+                if end > 0 && end < n {
+                    let leading = sniff[end - 1];
+                    let expected_len = if leading & 0xE0 == 0xC0 { 2 }
+                        else if leading & 0xF0 == 0xE0 { 3 }
+                        else if leading & 0xF8 == 0xF0 { 4 }
+                        else { 1 };
+                    if end - 1 + expected_len > n {
+                        end - 1 // incomplete char — exclude the leading byte too
+                    } else {
+                        n
+                    }
+                } else {
+                    n
+                }
+            } else {
+                n // didn't fill the buffer, so no boundary issue
+            };
+
             // First check if it's valid UTF-8
-            let is_utf8 = std::str::from_utf8(slice).is_ok();
+            let is_utf8 = std::str::from_utf8(&sniff[..check_len]).is_ok();
 
             if is_utf8 && !slice.contains(&0) {
                 // Valid UTF-8 text file - proceed normally
@@ -400,21 +428,6 @@ pub fn process_file(
             }
 
             // Stream UTF-8 content
-            if let Err(e) = file.seek(SeekFrom::Start(0)) {
-                warn!(
-                    "Could not reset file cursor for {}: {}. Skipping content.",
-                    relative_path.display(),
-                    e
-                );
-                writeln!(output, "```text")?;
-                writeln!(
-                    output,
-                    "<Could not read file content (e.g., binary file or permission error)>"
-                )?;
-                writeln!(output, "```")?;
-                return Ok(());
-            }
-
             let content = match std::fs::read_to_string(file_path) {
                 Ok(content) => content,
                 Err(e) => {

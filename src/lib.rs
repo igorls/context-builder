@@ -71,7 +71,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         .unwrap_or(false);
 
     // Use the finalized args passed in from run()
-    let mut final_args = args;
+    let final_args = args;
     // Resolve base path. If input is '.' but current working directory lost the project context
     // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
     let mut resolved_base = PathBuf::from(&final_args.input);
@@ -323,16 +323,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         ));
     }
 
-    // Merge config-driven flags into final_args when the user did not explicitly enable them
-    // (we cannot distinguish CLI-provided false vs default false, mirroring test logic which
-    // only overwrites when the current flag is false). This ensures subsequent formatting
-    // (e.g., line numbers) reflects a config change that invalidates the cache.
-    if let Some(cfg_ln) = config.line_numbers {
-        final_args.line_numbers = cfg_ln;
-    }
-    if let Some(cfg_diff_only) = config.diff_only {
-        final_args.diff_only = cfg_diff_only;
-    }
+    // NOTE: config-driven flags (line_numbers, diff_only) are already merged
+    // by config_resolver.rs with proper CLI-takes-precedence semantics.
+    // Do NOT re-apply them here as that would silently overwrite CLI flags.
 
     if config.auto_diff.unwrap_or(false) {
         // Build an effective config that mirrors the *actual* operational settings coming
@@ -552,7 +545,7 @@ fn generate_markdown_with_diff(
                     let mut lines: Vec<String> = Vec::new();
                     for line in added.diff.lines() {
                         if let Some(rest) = line.strip_prefix('+') {
-                            lines.push(rest.trim_start().to_string());
+                            lines.push(rest.to_string());
                         }
                     }
                     output.push_str("```text\n");
