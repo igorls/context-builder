@@ -136,22 +136,24 @@ pub fn generate_markdown(
                                         // Estimate tokens for this chunk (~4 bytes per token)
                                         let chunk_tokens = buf.len() / 4;
 
-                                        if let Some(max) = budget {
-                                            if tokens_used + chunk_tokens > max && tokens_used > 0 {
-                                                let remaining = total_files - next_index;
-                                                let notice = format!(
-                                                    "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
-                                                    max, remaining
-                                                );
-                                                if let Err(e) = output.write_all(notice.as_bytes()) {
-                                                    errors.push(format!(
-                                                        "Failed to write truncation notice: {}", e
-                                                    ));
-                                                }
-                                                budget_exceeded = true;
-                                                next_index += 1;
-                                                continue;
+                                        if let Some(max) = budget
+                                            && tokens_used + chunk_tokens > max
+                                            && tokens_used > 0
+                                        {
+                                            let remaining = total_files - next_index;
+                                            let notice = format!(
+                                                "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
+                                                max, remaining
+                                            );
+                                            if let Err(e) = output.write_all(notice.as_bytes()) {
+                                                errors.push(format!(
+                                                    "Failed to write truncation notice: {}",
+                                                    e
+                                                ));
                                             }
+                                            budget_exceeded = true;
+                                            next_index += 1;
+                                            continue;
                                         }
 
                                         tokens_used += chunk_tokens;
@@ -226,7 +228,9 @@ pub fn generate_markdown(
 
         for (idx, entry) in files.iter().enumerate() {
             // Estimate tokens for this file (~4 bytes per token)
-            let file_size = std::fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
+            let file_size = std::fs::metadata(entry.path())
+                .map(|m| m.len())
+                .unwrap_or(0);
             let estimated_file_tokens = (file_size as usize) / 4;
 
             if let Some(budget) = max_tokens {
@@ -368,10 +372,15 @@ pub fn process_file(
                 // If we landed on a leading byte, check if the sequence is complete
                 if end > 0 && end < n {
                     let leading = sniff[end - 1];
-                    let expected_len = if leading & 0xE0 == 0xC0 { 2 }
-                        else if leading & 0xF0 == 0xE0 { 3 }
-                        else if leading & 0xF8 == 0xF0 { 4 }
-                        else { 1 };
+                    let expected_len = if leading & 0xE0 == 0xC0 {
+                        2
+                    } else if leading & 0xF0 == 0xE0 {
+                        3
+                    } else if leading & 0xF8 == 0xF0 {
+                        4
+                    } else {
+                        1
+                    };
                     if end - 1 + expected_len > n {
                         end - 1 // incomplete char — exclude the leading byte too
                     } else {

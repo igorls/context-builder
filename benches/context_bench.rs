@@ -210,6 +210,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = NoPrompt;
@@ -253,6 +254,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     diff_only: false,
                     clear_cache: false,
                     init: false,
+                    max_tokens: None,
                 },
                 Config::default(),
                 &prompter,

@@ -204,7 +204,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         auto_ignores.push(output_folder.clone());
     }
 
-    let files = collect_files(base_path, &final_args.filter, &final_args.ignore, &auto_ignores)?;
+    let files = collect_files(
+        base_path,
+        &final_args.filter,
+        &final_args.ignore,
+        &auto_ignores,
+    )?;
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
         eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
@@ -418,11 +423,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         let sorted_paths: Vec<PathBuf> = files
             .iter()
             .map(|entry| {
-                entry.path()
+                entry
+                    .path()
                     .strip_prefix(base_path)
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|_| {
-                        entry.path()
+                        entry
+                            .path()
                             .file_name()
                             .map(PathBuf::from)
                             .unwrap_or_else(|| entry.path().to_path_buf())
@@ -1340,10 +1347,22 @@ mod tests {
 
         let sorted_paths: Vec<PathBuf> = files
             .iter()
-            .map(|e| e.path().strip_prefix(base_path).unwrap_or(e.path()).to_path_buf())
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
             .collect();
 
-        let result = generate_markdown_with_diff(&state, None, &args, &file_tree, &diff_config, &sorted_paths);
+        let result = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+        );
         assert!(result.is_ok());
 
         let content = result.unwrap();

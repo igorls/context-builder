@@ -213,24 +213,22 @@ fn test_deterministic_output_multiple_runs() {
         "Should have found some file entries"
     );
 
-    // Check that files are sorted by relevance category (config → source → tests → docs)
-    // Within each category, files should be alphabetically sorted
-    // Category 0: Cargo.toml (config)
-    // Category 1: src/* (source code)
+    // Check that files are sorted by relevance category:
+    // Category 0: Cargo.toml (config), README.md (key project doc)
+    // Category 1: src/* (source code) — entry points first (lib.rs, main.rs before utils.rs)
     // Category 2: tests/* (tests)
-    // Category 3: docs/* (documentation)
     let expected_order = vec![
         "### File: `Cargo.toml`",
+        "### File: `docs/README.md`",
         "### File: `src/lib.rs`",
         "### File: `src/main.rs`",
         "### File: `src/utils.rs`",
         "### File: `tests/integration.rs`",
         "### File: `tests/unit.rs`",
-        "### File: `docs/README.md`",
     ];
     assert_eq!(
         file_lines, expected_order,
-        "Files should be listed in relevance order (config → source → tests → docs)"
+        "Files should be listed in relevance order (config+docs → source (entry points first) → tests)"
     );
 }
 #[test]

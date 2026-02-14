@@ -122,7 +122,11 @@ impl ProjectState {
                 // Fallback: try CWD if base_path has no file_name (e.g., root path)
                 std::env::current_dir()
                     .ok()
-                    .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+                    .and_then(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
+                    })
                     .unwrap_or_else(|| "unknown".to_string())
             });
 
@@ -220,8 +224,10 @@ impl ProjectState {
             config_str.push_str(&ignores.join(","));
         }
         config_str.push('|');
-        config_str.push_str(&format!("{:?}|{:?}|{:?}",
-            config.line_numbers, config.auto_diff, config.diff_context_lines));
+        config_str.push_str(&format!(
+            "{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines
+        ));
 
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
         format!("{:x}", hash)
@@ -247,8 +253,7 @@ impl FileState {
         };
 
         // Compute content hash using stable xxh3
-        let content_hash = format!("{:016x}",
-            xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
+        let content_hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
 
         Ok(FileState {
             content,

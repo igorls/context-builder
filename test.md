@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 5172ede1a852ae42
+Content hash: ec9892ac8132c02f
 
 ## File Tree Structure
 
@@ -45,6 +45,347 @@ Content hash: 5172ede1a852ae42
   - 📄 test_parallel_memory.rs
   - 📄 test_phase4_integration.rs
 
+
+### File: `AGENTS.md`
+
+- Size: 6816 bytes
+- Modified: 2026-02-14 07:24:34 UTC
+
+```markdown
+# AGENTS.md - AI Agent Instructions
+
+This file helps AI agents quickly understand and contribute to the Context Builder codebase.
+
+## Project Overview
+
+Context Builder is a **blazing-fast Rust CLI** for aggregating entire codebases into single, LLM-friendly markdown files. Published on [crates.io](https://crates.io/crates/context-builder) under MIT license.
+
+**If this is your first time:** Read this file, then run `cargo run -- --help` to see all options.
+
+---
+
+## Tech Stack
+
+| Technology | Usage |
+|---|---|
+| **Language** | Rust (Edition 2024) |
+| **Build** | Cargo (no npm/bun/node) |
+| **CLI** | `clap` (derive) |
+| **Parallelism** | `rayon` (optional, default on) + `crossbeam-channel` |
+| **Diffing** | `similar` (unified diffs) |
+| **File traversal** | `ignore` crate (gitignore-aware) |
+| **Token counting** | `tiktoken-rs` (`cl100k_base`) |
+| **Caching** | JSON + `fs2` file locking |
+| **Config** | TOML (`context-builder.toml`) |
+| **Encoding** | `encoding_rs` (transcoding non-UTF-8) |
+| **Logging** | `env_logger` |
+| **Branch** | `master` (not `main`) |
+
+---
+
+## Project Structure
+
+```
+context-builder/
+├── src/
+│   ├── main.rs              # Entry point — calls lib::run()
+│   ├── lib.rs               # Core orchestration, run_with_args(), Prompter trait, --init
+│   ├── cli.rs               # Args struct via clap derive
+│   ├── config.rs            # Config struct, TOML deserialization
+│   ├── config_resolver.rs   # Merges CLI args + TOML config (CLI > config > defaults)
+│   ├── file_utils.rs        # .gitignore-aware traversal, OverrideBuilder for custom ignores
+│   ├── tree.rs              # BTreeMap file tree (deterministic ordering)
+│   ├── state.rs             # ProjectState/FileState structured snapshots
+│   ├── markdown.rs          # Streaming file renderer, binary detection, encoding, parallel
+│   ├── cache.rs             # JSON-based caching with fs2 locking, old cache migration
+│   ├── diff.rs              # Per-file unified diffs via similar
+│   └── token_count.rs       # Real tokenization via tiktoken-rs (cl100k_base, lazy init)
+├── tests/                   # 10 integration test files
+├── benches/                 # Criterion benchmark suite
+├── scripts/                 # generate_samples.rs (benchmark dataset generator)
+├── context-builder.toml     # Project's own config file
+├── Cargo.toml               # Crate metadata, dependencies, features
+├── DEVELOPMENT.md           # Contributor guide
+├── BENCHMARKS.md            # Performance benchmarking guide
+├── CHANGELOG.md             # Release history
+└── .github/workflows/ci.yml # CI: fmt, clippy, build, test, security audit (ubuntu/win/macos)
+```
+
+---
+
+## Key Commands
+
+```bash
+# Build
+cargo build
+
+# Run
+cargo run -- --help
+cargo run -- -d . -o out.md -f rs -f toml
+cargo run -- --preview        # File tree only, no output
+cargo run -- --init           # Create config file with auto-detected filters
+
+# Test (MUST use single thread — tests share CWD)
+cargo test -- --test-threads=1
+
+# Lint (must pass -D warnings)
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Format
+cargo fmt --all
+```
+
+---
+
+## Key Design Patterns
+
+1. **`Prompter` trait** — Abstracts user confirmation (overwrite/processing). Tests use `MockPrompter`/`TestPrompter`. Never add stdin reads in library code.
+
+2. **Streaming writes** — `markdown.rs` processes files line-by-line for low memory. With `parallel` feature, uses crossbeam channels for concurrent processing.
+
+3. **Structured state** — v0.5.0 replaced fragile text-based cache parsing with JSON `ProjectState` snapshots for reliable auto-diff.
+
+4. **Deterministic output** — `BTreeMap` everywhere ensures identical output across runs.
+
+5. **Config precedence** — CLI args > TOML config > defaults, with explicit detection in `config_resolver.rs`.
+
+---
+
+## Feature Flags
+
+| Feature | Default | Purpose |
+|---|---|---|
+| `parallel` | ✅ | Rayon for parallel file processing |
+| `samples-bin` | ❌ | Exposes `generate_samples` binary for benchmarking |
+
+---
+
+## Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `CB_SILENT` | `"1"` suppresses user-facing prints (benchmarks set this) |
+| `CB_BENCH_MEDIUM` | `"1"` enables heavier benchmark datasets |
+| `CB_BENCH_DATASET_DIR` | External benchmark dataset root |
+| `RUST_LOG` | Controls `env_logger` verbosity (e.g., `RUST_LOG=info`) |
+
+---
+
+## Code Style Guidelines
+
+1. **Error handling** — Use `io::Result`. Prefer returning errors over panicking. `unwrap()`/`expect()` OK in tests, NOT in library code.
+2. **Cross-platform** — Normalize path separators in tests for string comparisons.
+3. **New CLI flags** — Add in `cli.rs`, update tests in same file, propagate through `run_with_args`.
+4. **Language detection** — Keep simple and deterministic; add mappings in one place.
+5. **Binary detection** — Lightweight: NUL byte check + UTF-8 validity.
+6. **Logging** — Use `log::{info, warn, error}`. Let `env_logger` control emission.
+
+---
+
+## Test Organization
+
+- **Unit tests**: Inline `#[cfg(test)]` modules in every source file
+- **Integration tests** (10 files in `tests/`):
+  - `test_auto_diff.rs` — Auto-diff workflow (largest test file)
+  - `test_determinism.rs` — Output determinism verification
+  - `test_config_resolution.rs` — CLI/config merge behavior
+  - `test_cwd_independence.rs` — Path independence
+  - `test_comprehensive_edge_cases.rs` — Edge cases
+  - `cli_integration.rs` — End-to-end CLI tests
+  - `test_binary_file_autodiff.rs`, `test_parallel_memory.rs`, `test_phase4_integration.rs`, `diff_integration.rs`
+- **Benchmarks**: Criterion suite at `benches/context_bench.rs`
+
+**Critical:** Tests MUST run with `--test-threads=1` (CI enforces this). Many tests use `set_current_dir()` which is process-global. Use `#[serial]` attribute where order matters.
+
+---
+
+## Known Hazards
+
+- **Year in tests**: Watch for hardcoded year strings in timestamp assertions. Use dynamic `Utc::now().format("%Y")` instead.
+- **CWD mutation**: Tests that `set_current_dir()` must restore the original directory in all code paths (including panics).
+- **Config from CWD**: `load_config()` reads from CWD. `load_config_from_path()` reads from explicit root. Prefer the latter in tests.
+- **Cache collisions**: Cache keys are project-path + config hash. Different configs = different cache files.
+
+---
+
+## Release Process
+
+1. `cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings && cargo test -- --test-threads=1`
+2. Bump `version` in `Cargo.toml`, add entry to `CHANGELOG.md`
+3. `git commit -am "chore(release): vX.Y.Z" && git tag vX.Y.Z && git push && git push --tags`
+4. `cargo publish`
+```
+
+### File: `CHANGELOG.md`
+
+- Size: 8052 bytes
+- Modified: 2026-02-14 19:59:56 UTC
+
+```markdown
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## v0.7.0
+
+- **Deterministic Output**
+  - Replaced volatile timestamp (`Processed at: <timestamp>`) with a content hash (`Content hash: <hex>`) in the Markdown header
+  - Identical project states now produce byte-for-byte identical output files, enabling LLM prompt caching
+
+- **Context Budgeting (`--max-tokens N`)**
+  - New CLI argument `--max-tokens` and `context-builder.toml` config option to cap the output token budget
+  - Files are processed until the budget is exhausted, with a `<truncated>` marker appended
+  - Prevents API errors from excessively large contexts and reduces costs
+
+- **Relevance-Based File Ordering**
+  - Files are now sorted by relevance category: config files (0) → source code (1) → tests (2) → docs/other (3)
+  - Within each category, files remain alphabetically sorted
+  - Helps LLMs prioritize core logic and configuration over supporting files
+
+## v0.6.1
+
+- **Bug Fixes** (identified by Gemini Deep Think code review)
+  - Fixed TOCTOU race in cache writes: `File::create` was truncating before acquiring lock, risking data loss for concurrent readers
+  - Fixed indentation destruction in `diff_only` mode: `trim_start()` was stripping all leading whitespace from added files, corrupting Python/YAML
+  - Fixed UTF-8 boundary corruption: 8KB sniff buffer could split multi-byte characters, misclassifying valid UTF-8 files as binary
+  - Fixed CLI flags silently overwritten: config file values were unconditionally overriding CLI arguments post-resolution
+  - Removed duplicate file seek block (copy-paste error)
+
+## v0.6.0
+
+- **Smart Defaults**
+  - Auto-exclude output files: the tool now automatically excludes its own generated output file, output folder, and `.context-builder/` cache directory from context collection without requiring manual `--ignore` flags
+  - Timestamped output glob patterns (e.g., `docs/context_*.md`) are auto-excluded when `timestamped_output` is enabled
+  - Large-file detection: warns about files exceeding 100 KB with a sorted top-5 list and total context size summary
+  - Improved project name detection: canonicalizes relative paths (like `.`) to resolve the actual directory name instead of showing "unknown"
+
+- **Testing & Stability**
+  - Added `#[serial]` annotations to integration tests that mutate CWD, fixing intermittent test failures in parallel execution
+  - All 146 tests pass consistently with `--test-threads=1`
+
+- **Dependencies**
+  - Updated `criterion` to 0.8.2
+  - Updated `tiktoken-rs` to 0.9.1
+  - Updated `toml` to 1.0.1
+
+## v0.5.2
+
+- Enhanced `--init` command to detect major file types in the current directory and suggest appropriate filters instead of using generic defaults
+- Fixed file type detection to respect .gitignore patterns and common ignore directories (target, node_modules, etc.)
+
+## v0.5.1
+
+- Added `--init` command to create a new `context-builder.toml` configuration file in the current directory with sensible defaults
+
+## v0.5.0
+
+- **BREAKING CHANGES**
+  - Cache file locations changed to project-specific paths to prevent collisions
+
+- **Critical Bug Fixes**
+  - **Fixed inverted ignore logic**: Corrected critical bug where ignore patterns were being treated as include patterns, causing files/directories meant to be ignored to be explicitly included instead
+  - **Fixed cache read panics**: Improved error handling for corrupted cache files to prevent application crashes
+  - **Fixed potential panics in path manipulation**: Added safe handling for edge case filenames without extensions or stems
+
+- **Major Improvements**
+  - **Deterministic Output**: Files are now sorted consistently, ensuring identical output for the same input across multiple runs
+  - **Robust Caching Architecture**: Complete rewrite of caching system with:
+    - Project-specific cache keys based on absolute path hash to prevent collisions
+    - JSON-based structured caching replacing fragile markdown parsing
+    - File locking with `fs2` crate for thread-safe concurrent access
+    - Configuration changes now properly invalidate cache
+  - **Enhanced Auto-Diff System**:
+    - Structured state representation before markdown generation
+    - Eliminated fragile text parsing with `extract_file_contents` and `strip_line_number` functions
+    - Cache structured data (JSON) instead of markdown for reliability
+  - **Thread Safety**: Removed all `unsafe` blocks and explicit configuration passing replaces environment variables
+
+- **Performance Optimizations**
+  - **Custom Ignores**: Now uses `ignore::overrides::OverrideBuilder` with glob pattern support for better performance
+  - **Parallel Processing**: Improved error handling to collect all errors and continue processing other files
+  - **Directory Traversal**: Let `ignore` crate optimize directory traversal instead of custom logic
+
+- **Bug Fixes**
+  - Fixed non-deterministic output order that caused inconsistent LLM context generation
+  - Removed incorrect triple-backtick filtering in diff logic that was corrupting file content
+  - Fixed cache corruption issues in concurrent access scenarios
+  - Improved error recovery for partial failures and corrupted cache
+  - Fixed inconsistent file tree visualization between auto-diff and standard modes
+
+- **Testing & Quality**
+  - Added comprehensive integration test suite with tests covering:
+    - Determinism verification
+    - Auto-diff workflows
+    - Cache collision prevention
+    - Configuration change detection
+    - Error recovery scenarios
+  - Fixed test race conditions by running tests serially in CI (`--test-threads=1`)
+  - Added `pretty_assertions` for better test output
+  - Fixed all clippy warnings and enforced `-D warnings` in CI
+
+- **Dependencies**
+  - Added `fs2` for file locking
+  - Added `serde_json` for structured cache format
+  - Added `serial_test` for test serialization
+  - Added `pretty_assertions` for enhanced test output
+  - Added `encoding_rs` for enhanced encoding detection and transcoding
+
+- **Migration**
+  - Automatic detection and cleanup of old markdown-based cache files (`last_canonical.md`, etc.)
+  - First run after upgrade will clear old cache format to prevent conflicts
+  - CLI interface remains fully backward compatible
+
+- **Code Quality & Maintenance**
+  - Fixed all clippy warnings including type complexity, collapsible if statements, and redundant closures
+  - Updated CI workflow to prevent race conditions in tests
+  - Improved binary file detection with better encoding strategy handling
+  - Enhanced error handling for edge cases and file system operations
+
+## v0.4.0
+
+
+- Added
+
+  - Token count mode (`--token-count`) now provides accurate token counts using the `tiktoken-rs` library.
+
+  - Configuration file support (`context-builder.toml`) for project-specific settings.
+
+  - Timestamped output versions.
+
+  - `auto_diff` feature to automatically generate a diff from the latest output.
+  - `diff_only` mode (`--diff-only` / `diff_only = true`) to output only the change summary and modified file diffs (no full file bodies) for lower token usage.
+
+- Removed
+  - Deprecated, unpublished `standalone_snapshot` option (replaced by `diff_only`).
+
+
+## v0.3.0
+
+- Changed
+  - Parallel processing is now enabled by default via the `parallel` feature (uses `rayon`) for significant speedups on large projects.
+    - To build/run sequentially, disable default features:
+      - CLI/build: `cargo build --no-default-features` or `cargo run --no-default-features`
+      - As a dependency: `default-features = false`
+  - Updated Rust edition to 2024.
+
+- Benchmarks
+  - Benchmarks run silent by default by setting `CB_SILENT=1` at startup to avoid skewing timings with console I/O.
+    - Override with `CB_SILENT=0` if you want to see output during benches.
+
+## v0.2.0
+
+- Added line numbers support
+- Improved file tree visualization
+- Enhanced error handling
+- Better CLI argument validation
+
+## v0.1.0
+
+- Initial release
+- Basic directory processing
+- File filtering and ignoring
+- Markdown output generation
+```
 
 ### File: `Cargo.toml`
 
@@ -106,6 +447,1706 @@ harness = false
 name = "generate_samples"
 path = "scripts/generate_samples.rs"
 required-features = ["samples-bin"]
+```
+
+### File: `README.md`
+
+- Size: 9822 bytes
+- Modified: 2026-02-14 07:14:48 UTC
+
+```markdown
+<div align="center">
+
+# Context Builder
+
+A blazing-fast CLI for creating LLM context from your entire codebase.
+
+[![Crates.io](https://img.shields.io/crates/v/context-builder.svg)](https://crates.io/crates/context-builder)
+![Crates.io Size](https://img.shields.io/crates/size/context-builder)
+![Deps.rs Crate Dependencies (latest)](https://img.shields.io/deps-rs/context-builder/latest)
+![Crates.io Total Downloads](https://img.shields.io/crates/d/context-builder)
+
+</div>
+
+<div align="center">
+
+[![Coverage Status](https://coveralls.io/repos/github/igorls/context-builder/badge.svg?branch=master)](https://coveralls.io/github/igorls/context-builder?branch=master)
+[![CI](https://github.com/igorls/context-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/igorls/context-builder/actions/workflows/ci.yml)
+![docs.rs](https://img.shields.io/docsrs/context-builder)
+
+</div>
+
+<div align="center">
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/igorls/context-builder/blob/main/LICENSE)
+
+</div>
+
+<br/>
+
+Tired of manually copy-pasting files into your LLM prompts? Context Builder automates this tedious process, creating a single, clean, and context-rich markdown file from any directory.
+
+---
+
+## Why Context Builder?
+
+Providing broad context to Large Language Models (LLMs) is key to getting high-quality, relevant responses. This tool was built to solve one problem exceptionally well: **packaging your project's source code into a clean, LLM-friendly format with zero fuss.**
+
+It's a command-line utility that recursively processes directories and creates comprehensive markdown documentation, optimized for AI conversations.
+
+## Core Features
+
+
+- ⚡ **Blazing Fast & Parallel by Default:**
+  Processes thousands of files in seconds by leveraging all available CPU cores.
+
+- 🧠 **Smart & Efficient File Discovery:**
+  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
+
+- 💾 **Memory-Efficient Streaming:**
+  Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
+
+- 🌳 **Clear File Tree Visualization:**
+  Generates an easy-to-read directory structure at the top of the output file.
+
+- 🔍 **Powerful Filtering & Preview:**
+  Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
+
+
+
+ - ⚙️ **Configuration-First:**
+
+
+  Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs. Initialize a new config file with `--init`, which will detect the major file types in your project (respecting `.gitignore` patterns) and suggest appropriate filters.
+
+
+
+
+- 🔁 **Automatic Per-File Diffs:**
+  When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
+
+- ✂️ **Diff-Only Mode:**
+  Output only the change summary and modified file diffs—no full file bodies—to minimize token usage.
+
+- 🧪 **Accurate Token Counting:**
+  Get real tokenizer–based estimates with `--token-count` to plan your prompt budgets.
+
+
+---
+
+## Installation
+
+### From crates.io (Recommended)
+
+```bash
+cargo install context-builder
+```
+
+
+### If you don't have Rust installed
+
+Context Builder is distributed via crates.io. We do not ship pre-built binaries yet, so you need a Rust toolchain.
+
+
+#### Quick install (Linux/macOS):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+Follow the prompt, then restart your shell
+
+#### Windows: https://www.rust-lang.org/tools/install
+
+After installation, ensure Cargo is on your PATH:
+
+```bash
+cargo --version
+```
+
+Then install Context Builder:
+```bash
+cargo install context-builder
+```
+
+Update later with:
+```bash
+cargo install context-builder --force
+```
+
+### From source
+
+```bash
+git clone https://github.com/igorls/context-builder.git
+cd context-builder
+cargo install --path .
+```
+
+---
+
+## Usage
+
+### Basic Usage
+
+
+
+ # Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
+
+ context-builder --init
+
+
+
+# Process current directory and create output.md
+context-builder
+
+# Process a specific directory
+context-builder -d /path/to/project
+
+# Specify an output file
+context-builder -d /path/to/project -o documentation.md
+```
+
+### Advanced Options
+
+```bash
+# Filter by file extensions (e.g., only Rust and TOML files)
+context-builder -f rs -f toml
+
+# Ignore specific folders/files by name
+context-builder -i target -i node_modules -i .git
+
+# Preview mode (shows the file tree without generating output)
+context-builder --preview
+
+# Token count mode (accurately count the total token count of the final document using a real tokenizer.)
+context-builder --token-count
+
+# Add line numbers to all code blocks
+context-builder --line-numbers
+
+# Skip all confirmation prompts (auto-answer yes)
+context-builder --yes
+
+# Output only diffs (requires auto-diff & timestamped output)
+context-builder --diff-only
+
+
+# Clear cached project state (resets auto-diff baseline & removes stored state)
+
+context-builder --clear-cache
+
+# Combine multiple options for a powerful workflow
+context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.md
+```
+
+---
+
+## Configuration
+
+For more complex projects, you can use a `context-builder.toml` file in your project's root directory to store your preferences. This is great for ensuring consistent outputs and avoiding repetitive command-line flags.
+
+### Example `context-builder.toml`
+
+```toml
+# Default output file name
+output = "context.md"
+
+# Default output folder
+output_folder = "docs/context"
+
+# Create timestamped versions of the output file (e.g., context_20250912123000.md)
+timestamped_output = true
+
+# Automatically compute per-file diffs against the previous timestamped snapshot
+auto_diff = true
+
+# Emit only change summary + modified file diffs (omit full file bodies)
+# Set to true to greatly reduce token usage when you just need what's changed.
+diff_only = false
+
+# Number of context lines to show around changes in diffs (default: 3)
+diff_context_lines = 5
+
+# File extensions to include
+filter = ["rs", "toml", "md"]
+
+# Folders or file names to ignore
+ignore = ["target", "node_modules", ".git"]
+
+# Add line numbers to code blocks
+line_numbers = true
+
+# Preview mode: only show file tree without generating output
+preview = false
+
+# Token counting mode
+token_count = false
+
+
+# Automatically answer yes to all prompts
+
+yes = false
+
+
+
+# Encoding handling strategy for non-UTF-8 files
+
+# Options: "detect" (default), "strict", "skip"
+
+encoding_strategy = "detect"
+
+```
+
+
+
+ You can initialize a new configuration file using the `--init` command. This will create a `context-builder.toml` file in your current directory with sensible defaults based on the file types detected in your project. The filter suggestions will be automatically tailored to your project's most common file extensions while respecting `.gitignore` patterns and common ignore directories like `target`, `node_modules`, etc. This makes it more likely to include the files you actually want to process.
+
+
+
+---
+
+## Auto-diff
+
+When using `timestamped_output = true` together with `auto_diff = true`, Context Builder compares the previous canonical snapshot to the newly generated one and produces:
+
+- A Change Summary (Added / Removed / Modified files)
+- A File Differences section containing only modified files (added & removed are summarized but not diffed)
+
+If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files” section is omitted to conserve tokens: you get just the header + tree, the Change Summary, and per-file diffs for modified files.
+
+**Note:** Command-line arguments will always override the settings in the configuration file.
+
+### Command Line Options
+
+- `-d, --input <PATH>` - Directory path to process (default: current directory).
+- `-o, --output <FILE>` - Output file path (default: `output.md`).
+- `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
+- `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
+- `--preview` - Preview mode: only show the file tree, don't generate output.
+- `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
+- `--line-numbers` - Add line numbers to code blocks in the output.
+- `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
+- `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
+- `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
+- `-h, --help` - Show help information.
+- `-V, --version` - Show version information.
+---
+
+## Token Counting
+
+Context Builder uses the `tiktoken-rs` library to provide accurate token counts for OpenAI models. This ensures that the token count is as close as possible to the actual number of tokens that will be used by the model.
+
+---
+
+## Documentation
+
+- **[DEVELOPMENT.md](DEVELOPMENT.md):** For contributors. Covers setup, testing, linting, and release process.
+- **[BENCHMARKS.md](BENCHMARKS.md):** For performance enthusiasts. Details on running benchmarks and generating datasets.
+- **[CHANGELOG.md](CHANGELOG.md):** A complete history of releases and changes.
+
+## Contributing
+
+Contributions are welcome! Please see **[DEVELOPMENT.md](DEVELOPMENT.md)** for setup instructions and guidelines. For major changes, please open an issue first to discuss what you would like to change.
+
+## Changelog
+
+See **[CHANGELOG.md](CHANGELOG.md)** for a complete history of releases and changes.
+
+## License
+
+This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** file for details.
+```
+
+### File: `src/lib.rs`
+
+- Size: 46860 bytes
+- Modified: 2026-02-14 22:41:02 UTC
+
+```rust
+use clap::{CommandFactory, Parser};
+
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+pub mod cache;
+pub mod cli;
+pub mod config;
+pub mod config_resolver;
+pub mod diff;
+pub mod file_utils;
+pub mod markdown;
+pub mod state;
+pub mod token_count;
+pub mod tree;
+
+use std::fs::File;
+
+use cache::CacheManager;
+use cli::Args;
+use config::{Config, load_config_from_path};
+use diff::render_per_file_diffs;
+use file_utils::{collect_files, confirm_overwrite, confirm_processing};
+use markdown::generate_markdown;
+use state::{ProjectState, StateComparison};
+use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
+use tree::{build_file_tree, print_tree};
+
+/// Configuration for diff operations
+#[derive(Debug, Clone)]
+pub struct DiffConfig {
+    pub context_lines: usize,
+    pub enabled: bool,
+    pub diff_only: bool,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self {
+            context_lines: 3,
+            enabled: false,
+            diff_only: false,
+        }
+    }
+}
+
+pub trait Prompter {
+    fn confirm_processing(&self, file_count: usize) -> io::Result<bool>;
+    fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool>;
+}
+
+pub struct DefaultPrompter;
+
+impl Prompter for DefaultPrompter {
+    fn confirm_processing(&self, file_count: usize) -> io::Result<bool> {
+        confirm_processing(file_count)
+    }
+    fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool> {
+        confirm_overwrite(file_path)
+    }
+}
+
+pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
+    let start_time = Instant::now();
+
+    let silent = std::env::var("CB_SILENT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    // Use the finalized args passed in from run()
+    let final_args = args;
+    // Resolve base path. If input is '.' but current working directory lost the project context
+    // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
+    let mut resolved_base = PathBuf::from(&final_args.input);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if resolved_base == Path::new(".")
+        && !cwd.join("context-builder.toml").exists()
+        && let Some(output_parent) = Path::new(&final_args.output).parent()
+        && output_parent
+            .file_name()
+            .map(|n| n == "output")
+            .unwrap_or(false)
+        && let Some(project_root) = output_parent.parent()
+        && project_root.join("context-builder.toml").exists()
+    {
+        resolved_base = project_root.to_path_buf();
+    }
+    let base_path = resolved_base.as_path();
+
+    if !base_path.exists() || !base_path.is_dir() {
+        if !silent {
+            eprintln!(
+                "Error: The specified input directory '{}' does not exist or is not a directory.",
+                final_args.input
+            );
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "Input directory '{}' does not exist or is not a directory",
+                final_args.input
+            ),
+        ));
+    }
+
+    // Create diff configuration from config
+    let diff_config = if config.auto_diff.unwrap_or(false) {
+        Some(DiffConfig {
+            context_lines: config.diff_context_lines.unwrap_or(3),
+            enabled: true,
+            diff_only: final_args.diff_only,
+        })
+    } else {
+        None
+    };
+
+    if !final_args.preview
+        && !final_args.token_count
+        && Path::new(&final_args.output).exists()
+        && !final_args.yes
+        && !prompter.confirm_overwrite(&final_args.output)?
+    {
+        if !silent {
+            println!("Operation cancelled.");
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Operation cancelled by user",
+        ));
+    }
+
+    // Compute auto-ignore patterns to exclude the tool's own output and cache
+    let mut auto_ignores: Vec<String> = vec![".context-builder".to_string()];
+
+    // Exclude the resolved output file (or its timestamped glob pattern)
+    let output_path = Path::new(&final_args.output);
+    if let Ok(rel_output) = output_path.strip_prefix(base_path) {
+        // Output is inside the project — exclude it
+        if config.timestamped_output == Some(true) {
+            // Timestamped outputs: create a glob like "docs/context_*.md"
+            if let (Some(parent), Some(stem), Some(ext)) = (
+                rel_output.parent(),
+                output_path.file_stem().and_then(|s| s.to_str()),
+                output_path.extension().and_then(|s| s.to_str()),
+            ) {
+                // Strip the timestamp suffix to get the base stem
+                // Timestamped names look like "context_20260214175028.md"
+                // The stem from config is the part before the timestamp
+                let base_stem = if let Some(ref cfg_output) = config.output {
+                    Path::new(cfg_output)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(stem)
+                        .to_string()
+                } else {
+                    stem.to_string()
+                };
+                let glob = if parent == Path::new("") {
+                    format!("{}_*.{}", base_stem, ext)
+                } else {
+                    format!("{}/{}_*.{}", parent.display(), base_stem, ext)
+                };
+                auto_ignores.push(glob);
+            }
+        } else {
+            // Non-timestamped: exclude the exact output file
+            auto_ignores.push(rel_output.to_string_lossy().to_string());
+        }
+    } else {
+        // Output might be a relative path not under base_path — try using it directly
+        let output_str = final_args.output.clone();
+        if config.timestamped_output == Some(true) {
+            if let (Some(stem), Some(ext)) = (
+                output_path.file_stem().and_then(|s| s.to_str()),
+                output_path.extension().and_then(|s| s.to_str()),
+            ) {
+                let base_stem = if let Some(ref cfg_output) = config.output {
+                    Path::new(cfg_output)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(stem)
+                        .to_string()
+                } else {
+                    stem.to_string()
+                };
+                if let Some(parent) = output_path.parent() {
+                    let parent_str = parent.to_string_lossy();
+                    if parent_str.is_empty() || parent_str == "." {
+                        auto_ignores.push(format!("{}_*.{}", base_stem, ext));
+                    } else {
+                        auto_ignores.push(format!("{}/{}_*.{}", parent_str, base_stem, ext));
+                    }
+                }
+            }
+        } else {
+            auto_ignores.push(output_str);
+        }
+    }
+
+    // Also exclude the output folder itself if configured
+    if let Some(ref output_folder) = config.output_folder {
+        auto_ignores.push(output_folder.clone());
+    }
+
+    let files = collect_files(
+        base_path,
+        &final_args.filter,
+        &final_args.ignore,
+        &auto_ignores,
+    )?;
+    let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
+    if debug_config {
+        eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
+        eprintln!("[DEBUG][CONFIG] Raw Config: {:?}", config);
+        eprintln!("[DEBUG][CONFIG] Auto-ignores: {:?}", auto_ignores);
+        eprintln!("[DEBUG][CONFIG] Collected {} files", files.len());
+        for f in &files {
+            eprintln!("[DEBUG][CONFIG]  - {}", f.path().display());
+        }
+    }
+
+    // Smart large-file detection: warn about files that may bloat the context
+    if !silent {
+        const LARGE_FILE_THRESHOLD: u64 = 100 * 1024; // 100 KB
+        let mut large_files: Vec<(String, u64)> = Vec::new();
+        let mut total_size: u64 = 0;
+
+        for entry in &files {
+            if let Ok(metadata) = entry.path().metadata() {
+                let size = metadata.len();
+                total_size += size;
+                if size > LARGE_FILE_THRESHOLD {
+                    let rel_path = entry
+                        .path()
+                        .strip_prefix(base_path)
+                        .unwrap_or(entry.path())
+                        .to_string_lossy()
+                        .to_string();
+                    large_files.push((rel_path, size));
+                }
+            }
+        }
+
+        if !large_files.is_empty() {
+            large_files.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by size descending
+            eprintln!(
+                "\n⚠  {} large file(s) detected (>{} KB):",
+                large_files.len(),
+                LARGE_FILE_THRESHOLD / 1024
+            );
+            for (path, size) in large_files.iter().take(5) {
+                eprintln!("   {:>8} KB  {}", size / 1024, path);
+            }
+            if large_files.len() > 5 {
+                eprintln!("   ... and {} more", large_files.len() - 5);
+            }
+            eprintln!(
+                "   Total context size: {} KB across {} files\n",
+                total_size / 1024,
+                files.len()
+            );
+        }
+    }
+    let file_tree = build_file_tree(&files, base_path);
+
+    if final_args.preview {
+        if !silent {
+            println!("\n# File Tree Structure (Preview)\n");
+            print_tree(&file_tree, 0);
+        }
+        if !final_args.token_count {
+            return Ok(());
+        }
+    }
+
+    if final_args.token_count {
+        if !silent {
+            println!("\n# Token Count Estimation\n");
+            let mut total_tokens = 0;
+            total_tokens += estimate_tokens("# Directory Structure Report\n\n");
+            if !final_args.filter.is_empty() {
+                total_tokens += estimate_tokens(&format!(
+                    "This document contains files from the `{}` directory with extensions: {} \n",
+                    final_args.input,
+                    final_args.filter.join(", ")
+                ));
+            } else {
+                total_tokens += estimate_tokens(&format!(
+                    "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
+                    final_args.input
+                ));
+            }
+            if !final_args.ignore.is_empty() {
+                total_tokens += estimate_tokens(&format!(
+                    "Custom ignored patterns: {} \n",
+                    final_args.ignore.join(", ")
+                ));
+            }
+            total_tokens += estimate_tokens("Content hash: 0000000000000000\n\n");
+            total_tokens += estimate_tokens("## File Tree Structure\n\n");
+            let tree_tokens = count_tree_tokens(&file_tree, 0);
+            total_tokens += tree_tokens;
+            let file_tokens: usize = files
+                .iter()
+                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers))
+                .sum();
+            total_tokens += file_tokens;
+            println!("Estimated total tokens: {}", total_tokens);
+            println!("File tree tokens: {}", tree_tokens);
+            println!("File content tokens: {}", file_tokens);
+        }
+        return Ok(());
+    }
+
+    if !final_args.yes && !prompter.confirm_processing(files.len())? {
+        if !silent {
+            println!("Operation cancelled.");
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Operation cancelled by user",
+        ));
+    }
+
+    // NOTE: config-driven flags (line_numbers, diff_only) are already merged
+    // by config_resolver.rs with proper CLI-takes-precedence semantics.
+    // Do NOT re-apply them here as that would silently overwrite CLI flags.
+
+    if config.auto_diff.unwrap_or(false) {
+        // Build an effective config that mirrors the *actual* operational settings coming
+        // from resolved CLI args (filters/ignores/line_numbers). This ensures the
+        // configuration hash used for cache invalidation reflects real behavior and
+        // stays consistent across runs even when values originate from CLI not file.
+        let mut effective_config = config.clone();
+        // Normalize filter/ignore/line_numbers into config so hashing sees them
+        if !final_args.filter.is_empty() {
+            effective_config.filter = Some(final_args.filter.clone());
+        }
+        if !final_args.ignore.is_empty() {
+            effective_config.ignore = Some(final_args.ignore.clone());
+        }
+        effective_config.line_numbers = Some(final_args.line_numbers);
+
+        // 1. Create current project state
+        let current_state = ProjectState::from_files(
+            &files,
+            base_path,
+            &effective_config,
+            final_args.line_numbers,
+        )?;
+
+        // 2. Initialize cache manager and load previous state
+        let cache_manager = CacheManager::new(base_path, &effective_config);
+        let previous_state = match cache_manager.read_cache() {
+            Ok(state) => state,
+            Err(e) => {
+                if !silent {
+                    eprintln!(
+                        "Warning: Failed to read cache (proceeding without diff): {}",
+                        e
+                    );
+                }
+                None
+            }
+        };
+
+        let diff_cfg = diff_config.as_ref().unwrap();
+
+        // 3. Determine whether we should invalidate (ignore) previous state
+        let effective_previous = if let Some(prev) = previous_state.as_ref() {
+            if prev.config_hash != current_state.config_hash {
+                // Config change => treat as initial state (invalidate diff)
+                None
+            } else {
+                Some(prev)
+            }
+        } else {
+            None
+        };
+
+        // 4. Compare states and generate diff if an effective previous state exists
+        let comparison = effective_previous.map(|prev| current_state.compare_with(prev));
+
+        let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
+        if debug_autodiff {
+            eprintln!(
+                "[DEBUG][AUTODIFF] cache file: {}",
+                cache_manager.debug_cache_file_path().display()
+            );
+            eprintln!(
+                "[DEBUG][AUTODIFF] config_hash current={} prev={:?} invalidated={}",
+                current_state.config_hash,
+                previous_state.as_ref().map(|s| s.config_hash.clone()),
+                effective_previous.is_none() && previous_state.is_some()
+            );
+            eprintln!("[DEBUG][AUTODIFF] effective_config: {:?}", effective_config);
+            if let Some(prev) = previous_state.as_ref() {
+                eprintln!("[DEBUG][AUTODIFF] raw previous files: {}", prev.files.len());
+            }
+            if let Some(prev) = effective_previous {
+                eprintln!(
+                    "[DEBUG][AUTODIFF] effective previous files: {}",
+                    prev.files.len()
+                );
+                for k in prev.files.keys() {
+                    eprintln!("  PREV: {}", k.display());
+                }
+            }
+            eprintln!(
+                "[DEBUG][AUTODIFF] current files: {}",
+                current_state.files.len()
+            );
+            for k in current_state.files.keys() {
+                eprintln!("  CURR: {}", k.display());
+            }
+        }
+
+        // Build relevance-sorted path list from the DirEntry list (which is
+        // already sorted by file_relevance_category). This preserves ordering
+        // instead of using BTreeMap's alphabetical iteration.
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|entry| {
+                entry
+                    .path()
+                    .strip_prefix(base_path)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| {
+                        entry
+                            .path()
+                            .file_name()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| entry.path().to_path_buf())
+                    })
+            })
+            .collect();
+
+        // 4. Generate markdown with diff annotations
+        let final_doc = generate_markdown_with_diff(
+            &current_state,
+            comparison.as_ref(),
+            &final_args,
+            &file_tree,
+            diff_cfg,
+            &sorted_paths,
+        )?;
+
+        // 5. Write output
+        let output_path = Path::new(&final_args.output);
+        if let Some(parent) = output_path.parent()
+            && !parent.exists()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            return Err(io::Error::other(format!(
+                "Failed to create output directory {}: {}",
+                parent.display(),
+                e
+            )));
+        }
+        let mut final_output = fs::File::create(output_path)?;
+        final_output.write_all(final_doc.as_bytes())?;
+
+        // 6. Update cache with current state
+        if let Err(e) = cache_manager.write_cache(&current_state)
+            && !silent
+        {
+            eprintln!("Warning: failed to update state cache: {}", e);
+        }
+
+        let duration = start_time.elapsed();
+        if !silent {
+            if let Some(comp) = &comparison {
+                if comp.summary.has_changes() {
+                    println!(
+                        "Documentation created successfully with {} changes: {}",
+                        comp.summary.total_changes, final_args.output
+                    );
+                } else {
+                    println!(
+                        "Documentation created successfully (no changes detected): {}",
+                        final_args.output
+                    );
+                }
+            } else {
+                println!(
+                    "Documentation created successfully (initial state): {}",
+                    final_args.output
+                );
+            }
+            println!("Processing time: {:.2?}", duration);
+        }
+        return Ok(());
+    }
+
+    // Standard (non auto-diff) generation
+    generate_markdown(
+        &final_args.output,
+        &final_args.input,
+        &final_args.filter,
+        &final_args.ignore,
+        &file_tree,
+        &files,
+        base_path,
+        final_args.line_numbers,
+        config.encoding_strategy.as_deref(),
+        final_args.max_tokens,
+    )?;
+
+    let duration = start_time.elapsed();
+    if !silent {
+        println!("Documentation created successfully: {}", final_args.output);
+        println!("Processing time: {:.2?}", duration);
+    }
+
+    Ok(())
+}
+
+/// Generate markdown document with diff annotations
+fn generate_markdown_with_diff(
+    current_state: &ProjectState,
+    comparison: Option<&StateComparison>,
+    args: &Args,
+    file_tree: &tree::FileTree,
+    diff_config: &DiffConfig,
+    sorted_paths: &[PathBuf],
+) -> io::Result<String> {
+    let mut output = String::new();
+
+    // Header
+    output.push_str("# Directory Structure Report\n\n");
+
+    // Basic project info
+    output.push_str(&format!(
+        "**Project:** {}\n",
+        current_state.metadata.project_name
+    ));
+    output.push_str(&format!("**Generated:** {}\n", current_state.timestamp));
+
+    if !args.filter.is_empty() {
+        output.push_str(&format!("**Filters:** {}\n", args.filter.join(", ")));
+    }
+
+    if !args.ignore.is_empty() {
+        output.push_str(&format!("**Ignored:** {}\n", args.ignore.join(", ")));
+    }
+
+    output.push('\n');
+
+    // Change summary + sections if we have a comparison
+    if let Some(comp) = comparison {
+        if comp.summary.has_changes() {
+            output.push_str(&comp.summary.to_markdown());
+
+            // Collect added files once so we can reuse for both diff_only logic and potential numbering.
+            let added_files: Vec<_> = comp
+                .file_diffs
+                .iter()
+                .filter(|d| matches!(d.status, diff::PerFileStatus::Added))
+                .collect();
+
+            if diff_config.diff_only && !added_files.is_empty() {
+                output.push_str("## Added Files\n\n");
+                for added in added_files {
+                    output.push_str(&format!("### File: `{}`\n\n", added.path));
+                    output.push_str("_Status: Added_\n\n");
+                    // Reconstruct content from + lines.
+                    let mut lines: Vec<String> = Vec::new();
+                    for line in added.diff.lines() {
+                        if let Some(rest) = line.strip_prefix('+') {
+                            lines.push(rest.to_string());
+                        }
+                    }
+                    output.push_str("```text\n");
+                    if args.line_numbers {
+                        for (idx, l) in lines.iter().enumerate() {
+                            output.push_str(&format!("{:>4} | {}\n", idx + 1, l));
+                        }
+                    } else {
+                        for l in lines {
+                            output.push_str(&l);
+                            output.push('\n');
+                        }
+                    }
+                    output.push_str("```\n\n");
+                }
+            }
+
+            // Always include a unified diff section header so downstream tooling/tests can rely on it
+            let changed_diffs: Vec<diff::PerFileDiff> = comp
+                .file_diffs
+                .iter()
+                .filter(|d| d.is_changed())
+                .cloned()
+                .collect();
+            if !changed_diffs.is_empty() {
+                output.push_str("## File Differences\n\n");
+                let diff_markdown = render_per_file_diffs(&changed_diffs);
+                output.push_str(&diff_markdown);
+            }
+        } else {
+            output.push_str("## No Changes Detected\n\n");
+        }
+    }
+
+    // File tree
+    output.push_str("## File Tree Structure\n\n");
+    let mut tree_output = Vec::new();
+    tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
+    output.push_str(&String::from_utf8_lossy(&tree_output));
+    output.push('\n');
+
+    // File contents (unless diff_only mode)
+    if !diff_config.diff_only {
+        output.push_str("## File Contents\n\n");
+
+        // Iterate in relevance order (from sorted_paths) instead of
+        // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
+        for path in sorted_paths {
+            if let Some(file_state) = current_state.files.get(path) {
+                output.push_str(&format!("### File: `{}`\n\n", path.display()));
+                output.push_str(&format!("- Size: {} bytes\n", file_state.size));
+                output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+
+                // Determine language from file extension
+                let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
+                let language = match extension {
+                    "rs" => "rust",
+                    "js" => "javascript",
+                    "ts" => "typescript",
+                    "py" => "python",
+                    "json" => "json",
+                    "toml" => "toml",
+                    "md" => "markdown",
+                    "yaml" | "yml" => "yaml",
+                    "html" => "html",
+                    "css" => "css",
+                    _ => extension,
+                };
+
+                output.push_str(&format!("```{}\n", language));
+
+                if args.line_numbers {
+                    for (i, line) in file_state.content.lines().enumerate() {
+                        output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                    }
+                } else {
+                    output.push_str(&file_state.content);
+                    if !file_state.content.ends_with('\n') {
+                        output.push('\n');
+                    }
+                }
+
+                output.push_str("```\n\n");
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+pub fn run() -> io::Result<()> {
+    env_logger::init();
+    let args = Args::parse();
+
+    // Handle init command first
+    if args.init {
+        return init_config();
+    }
+
+    // Determine project root first
+    let project_root = Path::new(&args.input);
+    let config = load_config_from_path(project_root);
+
+    // Handle early clear-cache request (runs even if no config or other args)
+    if args.clear_cache {
+        let cache_path = project_root.join(".context-builder").join("cache");
+        if cache_path.exists() {
+            match fs::remove_dir_all(&cache_path) {
+                Ok(()) => println!("Cache cleared: {}", cache_path.display()),
+                Err(e) => eprintln!("Failed to clear cache ({}): {}", cache_path.display(), e),
+            }
+        } else {
+            println!("No cache directory found at {}", cache_path.display());
+        }
+        return Ok(());
+    }
+
+    if std::env::args().len() == 1 && config.is_none() {
+        Args::command().print_help()?;
+        return Ok(());
+    }
+
+    // Resolve final configuration using the new config resolver
+    let resolution = crate::config_resolver::resolve_final_config(args, config.clone());
+
+    // Print warnings if any
+    let silent = std::env::var("CB_SILENT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !silent {
+        for warning in &resolution.warnings {
+            eprintln!("Warning: {}", warning);
+        }
+    }
+
+    // Convert resolved config back to Args for run_with_args
+    let final_args = Args {
+        input: resolution.config.input,
+        output: resolution.config.output,
+        filter: resolution.config.filter,
+        ignore: resolution.config.ignore,
+        line_numbers: resolution.config.line_numbers,
+        preview: resolution.config.preview,
+        token_count: resolution.config.token_count,
+        yes: resolution.config.yes,
+        diff_only: resolution.config.diff_only,
+        clear_cache: resolution.config.clear_cache,
+        max_tokens: resolution.config.max_tokens,
+        init: false,
+    };
+
+    // Create final Config with resolved values
+    let final_config = Config {
+        auto_diff: Some(resolution.config.auto_diff),
+        diff_context_lines: Some(resolution.config.diff_context_lines),
+        ..config.unwrap_or_default()
+    };
+
+    run_with_args(final_args, final_config, &DefaultPrompter)
+}
+
+/// Detect major file types in the current directory respecting .gitignore and default ignore patterns
+fn detect_major_file_types() -> io::Result<Vec<String>> {
+    use std::collections::HashMap;
+    let mut extension_counts = HashMap::new();
+
+    // Use the same default ignore patterns as the main application
+    let default_ignores = vec![
+        "docs".to_string(),
+        "target".to_string(),
+        ".git".to_string(),
+        "node_modules".to_string(),
+    ];
+
+    // Collect files using the same logic as the main application
+    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores, &[])?;
+
+    // Count extensions from the filtered file list
+    for entry in files {
+        let path = entry.path();
+        if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+            // Count the extension occurrences
+            *extension_counts.entry(extension.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    // Convert to vector of (extension, count) pairs and sort by count
+    let mut extensions: Vec<(String, usize)> = extension_counts.into_iter().collect();
+    extensions.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Take the top 5 extensions or all if less than 5
+    let top_extensions: Vec<String> = extensions.into_iter().take(5).map(|(ext, _)| ext).collect();
+
+    Ok(top_extensions)
+}
+
+/// Initialize a new context-builder.toml config file in the current directory with sensible defaults
+fn init_config() -> io::Result<()> {
+    let config_path = Path::new("context-builder.toml");
+
+    if config_path.exists() {
+        println!("Config file already exists at {}", config_path.display());
+        println!("If you want to replace it, please remove it manually first.");
+        return Ok(());
+    }
+
+    // Detect major file types in the current directory
+    let filter_suggestions = match detect_major_file_types() {
+        Ok(extensions) => extensions,
+        _ => vec!["rs".to_string(), "toml".to_string()], // fallback to defaults
+    };
+
+    let filter_string = if filter_suggestions.is_empty() {
+        r#"["rs", "toml"]"#.to_string()
+    } else {
+        format!(r#"["{}"]"#, filter_suggestions.join(r#"", ""#))
+    };
+
+    let default_config_content = format!(
+        r#"# Context Builder Configuration File
+# This file was generated with sensible defaults based on the file types detected in your project
+
+# Output file name (or base name when timestamped_output is true)
+output = "context.md"
+
+# Optional folder to place the generated output file(s) in
+output_folder = "docs"
+
+# Append a UTC timestamp to the output file name (before extension)
+timestamped_output = true
+
+# Enable automatic diff generation (requires timestamped_output = true)
+auto_diff = true
+
+# Emit only change summary + modified file diffs (no full file bodies)
+diff_only = false
+
+# File extensions to include (no leading dot, e.g. "rs", "toml")
+filter = {}
+
+# File / directory names to ignore (exact name matches)
+ignore = ["docs", "target", ".git", "node_modules"]
+
+# Add line numbers to code blocks
+line_numbers = false
+"#,
+        filter_string
+    );
+
+    let mut file = File::create(config_path)?;
+    file.write_all(default_config_content.as_bytes())?;
+
+    println!("Config file created at {}", config_path.display());
+    println!("Detected file types: {}", filter_suggestions.join(", "));
+    println!("You can now customize it according to your project needs.");
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Result;
+    use tempfile::tempdir;
+
+    // Mock prompter for testing
+    struct MockPrompter {
+        confirm_processing_response: bool,
+        confirm_overwrite_response: bool,
+    }
+
+    impl MockPrompter {
+        fn new(processing: bool, overwrite: bool) -> Self {
+            Self {
+                confirm_processing_response: processing,
+                confirm_overwrite_response: overwrite,
+            }
+        }
+    }
+
+    impl Prompter for MockPrompter {
+        fn confirm_processing(&self, _file_count: usize) -> Result<bool> {
+            Ok(self.confirm_processing_response)
+        }
+
+        fn confirm_overwrite(&self, _file_path: &str) -> Result<bool> {
+            Ok(self.confirm_overwrite_response)
+        }
+    }
+
+    #[test]
+    fn test_diff_config_default() {
+        let config = DiffConfig::default();
+        assert_eq!(config.context_lines, 3);
+        assert!(!config.enabled);
+        assert!(!config.diff_only);
+    }
+
+    #[test]
+    fn test_diff_config_custom() {
+        let config = DiffConfig {
+            context_lines: 5,
+            enabled: true,
+            diff_only: true,
+        };
+        assert_eq!(config.context_lines, 5);
+        assert!(config.enabled);
+        assert!(config.diff_only);
+    }
+
+    #[test]
+    fn test_default_prompter() {
+        let prompter = DefaultPrompter;
+
+        // Test small file count (should not prompt)
+        let result = prompter.confirm_processing(50);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_run_with_args_nonexistent_directory() {
+        let args = Args {
+            input: "/nonexistent/directory".to_string(),
+            output: "output.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        let result = run_with_args(args, config, &prompter);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_run_with_args_preview_mode() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create some test files
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::create_dir(base_path.join("src")).unwrap();
+        fs::write(base_path.join("src/lib.rs"), "pub fn hello() {}").unwrap();
+
+        let args = Args {
+            input: ".".to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        // Set CB_SILENT to avoid console output during test
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_token_count_mode() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create test files
+        fs::write(base_path.join("small.txt"), "Hello world").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: true,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_preview_and_token_count() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: true,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_user_cancels_overwrite() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("existing.md");
+
+        // Create test files
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+        fs::write(&output_path, "existing content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec!["target".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, false); // Deny overwrite
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn test_run_with_args_user_cancels_processing() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create many test files to trigger processing confirmation
+        for i in 0..105 {
+            fs::write(base_path.join(format!("file{}.txt", i)), "content").unwrap();
+        }
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec!["rs".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(false, true); // Deny processing
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn test_run_with_args_with_yes_flag() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
+
+        fs::write(base_path.join("test.txt"), "Hello world").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec!["ignored_dir".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+        assert!(content.contains("test.txt"));
+    }
+
+    #[test]
+    fn test_run_with_args_with_filters() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
+
+        fs::write(base_path.join("code.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("readme.md"), "# README").unwrap();
+        fs::write(base_path.join("data.json"), r#"{"key": "value"}"#).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec!["rs".to_string(), "md".to_string()],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("code.rs"));
+        assert!(content.contains("readme.md"));
+        assert!(!content.contains("data.json")); // Should be filtered out
+        assert!(content.contains("   1 |")); // Line numbers should be present
+    }
+
+    #[test]
+    fn test_run_with_args_with_ignores() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("ignored.md");
+
+        fs::write(base_path.join("important.txt"), "important content").unwrap();
+        fs::write(base_path.join("secret.txt"), "secret content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec!["secret.txt".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("important.txt"));
+        // The ignore pattern may not work exactly as expected in this test setup
+        // Just verify the output file was created successfully
+    }
+
+    #[test]
+    fn test_auto_diff_without_previous_state() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
+
+        fs::write(base_path.join("new.txt"), "new content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            diff_context_lines: Some(5),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("new.txt"));
+    }
+
+    #[test]
+    fn test_run_creates_output_directory() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_dir = temp_dir.path().join("nested").join("output");
+        let output_path = output_dir.join("result.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+        assert!(output_dir.exists());
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_no_comparison() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+        };
+
+        let diff_config = DiffConfig::default();
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let result = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("Directory Structure Report"));
+        assert!(content.contains("test.rs"));
+    }
+}
+```
+
+### File: `src/main.rs`
+
+- Size: 73 bytes
+- Modified: 2026-02-14 07:14:48 UTC
+
+```rust
+use std::io;
+
+fn main() -> io::Result<()> {
+    context_builder::run()
+}
 ```
 
 ### File: `src/cache.rs`
@@ -2153,8 +4194,8 @@ mod tests {
 
 ### File: `src/file_utils.rs`
 
-- Size: 19113 bytes
-- Modified: 2026-02-14 20:32:08 UTC
+- Size: 21171 bytes
+- Modified: 2026-02-14 22:42:03 UTC
 
 ```rust
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
@@ -2164,11 +4205,12 @@ use std::path::{Path, PathBuf};
 
 /// Returns a numeric category for file relevance ordering.
 /// Lower numbers appear first in output. Categories:
-/// 0 = Project config (Cargo.toml, package.json, pyproject.toml, etc.)
-/// 1 = Source code (src/, lib/)
+/// 0 = Project config + key docs (Cargo.toml, README.md, AGENTS.md, etc.)
+/// 1 = Source code (src/, lib/) — entry points sorted first within category
 /// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
-/// 3 = Documentation and everything else
+/// 3 = Documentation, scripts, and everything else
 /// 4 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
+/// 5 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
 fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     let relative = path.strip_prefix(base_path).unwrap_or(path);
     let rel_str = relative.to_string_lossy();
@@ -2176,21 +4218,46 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     // Check filename for lockfiles first — these are lowest priority
     if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
         let lockfile_names = [
-            "Cargo.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-            "Gemfile.lock", "poetry.lock", "composer.lock", "go.sum",
-            "bun.lockb", "flake.lock",
+            "Cargo.lock",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "Gemfile.lock",
+            "poetry.lock",
+            "composer.lock",
+            "go.sum",
+            "bun.lockb",
+            "flake.lock",
         ];
         if lockfile_names.contains(&name) {
-            return 4;
+            return 5;
         }
 
-        // Check for config/manifest files — highest priority
+        // Check for config/manifest files + key project docs — highest priority
         let config_names = [
-            "Cargo.toml", "package.json",
-            "tsconfig.json", "pyproject.toml", "setup.py", "setup.cfg",
-            "Makefile", "CMakeLists.txt", "build.gradle", "pom.xml",
-            "go.mod", "Gemfile",
-            "context-builder.toml", ".gitignore",
+            // Package manifests
+            "Cargo.toml",
+            "package.json",
+            "tsconfig.json",
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "go.mod",
+            "Gemfile",
+            // Tool config
+            "context-builder.toml",
+            ".gitignore",
+            // Key project documentation (LLMs need these for context)
+            "README.md",
+            "README",
+            "README.txt",
+            "README.rst",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "GEMINI.md",
+            "COPILOT.md",
+            "CONTRIBUTING.md",
+            "CHANGELOG.md",
         ];
         if config_names.contains(&name) {
             return 0;
@@ -2198,7 +4265,9 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     }
 
     // Check path prefix for category
-    let first_component = relative.components().next()
+    let first_component = relative
+        .components()
+        .next()
         .and_then(|c| c.as_os_str().to_str())
         .unwrap_or("");
 
@@ -2206,6 +4275,8 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
         "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
         "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
+        // Build/CI infrastructure — useful context but not core source
+        ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
         _ => {
             // Check extensions for additional heuristics
             if let Some(ext) = relative.extension().and_then(|e| e.to_str()) {
@@ -2214,11 +4285,16 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
                     | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
                         // Source file not in a recognized dir — check if it's a test
                         // Use path boundaries to avoid false positives (e.g., "contest.rs")
-                        if rel_str.contains("/test/") || rel_str.contains("/tests/")
-                            || rel_str.contains("/spec/") || rel_str.contains("/__tests__/")
-                            || rel_str.ends_with("_test.rs") || rel_str.ends_with("_test.go")
-                            || rel_str.ends_with("_spec.rb") || rel_str.ends_with(".test.ts")
-                            || rel_str.ends_with(".test.js") || rel_str.ends_with(".spec.ts")
+                        if rel_str.contains("/test/")
+                            || rel_str.contains("/tests/")
+                            || rel_str.contains("/spec/")
+                            || rel_str.contains("/__tests__/")
+                            || rel_str.ends_with("_test.rs")
+                            || rel_str.ends_with("_test.go")
+                            || rel_str.ends_with("_spec.rb")
+                            || rel_str.ends_with(".test.ts")
+                            || rel_str.ends_with(".test.js")
+                            || rel_str.ends_with(".spec.ts")
                             || rel_str.starts_with("test_")
                         {
                             2
@@ -2230,9 +4306,32 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
                     _ => 1, // Unknown extension in root — treat as source
                 }
             } else {
-                3 // No extension — docs/other
+                // Check for build-related root files without extensions
+                if let Some(
+                    "Makefile" | "CMakeLists.txt" | "Dockerfile" | "Containerfile" | "Justfile"
+                    | "Taskfile" | "Rakefile" | "Vagrantfile",
+                ) = relative.file_name().and_then(|n| n.to_str())
+                {
+                    4
+                } else {
+                    3 // No extension — docs/other
+                }
             }
         }
+    }
+}
+
+/// Returns a sub-priority for sorting within the same relevance category.
+/// Lower values appear first. Entry points (main, lib, mod) get priority 0,
+/// other files get priority 1. This ensures LLMs see architectural entry
+/// points before helper modules.
+fn file_entry_point_priority(path: &Path) -> u8 {
+    if let Some("main" | "lib" | "mod" | "index" | "app" | "__init__") =
+        path.file_stem().and_then(|s| s.to_str())
+    {
+        0
+    } else {
+        1
     }
 }
 
@@ -2305,13 +4404,19 @@ pub fn collect_files(
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
         .collect();
 
-    // Sort files by relevance category, then alphabetically within each category.
-    // This puts config files first, then source code, then tests, then docs/other.
+    // Sort files by relevance category, then entry-point priority, then alphabetically.
+    // This puts config + docs first, then source code (entry points before helpers),
+    // then tests, then docs/other, then build/CI, then lockfiles.
     // LLMs comprehend codebases better when core source appears before test scaffolding.
     files.sort_by(|a, b| {
         let cat_a = file_relevance_category(a.path(), base_path);
         let cat_b = file_relevance_category(b.path(), base_path);
-        cat_a.cmp(&cat_b).then_with(|| a.path().cmp(b.path()))
+        cat_a
+            .cmp(&cat_b)
+            .then_with(|| {
+                file_entry_point_priority(a.path()).cmp(&file_entry_point_priority(b.path()))
+            })
+            .then_with(|| a.path().cmp(b.path()))
     });
 
     Ok(files)
@@ -2676,1384 +4781,10 @@ mod tests {
 }
 ```
 
-### File: `src/lib.rs`
-
-- Size: 46593 bytes
-- Modified: 2026-02-14 22:09:26 UTC
-
-```rust
-use clap::{CommandFactory, Parser};
-
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::time::Instant;
-
-pub mod cache;
-pub mod cli;
-pub mod config;
-pub mod config_resolver;
-pub mod diff;
-pub mod file_utils;
-pub mod markdown;
-pub mod state;
-pub mod token_count;
-pub mod tree;
-
-use std::fs::File;
-
-use cache::CacheManager;
-use cli::Args;
-use config::{Config, load_config_from_path};
-use diff::render_per_file_diffs;
-use file_utils::{collect_files, confirm_overwrite, confirm_processing};
-use markdown::generate_markdown;
-use state::{ProjectState, StateComparison};
-use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
-use tree::{build_file_tree, print_tree};
-
-/// Configuration for diff operations
-#[derive(Debug, Clone)]
-pub struct DiffConfig {
-    pub context_lines: usize,
-    pub enabled: bool,
-    pub diff_only: bool,
-}
-
-impl Default for DiffConfig {
-    fn default() -> Self {
-        Self {
-            context_lines: 3,
-            enabled: false,
-            diff_only: false,
-        }
-    }
-}
-
-pub trait Prompter {
-    fn confirm_processing(&self, file_count: usize) -> io::Result<bool>;
-    fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool>;
-}
-
-pub struct DefaultPrompter;
-
-impl Prompter for DefaultPrompter {
-    fn confirm_processing(&self, file_count: usize) -> io::Result<bool> {
-        confirm_processing(file_count)
-    }
-    fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool> {
-        confirm_overwrite(file_path)
-    }
-}
-
-pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
-    let start_time = Instant::now();
-
-    let silent = std::env::var("CB_SILENT")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    // Use the finalized args passed in from run()
-    let final_args = args;
-    // Resolve base path. If input is '.' but current working directory lost the project context
-    // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
-    let mut resolved_base = PathBuf::from(&final_args.input);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if resolved_base == Path::new(".")
-        && !cwd.join("context-builder.toml").exists()
-        && let Some(output_parent) = Path::new(&final_args.output).parent()
-        && output_parent
-            .file_name()
-            .map(|n| n == "output")
-            .unwrap_or(false)
-        && let Some(project_root) = output_parent.parent()
-        && project_root.join("context-builder.toml").exists()
-    {
-        resolved_base = project_root.to_path_buf();
-    }
-    let base_path = resolved_base.as_path();
-
-    if !base_path.exists() || !base_path.is_dir() {
-        if !silent {
-            eprintln!(
-                "Error: The specified input directory '{}' does not exist or is not a directory.",
-                final_args.input
-            );
-        }
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "Input directory '{}' does not exist or is not a directory",
-                final_args.input
-            ),
-        ));
-    }
-
-    // Create diff configuration from config
-    let diff_config = if config.auto_diff.unwrap_or(false) {
-        Some(DiffConfig {
-            context_lines: config.diff_context_lines.unwrap_or(3),
-            enabled: true,
-            diff_only: final_args.diff_only,
-        })
-    } else {
-        None
-    };
-
-    if !final_args.preview
-        && !final_args.token_count
-        && Path::new(&final_args.output).exists()
-        && !final_args.yes
-        && !prompter.confirm_overwrite(&final_args.output)?
-    {
-        if !silent {
-            println!("Operation cancelled.");
-        }
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "Operation cancelled by user",
-        ));
-    }
-
-    // Compute auto-ignore patterns to exclude the tool's own output and cache
-    let mut auto_ignores: Vec<String> = vec![".context-builder".to_string()];
-
-    // Exclude the resolved output file (or its timestamped glob pattern)
-    let output_path = Path::new(&final_args.output);
-    if let Ok(rel_output) = output_path.strip_prefix(base_path) {
-        // Output is inside the project — exclude it
-        if config.timestamped_output == Some(true) {
-            // Timestamped outputs: create a glob like "docs/context_*.md"
-            if let (Some(parent), Some(stem), Some(ext)) = (
-                rel_output.parent(),
-                output_path.file_stem().and_then(|s| s.to_str()),
-                output_path.extension().and_then(|s| s.to_str()),
-            ) {
-                // Strip the timestamp suffix to get the base stem
-                // Timestamped names look like "context_20260214175028.md"
-                // The stem from config is the part before the timestamp
-                let base_stem = if let Some(ref cfg_output) = config.output {
-                    Path::new(cfg_output)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(stem)
-                        .to_string()
-                } else {
-                    stem.to_string()
-                };
-                let glob = if parent == Path::new("") {
-                    format!("{}_*.{}", base_stem, ext)
-                } else {
-                    format!("{}/{}_*.{}", parent.display(), base_stem, ext)
-                };
-                auto_ignores.push(glob);
-            }
-        } else {
-            // Non-timestamped: exclude the exact output file
-            auto_ignores.push(rel_output.to_string_lossy().to_string());
-        }
-    } else {
-        // Output might be a relative path not under base_path — try using it directly
-        let output_str = final_args.output.clone();
-        if config.timestamped_output == Some(true) {
-            if let (Some(stem), Some(ext)) = (
-                output_path.file_stem().and_then(|s| s.to_str()),
-                output_path.extension().and_then(|s| s.to_str()),
-            ) {
-                let base_stem = if let Some(ref cfg_output) = config.output {
-                    Path::new(cfg_output)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(stem)
-                        .to_string()
-                } else {
-                    stem.to_string()
-                };
-                if let Some(parent) = output_path.parent() {
-                    let parent_str = parent.to_string_lossy();
-                    if parent_str.is_empty() || parent_str == "." {
-                        auto_ignores.push(format!("{}_*.{}", base_stem, ext));
-                    } else {
-                        auto_ignores.push(format!("{}/{}_*.{}", parent_str, base_stem, ext));
-                    }
-                }
-            }
-        } else {
-            auto_ignores.push(output_str);
-        }
-    }
-
-    // Also exclude the output folder itself if configured
-    if let Some(ref output_folder) = config.output_folder {
-        auto_ignores.push(output_folder.clone());
-    }
-
-    let files = collect_files(base_path, &final_args.filter, &final_args.ignore, &auto_ignores)?;
-    let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
-    if debug_config {
-        eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
-        eprintln!("[DEBUG][CONFIG] Raw Config: {:?}", config);
-        eprintln!("[DEBUG][CONFIG] Auto-ignores: {:?}", auto_ignores);
-        eprintln!("[DEBUG][CONFIG] Collected {} files", files.len());
-        for f in &files {
-            eprintln!("[DEBUG][CONFIG]  - {}", f.path().display());
-        }
-    }
-
-    // Smart large-file detection: warn about files that may bloat the context
-    if !silent {
-        const LARGE_FILE_THRESHOLD: u64 = 100 * 1024; // 100 KB
-        let mut large_files: Vec<(String, u64)> = Vec::new();
-        let mut total_size: u64 = 0;
-
-        for entry in &files {
-            if let Ok(metadata) = entry.path().metadata() {
-                let size = metadata.len();
-                total_size += size;
-                if size > LARGE_FILE_THRESHOLD {
-                    let rel_path = entry
-                        .path()
-                        .strip_prefix(base_path)
-                        .unwrap_or(entry.path())
-                        .to_string_lossy()
-                        .to_string();
-                    large_files.push((rel_path, size));
-                }
-            }
-        }
-
-        if !large_files.is_empty() {
-            large_files.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by size descending
-            eprintln!(
-                "\n⚠  {} large file(s) detected (>{} KB):",
-                large_files.len(),
-                LARGE_FILE_THRESHOLD / 1024
-            );
-            for (path, size) in large_files.iter().take(5) {
-                eprintln!("   {:>8} KB  {}", size / 1024, path);
-            }
-            if large_files.len() > 5 {
-                eprintln!("   ... and {} more", large_files.len() - 5);
-            }
-            eprintln!(
-                "   Total context size: {} KB across {} files\n",
-                total_size / 1024,
-                files.len()
-            );
-        }
-    }
-    let file_tree = build_file_tree(&files, base_path);
-
-    if final_args.preview {
-        if !silent {
-            println!("\n# File Tree Structure (Preview)\n");
-            print_tree(&file_tree, 0);
-        }
-        if !final_args.token_count {
-            return Ok(());
-        }
-    }
-
-    if final_args.token_count {
-        if !silent {
-            println!("\n# Token Count Estimation\n");
-            let mut total_tokens = 0;
-            total_tokens += estimate_tokens("# Directory Structure Report\n\n");
-            if !final_args.filter.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains files from the `{}` directory with extensions: {} \n",
-                    final_args.input,
-                    final_args.filter.join(", ")
-                ));
-            } else {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
-                    final_args.input
-                ));
-            }
-            if !final_args.ignore.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "Custom ignored patterns: {} \n",
-                    final_args.ignore.join(", ")
-                ));
-            }
-            total_tokens += estimate_tokens("Content hash: 0000000000000000\n\n");
-            total_tokens += estimate_tokens("## File Tree Structure\n\n");
-            let tree_tokens = count_tree_tokens(&file_tree, 0);
-            total_tokens += tree_tokens;
-            let file_tokens: usize = files
-                .iter()
-                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers))
-                .sum();
-            total_tokens += file_tokens;
-            println!("Estimated total tokens: {}", total_tokens);
-            println!("File tree tokens: {}", tree_tokens);
-            println!("File content tokens: {}", file_tokens);
-        }
-        return Ok(());
-    }
-
-    if !final_args.yes && !prompter.confirm_processing(files.len())? {
-        if !silent {
-            println!("Operation cancelled.");
-        }
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "Operation cancelled by user",
-        ));
-    }
-
-    // NOTE: config-driven flags (line_numbers, diff_only) are already merged
-    // by config_resolver.rs with proper CLI-takes-precedence semantics.
-    // Do NOT re-apply them here as that would silently overwrite CLI flags.
-
-    if config.auto_diff.unwrap_or(false) {
-        // Build an effective config that mirrors the *actual* operational settings coming
-        // from resolved CLI args (filters/ignores/line_numbers). This ensures the
-        // configuration hash used for cache invalidation reflects real behavior and
-        // stays consistent across runs even when values originate from CLI not file.
-        let mut effective_config = config.clone();
-        // Normalize filter/ignore/line_numbers into config so hashing sees them
-        if !final_args.filter.is_empty() {
-            effective_config.filter = Some(final_args.filter.clone());
-        }
-        if !final_args.ignore.is_empty() {
-            effective_config.ignore = Some(final_args.ignore.clone());
-        }
-        effective_config.line_numbers = Some(final_args.line_numbers);
-
-        // 1. Create current project state
-        let current_state = ProjectState::from_files(
-            &files,
-            base_path,
-            &effective_config,
-            final_args.line_numbers,
-        )?;
-
-        // 2. Initialize cache manager and load previous state
-        let cache_manager = CacheManager::new(base_path, &effective_config);
-        let previous_state = match cache_manager.read_cache() {
-            Ok(state) => state,
-            Err(e) => {
-                if !silent {
-                    eprintln!(
-                        "Warning: Failed to read cache (proceeding without diff): {}",
-                        e
-                    );
-                }
-                None
-            }
-        };
-
-        let diff_cfg = diff_config.as_ref().unwrap();
-
-        // 3. Determine whether we should invalidate (ignore) previous state
-        let effective_previous = if let Some(prev) = previous_state.as_ref() {
-            if prev.config_hash != current_state.config_hash {
-                // Config change => treat as initial state (invalidate diff)
-                None
-            } else {
-                Some(prev)
-            }
-        } else {
-            None
-        };
-
-        // 4. Compare states and generate diff if an effective previous state exists
-        let comparison = effective_previous.map(|prev| current_state.compare_with(prev));
-
-        let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
-        if debug_autodiff {
-            eprintln!(
-                "[DEBUG][AUTODIFF] cache file: {}",
-                cache_manager.debug_cache_file_path().display()
-            );
-            eprintln!(
-                "[DEBUG][AUTODIFF] config_hash current={} prev={:?} invalidated={}",
-                current_state.config_hash,
-                previous_state.as_ref().map(|s| s.config_hash.clone()),
-                effective_previous.is_none() && previous_state.is_some()
-            );
-            eprintln!("[DEBUG][AUTODIFF] effective_config: {:?}", effective_config);
-            if let Some(prev) = previous_state.as_ref() {
-                eprintln!("[DEBUG][AUTODIFF] raw previous files: {}", prev.files.len());
-            }
-            if let Some(prev) = effective_previous {
-                eprintln!(
-                    "[DEBUG][AUTODIFF] effective previous files: {}",
-                    prev.files.len()
-                );
-                for k in prev.files.keys() {
-                    eprintln!("  PREV: {}", k.display());
-                }
-            }
-            eprintln!(
-                "[DEBUG][AUTODIFF] current files: {}",
-                current_state.files.len()
-            );
-            for k in current_state.files.keys() {
-                eprintln!("  CURR: {}", k.display());
-            }
-        }
-
-        // Build relevance-sorted path list from the DirEntry list (which is
-        // already sorted by file_relevance_category). This preserves ordering
-        // instead of using BTreeMap's alphabetical iteration.
-        let sorted_paths: Vec<PathBuf> = files
-            .iter()
-            .map(|entry| {
-                entry.path()
-                    .strip_prefix(base_path)
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|_| {
-                        entry.path()
-                            .file_name()
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|| entry.path().to_path_buf())
-                    })
-            })
-            .collect();
-
-        // 4. Generate markdown with diff annotations
-        let final_doc = generate_markdown_with_diff(
-            &current_state,
-            comparison.as_ref(),
-            &final_args,
-            &file_tree,
-            diff_cfg,
-            &sorted_paths,
-        )?;
-
-        // 5. Write output
-        let output_path = Path::new(&final_args.output);
-        if let Some(parent) = output_path.parent()
-            && !parent.exists()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            return Err(io::Error::other(format!(
-                "Failed to create output directory {}: {}",
-                parent.display(),
-                e
-            )));
-        }
-        let mut final_output = fs::File::create(output_path)?;
-        final_output.write_all(final_doc.as_bytes())?;
-
-        // 6. Update cache with current state
-        if let Err(e) = cache_manager.write_cache(&current_state)
-            && !silent
-        {
-            eprintln!("Warning: failed to update state cache: {}", e);
-        }
-
-        let duration = start_time.elapsed();
-        if !silent {
-            if let Some(comp) = &comparison {
-                if comp.summary.has_changes() {
-                    println!(
-                        "Documentation created successfully with {} changes: {}",
-                        comp.summary.total_changes, final_args.output
-                    );
-                } else {
-                    println!(
-                        "Documentation created successfully (no changes detected): {}",
-                        final_args.output
-                    );
-                }
-            } else {
-                println!(
-                    "Documentation created successfully (initial state): {}",
-                    final_args.output
-                );
-            }
-            println!("Processing time: {:.2?}", duration);
-        }
-        return Ok(());
-    }
-
-    // Standard (non auto-diff) generation
-    generate_markdown(
-        &final_args.output,
-        &final_args.input,
-        &final_args.filter,
-        &final_args.ignore,
-        &file_tree,
-        &files,
-        base_path,
-        final_args.line_numbers,
-        config.encoding_strategy.as_deref(),
-        final_args.max_tokens,
-    )?;
-
-    let duration = start_time.elapsed();
-    if !silent {
-        println!("Documentation created successfully: {}", final_args.output);
-        println!("Processing time: {:.2?}", duration);
-    }
-
-    Ok(())
-}
-
-/// Generate markdown document with diff annotations
-fn generate_markdown_with_diff(
-    current_state: &ProjectState,
-    comparison: Option<&StateComparison>,
-    args: &Args,
-    file_tree: &tree::FileTree,
-    diff_config: &DiffConfig,
-    sorted_paths: &[PathBuf],
-) -> io::Result<String> {
-    let mut output = String::new();
-
-    // Header
-    output.push_str("# Directory Structure Report\n\n");
-
-    // Basic project info
-    output.push_str(&format!(
-        "**Project:** {}\n",
-        current_state.metadata.project_name
-    ));
-    output.push_str(&format!("**Generated:** {}\n", current_state.timestamp));
-
-    if !args.filter.is_empty() {
-        output.push_str(&format!("**Filters:** {}\n", args.filter.join(", ")));
-    }
-
-    if !args.ignore.is_empty() {
-        output.push_str(&format!("**Ignored:** {}\n", args.ignore.join(", ")));
-    }
-
-    output.push('\n');
-
-    // Change summary + sections if we have a comparison
-    if let Some(comp) = comparison {
-        if comp.summary.has_changes() {
-            output.push_str(&comp.summary.to_markdown());
-
-            // Collect added files once so we can reuse for both diff_only logic and potential numbering.
-            let added_files: Vec<_> = comp
-                .file_diffs
-                .iter()
-                .filter(|d| matches!(d.status, diff::PerFileStatus::Added))
-                .collect();
-
-            if diff_config.diff_only && !added_files.is_empty() {
-                output.push_str("## Added Files\n\n");
-                for added in added_files {
-                    output.push_str(&format!("### File: `{}`\n\n", added.path));
-                    output.push_str("_Status: Added_\n\n");
-                    // Reconstruct content from + lines.
-                    let mut lines: Vec<String> = Vec::new();
-                    for line in added.diff.lines() {
-                        if let Some(rest) = line.strip_prefix('+') {
-                            lines.push(rest.to_string());
-                        }
-                    }
-                    output.push_str("```text\n");
-                    if args.line_numbers {
-                        for (idx, l) in lines.iter().enumerate() {
-                            output.push_str(&format!("{:>4} | {}\n", idx + 1, l));
-                        }
-                    } else {
-                        for l in lines {
-                            output.push_str(&l);
-                            output.push('\n');
-                        }
-                    }
-                    output.push_str("```\n\n");
-                }
-            }
-
-            // Always include a unified diff section header so downstream tooling/tests can rely on it
-            let changed_diffs: Vec<diff::PerFileDiff> = comp
-                .file_diffs
-                .iter()
-                .filter(|d| d.is_changed())
-                .cloned()
-                .collect();
-            if !changed_diffs.is_empty() {
-                output.push_str("## File Differences\n\n");
-                let diff_markdown = render_per_file_diffs(&changed_diffs);
-                output.push_str(&diff_markdown);
-            }
-        } else {
-            output.push_str("## No Changes Detected\n\n");
-        }
-    }
-
-    // File tree
-    output.push_str("## File Tree Structure\n\n");
-    let mut tree_output = Vec::new();
-    tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
-    output.push_str(&String::from_utf8_lossy(&tree_output));
-    output.push('\n');
-
-    // File contents (unless diff_only mode)
-    if !diff_config.diff_only {
-        output.push_str("## File Contents\n\n");
-
-        // Iterate in relevance order (from sorted_paths) instead of
-        // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
-        for path in sorted_paths {
-            if let Some(file_state) = current_state.files.get(path) {
-                output.push_str(&format!("### File: `{}`\n\n", path.display()));
-                output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-                output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
-
-                // Determine language from file extension
-                let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
-                let language = match extension {
-                    "rs" => "rust",
-                    "js" => "javascript",
-                    "ts" => "typescript",
-                    "py" => "python",
-                    "json" => "json",
-                    "toml" => "toml",
-                    "md" => "markdown",
-                    "yaml" | "yml" => "yaml",
-                    "html" => "html",
-                    "css" => "css",
-                    _ => extension,
-                };
-
-                output.push_str(&format!("```{}\n", language));
-
-                if args.line_numbers {
-                    for (i, line) in file_state.content.lines().enumerate() {
-                        output.push_str(&format!("{:>4} | {}\n", i + 1, line));
-                    }
-                } else {
-                    output.push_str(&file_state.content);
-                    if !file_state.content.ends_with('\n') {
-                        output.push('\n');
-                    }
-                }
-
-                output.push_str("```\n\n");
-            }
-        }
-    }
-
-    Ok(output)
-}
-
-pub fn run() -> io::Result<()> {
-    env_logger::init();
-    let args = Args::parse();
-
-    // Handle init command first
-    if args.init {
-        return init_config();
-    }
-
-    // Determine project root first
-    let project_root = Path::new(&args.input);
-    let config = load_config_from_path(project_root);
-
-    // Handle early clear-cache request (runs even if no config or other args)
-    if args.clear_cache {
-        let cache_path = project_root.join(".context-builder").join("cache");
-        if cache_path.exists() {
-            match fs::remove_dir_all(&cache_path) {
-                Ok(()) => println!("Cache cleared: {}", cache_path.display()),
-                Err(e) => eprintln!("Failed to clear cache ({}): {}", cache_path.display(), e),
-            }
-        } else {
-            println!("No cache directory found at {}", cache_path.display());
-        }
-        return Ok(());
-    }
-
-    if std::env::args().len() == 1 && config.is_none() {
-        Args::command().print_help()?;
-        return Ok(());
-    }
-
-    // Resolve final configuration using the new config resolver
-    let resolution = crate::config_resolver::resolve_final_config(args, config.clone());
-
-    // Print warnings if any
-    let silent = std::env::var("CB_SILENT")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if !silent {
-        for warning in &resolution.warnings {
-            eprintln!("Warning: {}", warning);
-        }
-    }
-
-    // Convert resolved config back to Args for run_with_args
-    let final_args = Args {
-        input: resolution.config.input,
-        output: resolution.config.output,
-        filter: resolution.config.filter,
-        ignore: resolution.config.ignore,
-        line_numbers: resolution.config.line_numbers,
-        preview: resolution.config.preview,
-        token_count: resolution.config.token_count,
-        yes: resolution.config.yes,
-        diff_only: resolution.config.diff_only,
-        clear_cache: resolution.config.clear_cache,
-        max_tokens: resolution.config.max_tokens,
-        init: false,
-    };
-
-    // Create final Config with resolved values
-    let final_config = Config {
-        auto_diff: Some(resolution.config.auto_diff),
-        diff_context_lines: Some(resolution.config.diff_context_lines),
-        ..config.unwrap_or_default()
-    };
-
-    run_with_args(final_args, final_config, &DefaultPrompter)
-}
-
-/// Detect major file types in the current directory respecting .gitignore and default ignore patterns
-fn detect_major_file_types() -> io::Result<Vec<String>> {
-    use std::collections::HashMap;
-    let mut extension_counts = HashMap::new();
-
-    // Use the same default ignore patterns as the main application
-    let default_ignores = vec![
-        "docs".to_string(),
-        "target".to_string(),
-        ".git".to_string(),
-        "node_modules".to_string(),
-    ];
-
-    // Collect files using the same logic as the main application
-    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores, &[])?;
-
-    // Count extensions from the filtered file list
-    for entry in files {
-        let path = entry.path();
-        if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
-            // Count the extension occurrences
-            *extension_counts.entry(extension.to_string()).or_insert(0) += 1;
-        }
-    }
-
-    // Convert to vector of (extension, count) pairs and sort by count
-    let mut extensions: Vec<(String, usize)> = extension_counts.into_iter().collect();
-    extensions.sort_by(|a, b| b.1.cmp(&a.1));
-
-    // Take the top 5 extensions or all if less than 5
-    let top_extensions: Vec<String> = extensions.into_iter().take(5).map(|(ext, _)| ext).collect();
-
-    Ok(top_extensions)
-}
-
-/// Initialize a new context-builder.toml config file in the current directory with sensible defaults
-fn init_config() -> io::Result<()> {
-    let config_path = Path::new("context-builder.toml");
-
-    if config_path.exists() {
-        println!("Config file already exists at {}", config_path.display());
-        println!("If you want to replace it, please remove it manually first.");
-        return Ok(());
-    }
-
-    // Detect major file types in the current directory
-    let filter_suggestions = match detect_major_file_types() {
-        Ok(extensions) => extensions,
-        _ => vec!["rs".to_string(), "toml".to_string()], // fallback to defaults
-    };
-
-    let filter_string = if filter_suggestions.is_empty() {
-        r#"["rs", "toml"]"#.to_string()
-    } else {
-        format!(r#"["{}"]"#, filter_suggestions.join(r#"", ""#))
-    };
-
-    let default_config_content = format!(
-        r#"# Context Builder Configuration File
-# This file was generated with sensible defaults based on the file types detected in your project
-
-# Output file name (or base name when timestamped_output is true)
-output = "context.md"
-
-# Optional folder to place the generated output file(s) in
-output_folder = "docs"
-
-# Append a UTC timestamp to the output file name (before extension)
-timestamped_output = true
-
-# Enable automatic diff generation (requires timestamped_output = true)
-auto_diff = true
-
-# Emit only change summary + modified file diffs (no full file bodies)
-diff_only = false
-
-# File extensions to include (no leading dot, e.g. "rs", "toml")
-filter = {}
-
-# File / directory names to ignore (exact name matches)
-ignore = ["docs", "target", ".git", "node_modules"]
-
-# Add line numbers to code blocks
-line_numbers = false
-"#,
-        filter_string
-    );
-
-    let mut file = File::create(config_path)?;
-    file.write_all(default_config_content.as_bytes())?;
-
-    println!("Config file created at {}", config_path.display());
-    println!("Detected file types: {}", filter_suggestions.join(", "));
-    println!("You can now customize it according to your project needs.");
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Result;
-    use tempfile::tempdir;
-
-    // Mock prompter for testing
-    struct MockPrompter {
-        confirm_processing_response: bool,
-        confirm_overwrite_response: bool,
-    }
-
-    impl MockPrompter {
-        fn new(processing: bool, overwrite: bool) -> Self {
-            Self {
-                confirm_processing_response: processing,
-                confirm_overwrite_response: overwrite,
-            }
-        }
-    }
-
-    impl Prompter for MockPrompter {
-        fn confirm_processing(&self, _file_count: usize) -> Result<bool> {
-            Ok(self.confirm_processing_response)
-        }
-
-        fn confirm_overwrite(&self, _file_path: &str) -> Result<bool> {
-            Ok(self.confirm_overwrite_response)
-        }
-    }
-
-    #[test]
-    fn test_diff_config_default() {
-        let config = DiffConfig::default();
-        assert_eq!(config.context_lines, 3);
-        assert!(!config.enabled);
-        assert!(!config.diff_only);
-    }
-
-    #[test]
-    fn test_diff_config_custom() {
-        let config = DiffConfig {
-            context_lines: 5,
-            enabled: true,
-            diff_only: true,
-        };
-        assert_eq!(config.context_lines, 5);
-        assert!(config.enabled);
-        assert!(config.diff_only);
-    }
-
-    #[test]
-    fn test_default_prompter() {
-        let prompter = DefaultPrompter;
-
-        // Test small file count (should not prompt)
-        let result = prompter.confirm_processing(50);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[test]
-    fn test_run_with_args_nonexistent_directory() {
-        let args = Args {
-            input: "/nonexistent/directory".to_string(),
-            output: "output.md".to_string(),
-            filter: vec![],
-            ignore: vec![],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: false,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        let result = run_with_args(args, config, &prompter);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("does not exist"));
-    }
-
-    #[test]
-    fn test_run_with_args_preview_mode() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-
-        // Create some test files
-        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
-        fs::create_dir(base_path.join("src")).unwrap();
-        fs::write(base_path.join("src/lib.rs"), "pub fn hello() {}").unwrap();
-
-        let args = Args {
-            input: ".".to_string(),
-            output: "test.md".to_string(),
-            filter: vec![],
-            ignore: vec![],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: false,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        // Set CB_SILENT to avoid console output during test
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_with_args_token_count_mode() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-
-        // Create test files
-        fs::write(base_path.join("small.txt"), "Hello world").unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: "test.md".to_string(),
-            filter: vec![],
-            ignore: vec![],
-            line_numbers: false,
-            preview: false,
-            token_count: true,
-            yes: false,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_with_args_preview_and_token_count() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-
-        fs::write(base_path.join("test.txt"), "content").unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: "test.md".to_string(),
-            filter: vec![],
-            ignore: vec![],
-            line_numbers: false,
-            preview: true,
-            token_count: false,
-            yes: false,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_with_args_user_cancels_overwrite() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-        let output_path = temp_dir.path().join("existing.md");
-
-        // Create test files
-        fs::write(base_path.join("test.txt"), "content").unwrap();
-        fs::write(&output_path, "existing content").unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: "test.md".to_string(),
-            filter: vec![],
-            ignore: vec!["target".to_string()],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: false,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, false); // Deny overwrite
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cancelled"));
-    }
-
-    #[test]
-    fn test_run_with_args_user_cancels_processing() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-
-        // Create many test files to trigger processing confirmation
-        for i in 0..105 {
-            fs::write(base_path.join(format!("file{}.txt", i)), "content").unwrap();
-        }
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: "test.md".to_string(),
-            filter: vec!["rs".to_string()],
-            ignore: vec![],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: false,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(false, true); // Deny processing
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cancelled"));
-    }
-
-    #[test]
-    fn test_run_with_args_with_yes_flag() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-        let output_file_name = "test.md";
-        let output_path = temp_dir.path().join(output_file_name);
-
-        fs::write(base_path.join("test.txt"), "Hello world").unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: output_path.to_string_lossy().to_string(),
-            filter: vec![],
-            ignore: vec!["ignored_dir".to_string()],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: true,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-        assert!(output_path.exists());
-
-        let content = fs::read_to_string(&output_path).unwrap();
-        assert!(content.contains("Directory Structure Report"));
-        assert!(content.contains("test.txt"));
-    }
-
-    #[test]
-    fn test_run_with_args_with_filters() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-        let output_file_name = "test.md";
-        let output_path = temp_dir.path().join(output_file_name);
-
-        fs::write(base_path.join("code.rs"), "fn main() {}").unwrap();
-        fs::write(base_path.join("readme.md"), "# README").unwrap();
-        fs::write(base_path.join("data.json"), r#"{"key": "value"}"#).unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: output_path.to_string_lossy().to_string(),
-            filter: vec!["rs".to_string(), "md".to_string()],
-            ignore: vec![],
-            line_numbers: true,
-            preview: false,
-            token_count: false,
-            yes: true,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-
-        let content = fs::read_to_string(&output_path).unwrap();
-        assert!(content.contains("code.rs"));
-        assert!(content.contains("readme.md"));
-        assert!(!content.contains("data.json")); // Should be filtered out
-        assert!(content.contains("   1 |")); // Line numbers should be present
-    }
-
-    #[test]
-    fn test_run_with_args_with_ignores() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-        let output_path = temp_dir.path().join("ignored.md");
-
-        fs::write(base_path.join("important.txt"), "important content").unwrap();
-        fs::write(base_path.join("secret.txt"), "secret content").unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: output_path.to_string_lossy().to_string(),
-            filter: vec![],
-            ignore: vec!["secret.txt".to_string()],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: true,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-
-        let content = fs::read_to_string(&output_path).unwrap();
-        assert!(content.contains("important.txt"));
-        // The ignore pattern may not work exactly as expected in this test setup
-        // Just verify the output file was created successfully
-    }
-
-    #[test]
-    fn test_auto_diff_without_previous_state() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-        let output_file_name = "test.md";
-        let output_path = temp_dir.path().join(output_file_name);
-
-        fs::write(base_path.join("new.txt"), "new content").unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: output_path.to_string_lossy().to_string(),
-            filter: vec![],
-            ignore: vec![],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: true,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config {
-            auto_diff: Some(true),
-            diff_context_lines: Some(5),
-            ..Default::default()
-        };
-        let prompter = MockPrompter::new(true, true);
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-        assert!(output_path.exists());
-
-        let content = fs::read_to_string(&output_path).unwrap();
-        assert!(content.contains("new.txt"));
-    }
-
-    #[test]
-    fn test_run_creates_output_directory() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-        let output_dir = temp_dir.path().join("nested").join("output");
-        let output_path = output_dir.join("result.md");
-
-        fs::write(base_path.join("test.txt"), "content").unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: output_path.to_string_lossy().to_string(),
-            filter: vec![],
-            ignore: vec![],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: true,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-        let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
-
-        unsafe {
-            std::env::set_var("CB_SILENT", "1");
-        }
-        let result = run_with_args(args, config, &prompter);
-        unsafe {
-            std::env::remove_var("CB_SILENT");
-        }
-
-        assert!(result.is_ok());
-        assert!(output_path.exists());
-        assert!(output_dir.exists());
-    }
-
-    #[test]
-    fn test_generate_markdown_with_diff_no_comparison() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-
-        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
-
-        let files = collect_files(base_path, &[], &[], &[]).unwrap();
-        let file_tree = build_file_tree(&files, base_path);
-        let config = Config::default();
-        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
-
-        let args = Args {
-            input: base_path.to_string_lossy().to_string(),
-            output: "test.md".to_string(),
-            filter: vec![],
-            ignore: vec![],
-            line_numbers: false,
-            preview: false,
-            token_count: false,
-            yes: false,
-            diff_only: false,
-            clear_cache: false,
-            init: false,
-            max_tokens: None,
-        };
-
-        let diff_config = DiffConfig::default();
-
-        let sorted_paths: Vec<PathBuf> = files
-            .iter()
-            .map(|e| e.path().strip_prefix(base_path).unwrap_or(e.path()).to_path_buf())
-            .collect();
-
-        let result = generate_markdown_with_diff(&state, None, &args, &file_tree, &diff_config, &sorted_paths);
-        assert!(result.is_ok());
-
-        let content = result.unwrap();
-        assert!(content.contains("Directory Structure Report"));
-        assert!(content.contains("test.rs"));
-    }
-}
-```
-
-### File: `src/main.rs`
-
-- Size: 73 bytes
-- Modified: 2026-02-14 07:14:48 UTC
-
-```rust
-use std::io;
-
-fn main() -> io::Result<()> {
-    context_builder::run()
-}
-```
-
 ### File: `src/markdown.rs`
 
-- Size: 39662 bytes
-- Modified: 2026-02-14 22:08:53 UTC
+- Size: 39836 bytes
+- Modified: 2026-02-14 22:42:03 UTC
 
 ```rust
 use chrono::Utc;
@@ -4194,22 +4925,24 @@ pub fn generate_markdown(
                                         // Estimate tokens for this chunk (~4 bytes per token)
                                         let chunk_tokens = buf.len() / 4;
 
-                                        if let Some(max) = budget {
-                                            if tokens_used + chunk_tokens > max && tokens_used > 0 {
-                                                let remaining = total_files - next_index;
-                                                let notice = format!(
-                                                    "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
-                                                    max, remaining
-                                                );
-                                                if let Err(e) = output.write_all(notice.as_bytes()) {
-                                                    errors.push(format!(
-                                                        "Failed to write truncation notice: {}", e
-                                                    ));
-                                                }
-                                                budget_exceeded = true;
-                                                next_index += 1;
-                                                continue;
+                                        if let Some(max) = budget
+                                            && tokens_used + chunk_tokens > max
+                                            && tokens_used > 0
+                                        {
+                                            let remaining = total_files - next_index;
+                                            let notice = format!(
+                                                "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
+                                                max, remaining
+                                            );
+                                            if let Err(e) = output.write_all(notice.as_bytes()) {
+                                                errors.push(format!(
+                                                    "Failed to write truncation notice: {}",
+                                                    e
+                                                ));
                                             }
+                                            budget_exceeded = true;
+                                            next_index += 1;
+                                            continue;
                                         }
 
                                         tokens_used += chunk_tokens;
@@ -4284,7 +5017,9 @@ pub fn generate_markdown(
 
         for (idx, entry) in files.iter().enumerate() {
             // Estimate tokens for this file (~4 bytes per token)
-            let file_size = std::fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
+            let file_size = std::fs::metadata(entry.path())
+                .map(|m| m.len())
+                .unwrap_or(0);
             let estimated_file_tokens = (file_size as usize) / 4;
 
             if let Some(budget) = max_tokens {
@@ -4426,10 +5161,15 @@ pub fn process_file(
                 // If we landed on a leading byte, check if the sequence is complete
                 if end > 0 && end < n {
                     let leading = sniff[end - 1];
-                    let expected_len = if leading & 0xE0 == 0xC0 { 2 }
-                        else if leading & 0xF0 == 0xE0 { 3 }
-                        else if leading & 0xF8 == 0xF0 { 4 }
-                        else { 1 };
+                    let expected_len = if leading & 0xE0 == 0xC0 {
+                        2
+                    } else if leading & 0xF0 == 0xE0 {
+                        3
+                    } else if leading & 0xF8 == 0xF0 {
+                        4
+                    } else {
+                        1
+                    };
                     if end - 1 + expected_len > n {
                         end - 1 // incomplete char — exclude the leading byte too
                     } else {
@@ -5161,8 +5901,8 @@ mod tests {
 
 ### File: `src/state.rs`
 
-- Size: 25997 bytes
-- Modified: 2026-02-14 22:06:43 UTC
+- Size: 26113 bytes
+- Modified: 2026-02-14 22:41:02 UTC
 
 ```rust
 //! Project state representation for context-builder.
@@ -5289,7 +6029,11 @@ impl ProjectState {
                 // Fallback: try CWD if base_path has no file_name (e.g., root path)
                 std::env::current_dir()
                     .ok()
-                    .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+                    .and_then(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
+                    })
                     .unwrap_or_else(|| "unknown".to_string())
             });
 
@@ -5387,8 +6131,10 @@ impl ProjectState {
             config_str.push_str(&ignores.join(","));
         }
         config_str.push('|');
-        config_str.push_str(&format!("{:?}|{:?}|{:?}",
-            config.line_numbers, config.auto_diff, config.diff_context_lines));
+        config_str.push_str(&format!(
+            "{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines
+        ));
 
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
         format!("{:x}", hash)
@@ -5414,8 +6160,7 @@ impl FileState {
         };
 
         // Compute content hash using stable xxh3
-        let content_hash = format!("{:016x}",
-            xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
+        let content_hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
 
         Ok(FileState {
             content,
@@ -6590,8 +7335,8 @@ out = ["Html", "Xml"]
 
 ### File: `benches/context_bench.rs`
 
-- Size: 10761 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 10825 bytes
+- Modified: 2026-02-14 22:42:36 UTC
 
 ```rust
 use std::fs;
@@ -6806,6 +7551,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         diff_only: false,
         clear_cache: false,
         init: false,
+        max_tokens: None,
     };
 
     let prompter = NoPrompt;
@@ -6849,6 +7595,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     diff_only: false,
                     clear_cache: false,
                     init: false,
+                    max_tokens: None,
                 },
                 Config::default(),
                 &prompter,
@@ -10345,8 +11092,8 @@ filter = ["txt"]
 
 ### File: `tests/test_determinism.rs`
 
-- Size: 20094 bytes
-- Modified: 2026-02-14 19:59:06 UTC
+- Size: 20050 bytes
+- Modified: 2026-02-14 22:43:45 UTC
 
 ```rust
 //! Integration tests for determinism and robustness of context-builder
@@ -10564,24 +11311,22 @@ fn test_deterministic_output_multiple_runs() {
         "Should have found some file entries"
     );
 
-    // Check that files are sorted by relevance category (config → source → tests → docs)
-    // Within each category, files should be alphabetically sorted
-    // Category 0: Cargo.toml (config)
-    // Category 1: src/* (source code)
+    // Check that files are sorted by relevance category:
+    // Category 0: Cargo.toml (config), README.md (key project doc)
+    // Category 1: src/* (source code) — entry points first (lib.rs, main.rs before utils.rs)
     // Category 2: tests/* (tests)
-    // Category 3: docs/* (documentation)
     let expected_order = vec![
         "### File: `Cargo.toml`",
+        "### File: `docs/README.md`",
         "### File: `src/lib.rs`",
         "### File: `src/main.rs`",
         "### File: `src/utils.rs`",
         "### File: `tests/integration.rs`",
         "### File: `tests/unit.rs`",
-        "### File: `docs/README.md`",
     ];
     assert_eq!(
         file_lines, expected_order,
-        "Files should be listed in relevance order (config → source → tests → docs)"
+        "Files should be listed in relevance order (config+docs → source (entry points first) → tests)"
     );
 }
 #[test]
@@ -11581,176 +12326,6 @@ fn test_encoding_strategy_configuration() {
 }
 ```
 
-### File: `AGENTS.md`
-
-- Size: 6816 bytes
-- Modified: 2026-02-14 07:24:34 UTC
-
-```markdown
-# AGENTS.md - AI Agent Instructions
-
-This file helps AI agents quickly understand and contribute to the Context Builder codebase.
-
-## Project Overview
-
-Context Builder is a **blazing-fast Rust CLI** for aggregating entire codebases into single, LLM-friendly markdown files. Published on [crates.io](https://crates.io/crates/context-builder) under MIT license.
-
-**If this is your first time:** Read this file, then run `cargo run -- --help` to see all options.
-
----
-
-## Tech Stack
-
-| Technology | Usage |
-|---|---|
-| **Language** | Rust (Edition 2024) |
-| **Build** | Cargo (no npm/bun/node) |
-| **CLI** | `clap` (derive) |
-| **Parallelism** | `rayon` (optional, default on) + `crossbeam-channel` |
-| **Diffing** | `similar` (unified diffs) |
-| **File traversal** | `ignore` crate (gitignore-aware) |
-| **Token counting** | `tiktoken-rs` (`cl100k_base`) |
-| **Caching** | JSON + `fs2` file locking |
-| **Config** | TOML (`context-builder.toml`) |
-| **Encoding** | `encoding_rs` (transcoding non-UTF-8) |
-| **Logging** | `env_logger` |
-| **Branch** | `master` (not `main`) |
-
----
-
-## Project Structure
-
-```
-context-builder/
-├── src/
-│   ├── main.rs              # Entry point — calls lib::run()
-│   ├── lib.rs               # Core orchestration, run_with_args(), Prompter trait, --init
-│   ├── cli.rs               # Args struct via clap derive
-│   ├── config.rs            # Config struct, TOML deserialization
-│   ├── config_resolver.rs   # Merges CLI args + TOML config (CLI > config > defaults)
-│   ├── file_utils.rs        # .gitignore-aware traversal, OverrideBuilder for custom ignores
-│   ├── tree.rs              # BTreeMap file tree (deterministic ordering)
-│   ├── state.rs             # ProjectState/FileState structured snapshots
-│   ├── markdown.rs          # Streaming file renderer, binary detection, encoding, parallel
-│   ├── cache.rs             # JSON-based caching with fs2 locking, old cache migration
-│   ├── diff.rs              # Per-file unified diffs via similar
-│   └── token_count.rs       # Real tokenization via tiktoken-rs (cl100k_base, lazy init)
-├── tests/                   # 10 integration test files
-├── benches/                 # Criterion benchmark suite
-├── scripts/                 # generate_samples.rs (benchmark dataset generator)
-├── context-builder.toml     # Project's own config file
-├── Cargo.toml               # Crate metadata, dependencies, features
-├── DEVELOPMENT.md           # Contributor guide
-├── BENCHMARKS.md            # Performance benchmarking guide
-├── CHANGELOG.md             # Release history
-└── .github/workflows/ci.yml # CI: fmt, clippy, build, test, security audit (ubuntu/win/macos)
-```
-
----
-
-## Key Commands
-
-```bash
-# Build
-cargo build
-
-# Run
-cargo run -- --help
-cargo run -- -d . -o out.md -f rs -f toml
-cargo run -- --preview        # File tree only, no output
-cargo run -- --init           # Create config file with auto-detected filters
-
-# Test (MUST use single thread — tests share CWD)
-cargo test -- --test-threads=1
-
-# Lint (must pass -D warnings)
-cargo clippy --all-targets --all-features -- -D warnings
-
-# Format
-cargo fmt --all
-```
-
----
-
-## Key Design Patterns
-
-1. **`Prompter` trait** — Abstracts user confirmation (overwrite/processing). Tests use `MockPrompter`/`TestPrompter`. Never add stdin reads in library code.
-
-2. **Streaming writes** — `markdown.rs` processes files line-by-line for low memory. With `parallel` feature, uses crossbeam channels for concurrent processing.
-
-3. **Structured state** — v0.5.0 replaced fragile text-based cache parsing with JSON `ProjectState` snapshots for reliable auto-diff.
-
-4. **Deterministic output** — `BTreeMap` everywhere ensures identical output across runs.
-
-5. **Config precedence** — CLI args > TOML config > defaults, with explicit detection in `config_resolver.rs`.
-
----
-
-## Feature Flags
-
-| Feature | Default | Purpose |
-|---|---|---|
-| `parallel` | ✅ | Rayon for parallel file processing |
-| `samples-bin` | ❌ | Exposes `generate_samples` binary for benchmarking |
-
----
-
-## Environment Variables
-
-| Variable | Purpose |
-|---|---|
-| `CB_SILENT` | `"1"` suppresses user-facing prints (benchmarks set this) |
-| `CB_BENCH_MEDIUM` | `"1"` enables heavier benchmark datasets |
-| `CB_BENCH_DATASET_DIR` | External benchmark dataset root |
-| `RUST_LOG` | Controls `env_logger` verbosity (e.g., `RUST_LOG=info`) |
-
----
-
-## Code Style Guidelines
-
-1. **Error handling** — Use `io::Result`. Prefer returning errors over panicking. `unwrap()`/`expect()` OK in tests, NOT in library code.
-2. **Cross-platform** — Normalize path separators in tests for string comparisons.
-3. **New CLI flags** — Add in `cli.rs`, update tests in same file, propagate through `run_with_args`.
-4. **Language detection** — Keep simple and deterministic; add mappings in one place.
-5. **Binary detection** — Lightweight: NUL byte check + UTF-8 validity.
-6. **Logging** — Use `log::{info, warn, error}`. Let `env_logger` control emission.
-
----
-
-## Test Organization
-
-- **Unit tests**: Inline `#[cfg(test)]` modules in every source file
-- **Integration tests** (10 files in `tests/`):
-  - `test_auto_diff.rs` — Auto-diff workflow (largest test file)
-  - `test_determinism.rs` — Output determinism verification
-  - `test_config_resolution.rs` — CLI/config merge behavior
-  - `test_cwd_independence.rs` — Path independence
-  - `test_comprehensive_edge_cases.rs` — Edge cases
-  - `cli_integration.rs` — End-to-end CLI tests
-  - `test_binary_file_autodiff.rs`, `test_parallel_memory.rs`, `test_phase4_integration.rs`, `diff_integration.rs`
-- **Benchmarks**: Criterion suite at `benches/context_bench.rs`
-
-**Critical:** Tests MUST run with `--test-threads=1` (CI enforces this). Many tests use `set_current_dir()` which is process-global. Use `#[serial]` attribute where order matters.
-
----
-
-## Known Hazards
-
-- **Year in tests**: Watch for hardcoded year strings in timestamp assertions. Use dynamic `Utc::now().format("%Y")` instead.
-- **CWD mutation**: Tests that `set_current_dir()` must restore the original directory in all code paths (including panics).
-- **Config from CWD**: `load_config()` reads from CWD. `load_config_from_path()` reads from explicit root. Prefer the latter in tests.
-- **Cache collisions**: Cache keys are project-path + config hash. Different configs = different cache files.
-
----
-
-## Release Process
-
-1. `cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings && cargo test -- --test-threads=1`
-2. Bump `version` in `Cargo.toml`, add entry to `CHANGELOG.md`
-3. `git commit -am "chore(release): vX.Y.Z" && git tag vX.Y.Z && git push && git push --tags`
-4. `cargo publish`
-```
-
 ### File: `BENCHMARKS.md`
 
 - Size: 6024 bytes
@@ -11925,177 +12500,6 @@ It’s recommended to add `/samples` to `.gitignore` if not already present.
 ---
 
 Happy benchmarking!
-```
-
-### File: `CHANGELOG.md`
-
-- Size: 8052 bytes
-- Modified: 2026-02-14 19:59:56 UTC
-
-```markdown
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-## v0.7.0
-
-- **Deterministic Output**
-  - Replaced volatile timestamp (`Processed at: <timestamp>`) with a content hash (`Content hash: <hex>`) in the Markdown header
-  - Identical project states now produce byte-for-byte identical output files, enabling LLM prompt caching
-
-- **Context Budgeting (`--max-tokens N`)**
-  - New CLI argument `--max-tokens` and `context-builder.toml` config option to cap the output token budget
-  - Files are processed until the budget is exhausted, with a `<truncated>` marker appended
-  - Prevents API errors from excessively large contexts and reduces costs
-
-- **Relevance-Based File Ordering**
-  - Files are now sorted by relevance category: config files (0) → source code (1) → tests (2) → docs/other (3)
-  - Within each category, files remain alphabetically sorted
-  - Helps LLMs prioritize core logic and configuration over supporting files
-
-## v0.6.1
-
-- **Bug Fixes** (identified by Gemini Deep Think code review)
-  - Fixed TOCTOU race in cache writes: `File::create` was truncating before acquiring lock, risking data loss for concurrent readers
-  - Fixed indentation destruction in `diff_only` mode: `trim_start()` was stripping all leading whitespace from added files, corrupting Python/YAML
-  - Fixed UTF-8 boundary corruption: 8KB sniff buffer could split multi-byte characters, misclassifying valid UTF-8 files as binary
-  - Fixed CLI flags silently overwritten: config file values were unconditionally overriding CLI arguments post-resolution
-  - Removed duplicate file seek block (copy-paste error)
-
-## v0.6.0
-
-- **Smart Defaults**
-  - Auto-exclude output files: the tool now automatically excludes its own generated output file, output folder, and `.context-builder/` cache directory from context collection without requiring manual `--ignore` flags
-  - Timestamped output glob patterns (e.g., `docs/context_*.md`) are auto-excluded when `timestamped_output` is enabled
-  - Large-file detection: warns about files exceeding 100 KB with a sorted top-5 list and total context size summary
-  - Improved project name detection: canonicalizes relative paths (like `.`) to resolve the actual directory name instead of showing "unknown"
-
-- **Testing & Stability**
-  - Added `#[serial]` annotations to integration tests that mutate CWD, fixing intermittent test failures in parallel execution
-  - All 146 tests pass consistently with `--test-threads=1`
-
-- **Dependencies**
-  - Updated `criterion` to 0.8.2
-  - Updated `tiktoken-rs` to 0.9.1
-  - Updated `toml` to 1.0.1
-
-## v0.5.2
-
-- Enhanced `--init` command to detect major file types in the current directory and suggest appropriate filters instead of using generic defaults
-- Fixed file type detection to respect .gitignore patterns and common ignore directories (target, node_modules, etc.)
-
-## v0.5.1
-
-- Added `--init` command to create a new `context-builder.toml` configuration file in the current directory with sensible defaults
-
-## v0.5.0
-
-- **BREAKING CHANGES**
-  - Cache file locations changed to project-specific paths to prevent collisions
-
-- **Critical Bug Fixes**
-  - **Fixed inverted ignore logic**: Corrected critical bug where ignore patterns were being treated as include patterns, causing files/directories meant to be ignored to be explicitly included instead
-  - **Fixed cache read panics**: Improved error handling for corrupted cache files to prevent application crashes
-  - **Fixed potential panics in path manipulation**: Added safe handling for edge case filenames without extensions or stems
-
-- **Major Improvements**
-  - **Deterministic Output**: Files are now sorted consistently, ensuring identical output for the same input across multiple runs
-  - **Robust Caching Architecture**: Complete rewrite of caching system with:
-    - Project-specific cache keys based on absolute path hash to prevent collisions
-    - JSON-based structured caching replacing fragile markdown parsing
-    - File locking with `fs2` crate for thread-safe concurrent access
-    - Configuration changes now properly invalidate cache
-  - **Enhanced Auto-Diff System**:
-    - Structured state representation before markdown generation
-    - Eliminated fragile text parsing with `extract_file_contents` and `strip_line_number` functions
-    - Cache structured data (JSON) instead of markdown for reliability
-  - **Thread Safety**: Removed all `unsafe` blocks and explicit configuration passing replaces environment variables
-
-- **Performance Optimizations**
-  - **Custom Ignores**: Now uses `ignore::overrides::OverrideBuilder` with glob pattern support for better performance
-  - **Parallel Processing**: Improved error handling to collect all errors and continue processing other files
-  - **Directory Traversal**: Let `ignore` crate optimize directory traversal instead of custom logic
-
-- **Bug Fixes**
-  - Fixed non-deterministic output order that caused inconsistent LLM context generation
-  - Removed incorrect triple-backtick filtering in diff logic that was corrupting file content
-  - Fixed cache corruption issues in concurrent access scenarios
-  - Improved error recovery for partial failures and corrupted cache
-  - Fixed inconsistent file tree visualization between auto-diff and standard modes
-
-- **Testing & Quality**
-  - Added comprehensive integration test suite with tests covering:
-    - Determinism verification
-    - Auto-diff workflows
-    - Cache collision prevention
-    - Configuration change detection
-    - Error recovery scenarios
-  - Fixed test race conditions by running tests serially in CI (`--test-threads=1`)
-  - Added `pretty_assertions` for better test output
-  - Fixed all clippy warnings and enforced `-D warnings` in CI
-
-- **Dependencies**
-  - Added `fs2` for file locking
-  - Added `serde_json` for structured cache format
-  - Added `serial_test` for test serialization
-  - Added `pretty_assertions` for enhanced test output
-  - Added `encoding_rs` for enhanced encoding detection and transcoding
-
-- **Migration**
-  - Automatic detection and cleanup of old markdown-based cache files (`last_canonical.md`, etc.)
-  - First run after upgrade will clear old cache format to prevent conflicts
-  - CLI interface remains fully backward compatible
-
-- **Code Quality & Maintenance**
-  - Fixed all clippy warnings including type complexity, collapsible if statements, and redundant closures
-  - Updated CI workflow to prevent race conditions in tests
-  - Improved binary file detection with better encoding strategy handling
-  - Enhanced error handling for edge cases and file system operations
-
-## v0.4.0
-
-
-- Added
-
-  - Token count mode (`--token-count`) now provides accurate token counts using the `tiktoken-rs` library.
-
-  - Configuration file support (`context-builder.toml`) for project-specific settings.
-
-  - Timestamped output versions.
-
-  - `auto_diff` feature to automatically generate a diff from the latest output.
-  - `diff_only` mode (`--diff-only` / `diff_only = true`) to output only the change summary and modified file diffs (no full file bodies) for lower token usage.
-
-- Removed
-  - Deprecated, unpublished `standalone_snapshot` option (replaced by `diff_only`).
-
-
-## v0.3.0
-
-- Changed
-  - Parallel processing is now enabled by default via the `parallel` feature (uses `rayon`) for significant speedups on large projects.
-    - To build/run sequentially, disable default features:
-      - CLI/build: `cargo build --no-default-features` or `cargo run --no-default-features`
-      - As a dependency: `default-features = false`
-  - Updated Rust edition to 2024.
-
-- Benchmarks
-  - Benchmarks run silent by default by setting `CB_SILENT=1` at startup to avoid skewing timings with console I/O.
-    - Override with `CB_SILENT=0` if you want to see output during benches.
-
-## v0.2.0
-
-- Added line numbers support
-- Improved file tree visualization
-- Enhanced error handling
-- Better CLI argument validation
-
-## v0.1.0
-
-- Initial release
-- Basic directory processing
-- File filtering and ignoring
-- Markdown output generation
 ```
 
 ### File: `DEVELOPMENT.md`
@@ -12385,313 +12789,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-```
-
-### File: `README.md`
-
-- Size: 9822 bytes
-- Modified: 2026-02-14 07:14:48 UTC
-
-```markdown
-<div align="center">
-
-# Context Builder
-
-A blazing-fast CLI for creating LLM context from your entire codebase.
-
-[![Crates.io](https://img.shields.io/crates/v/context-builder.svg)](https://crates.io/crates/context-builder)
-![Crates.io Size](https://img.shields.io/crates/size/context-builder)
-![Deps.rs Crate Dependencies (latest)](https://img.shields.io/deps-rs/context-builder/latest)
-![Crates.io Total Downloads](https://img.shields.io/crates/d/context-builder)
-
-</div>
-
-<div align="center">
-
-[![Coverage Status](https://coveralls.io/repos/github/igorls/context-builder/badge.svg?branch=master)](https://coveralls.io/github/igorls/context-builder?branch=master)
-[![CI](https://github.com/igorls/context-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/igorls/context-builder/actions/workflows/ci.yml)
-![docs.rs](https://img.shields.io/docsrs/context-builder)
-
-</div>
-
-<div align="center">
-
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/igorls/context-builder/blob/main/LICENSE)
-
-</div>
-
-<br/>
-
-Tired of manually copy-pasting files into your LLM prompts? Context Builder automates this tedious process, creating a single, clean, and context-rich markdown file from any directory.
-
----
-
-## Why Context Builder?
-
-Providing broad context to Large Language Models (LLMs) is key to getting high-quality, relevant responses. This tool was built to solve one problem exceptionally well: **packaging your project's source code into a clean, LLM-friendly format with zero fuss.**
-
-It's a command-line utility that recursively processes directories and creates comprehensive markdown documentation, optimized for AI conversations.
-
-## Core Features
-
-
-- ⚡ **Blazing Fast & Parallel by Default:**
-  Processes thousands of files in seconds by leveraging all available CPU cores.
-
-- 🧠 **Smart & Efficient File Discovery:**
-  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
-
-- 💾 **Memory-Efficient Streaming:**
-  Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
-
-- 🌳 **Clear File Tree Visualization:**
-  Generates an easy-to-read directory structure at the top of the output file.
-
-- 🔍 **Powerful Filtering & Preview:**
-  Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
-
-
-
- - ⚙️ **Configuration-First:**
-
-
-  Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs. Initialize a new config file with `--init`, which will detect the major file types in your project (respecting `.gitignore` patterns) and suggest appropriate filters.
-
-
-
-
-- 🔁 **Automatic Per-File Diffs:**
-  When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
-
-- ✂️ **Diff-Only Mode:**
-  Output only the change summary and modified file diffs—no full file bodies—to minimize token usage.
-
-- 🧪 **Accurate Token Counting:**
-  Get real tokenizer–based estimates with `--token-count` to plan your prompt budgets.
-
-
----
-
-## Installation
-
-### From crates.io (Recommended)
-
-```bash
-cargo install context-builder
-```
-
-
-### If you don't have Rust installed
-
-Context Builder is distributed via crates.io. We do not ship pre-built binaries yet, so you need a Rust toolchain.
-
-
-#### Quick install (Linux/macOS):
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-Follow the prompt, then restart your shell
-
-#### Windows: https://www.rust-lang.org/tools/install
-
-After installation, ensure Cargo is on your PATH:
-
-```bash
-cargo --version
-```
-
-Then install Context Builder:
-```bash
-cargo install context-builder
-```
-
-Update later with:
-```bash
-cargo install context-builder --force
-```
-
-### From source
-
-```bash
-git clone https://github.com/igorls/context-builder.git
-cd context-builder
-cargo install --path .
-```
-
----
-
-## Usage
-
-### Basic Usage
-
-
-
- # Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
-
- context-builder --init
-
-
-
-# Process current directory and create output.md
-context-builder
-
-# Process a specific directory
-context-builder -d /path/to/project
-
-# Specify an output file
-context-builder -d /path/to/project -o documentation.md
-```
-
-### Advanced Options
-
-```bash
-# Filter by file extensions (e.g., only Rust and TOML files)
-context-builder -f rs -f toml
-
-# Ignore specific folders/files by name
-context-builder -i target -i node_modules -i .git
-
-# Preview mode (shows the file tree without generating output)
-context-builder --preview
-
-# Token count mode (accurately count the total token count of the final document using a real tokenizer.)
-context-builder --token-count
-
-# Add line numbers to all code blocks
-context-builder --line-numbers
-
-# Skip all confirmation prompts (auto-answer yes)
-context-builder --yes
-
-# Output only diffs (requires auto-diff & timestamped output)
-context-builder --diff-only
-
-
-# Clear cached project state (resets auto-diff baseline & removes stored state)
-
-context-builder --clear-cache
-
-# Combine multiple options for a powerful workflow
-context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.md
-```
-
----
-
-## Configuration
-
-For more complex projects, you can use a `context-builder.toml` file in your project's root directory to store your preferences. This is great for ensuring consistent outputs and avoiding repetitive command-line flags.
-
-### Example `context-builder.toml`
-
-```toml
-# Default output file name
-output = "context.md"
-
-# Default output folder
-output_folder = "docs/context"
-
-# Create timestamped versions of the output file (e.g., context_20250912123000.md)
-timestamped_output = true
-
-# Automatically compute per-file diffs against the previous timestamped snapshot
-auto_diff = true
-
-# Emit only change summary + modified file diffs (omit full file bodies)
-# Set to true to greatly reduce token usage when you just need what's changed.
-diff_only = false
-
-# Number of context lines to show around changes in diffs (default: 3)
-diff_context_lines = 5
-
-# File extensions to include
-filter = ["rs", "toml", "md"]
-
-# Folders or file names to ignore
-ignore = ["target", "node_modules", ".git"]
-
-# Add line numbers to code blocks
-line_numbers = true
-
-# Preview mode: only show file tree without generating output
-preview = false
-
-# Token counting mode
-token_count = false
-
-
-# Automatically answer yes to all prompts
-
-yes = false
-
-
-
-# Encoding handling strategy for non-UTF-8 files
-
-# Options: "detect" (default), "strict", "skip"
-
-encoding_strategy = "detect"
-
-```
-
-
-
- You can initialize a new configuration file using the `--init` command. This will create a `context-builder.toml` file in your current directory with sensible defaults based on the file types detected in your project. The filter suggestions will be automatically tailored to your project's most common file extensions while respecting `.gitignore` patterns and common ignore directories like `target`, `node_modules`, etc. This makes it more likely to include the files you actually want to process.
-
-
-
----
-
-## Auto-diff
-
-When using `timestamped_output = true` together with `auto_diff = true`, Context Builder compares the previous canonical snapshot to the newly generated one and produces:
-
-- A Change Summary (Added / Removed / Modified files)
-- A File Differences section containing only modified files (added & removed are summarized but not diffed)
-
-If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files” section is omitted to conserve tokens: you get just the header + tree, the Change Summary, and per-file diffs for modified files.
-
-**Note:** Command-line arguments will always override the settings in the configuration file.
-
-### Command Line Options
-
-- `-d, --input <PATH>` - Directory path to process (default: current directory).
-- `-o, --output <FILE>` - Output file path (default: `output.md`).
-- `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
-- `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
-- `--preview` - Preview mode: only show the file tree, don't generate output.
-- `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
-- `--line-numbers` - Add line numbers to code blocks in the output.
-- `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
-- `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
-- `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
-- `-h, --help` - Show help information.
-- `-V, --version` - Show version information.
----
-
-## Token Counting
-
-Context Builder uses the `tiktoken-rs` library to provide accurate token counts for OpenAI models. This ensures that the token count is as close as possible to the actual number of tokens that will be used by the model.
-
----
-
-## Documentation
-
-- **[DEVELOPMENT.md](DEVELOPMENT.md):** For contributors. Covers setup, testing, linting, and release process.
-- **[BENCHMARKS.md](BENCHMARKS.md):** For performance enthusiasts. Details on running benchmarks and generating datasets.
-- **[CHANGELOG.md](CHANGELOG.md):** A complete history of releases and changes.
-
-## Contributing
-
-Contributions are welcome! Please see **[DEVELOPMENT.md](DEVELOPMENT.md)** for setup instructions and guidelines. For major changes, please open an issue first to discuss what you would like to change.
-
-## Changelog
-
-See **[CHANGELOG.md](CHANGELOG.md)** for a complete history of releases and changes.
-
-## License
-
-This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** file for details.
 ```
 
 ### File: `docs/research/multi-model-code-review-analysis.md`

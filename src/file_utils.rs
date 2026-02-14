@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 
 /// Returns a numeric category for file relevance ordering.
 /// Lower numbers appear first in output. Categories:
-/// 0 = Project config (Cargo.toml, package.json, pyproject.toml, etc.)
-/// 1 = Source code (src/, lib/)
+/// 0 = Project config + key docs (Cargo.toml, README.md, AGENTS.md, etc.)
+/// 1 = Source code (src/, lib/) — entry points sorted first within category
 /// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
-/// 3 = Documentation and everything else
+/// 3 = Documentation, scripts, and everything else
 /// 4 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
+/// 5 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
 fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     let relative = path.strip_prefix(base_path).unwrap_or(path);
     let rel_str = relative.to_string_lossy();
@@ -17,21 +18,46 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     // Check filename for lockfiles first — these are lowest priority
     if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
         let lockfile_names = [
-            "Cargo.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-            "Gemfile.lock", "poetry.lock", "composer.lock", "go.sum",
-            "bun.lockb", "flake.lock",
+            "Cargo.lock",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "Gemfile.lock",
+            "poetry.lock",
+            "composer.lock",
+            "go.sum",
+            "bun.lockb",
+            "flake.lock",
         ];
         if lockfile_names.contains(&name) {
-            return 4;
+            return 5;
         }
 
-        // Check for config/manifest files — highest priority
+        // Check for config/manifest files + key project docs — highest priority
         let config_names = [
-            "Cargo.toml", "package.json",
-            "tsconfig.json", "pyproject.toml", "setup.py", "setup.cfg",
-            "Makefile", "CMakeLists.txt", "build.gradle", "pom.xml",
-            "go.mod", "Gemfile",
-            "context-builder.toml", ".gitignore",
+            // Package manifests
+            "Cargo.toml",
+            "package.json",
+            "tsconfig.json",
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "go.mod",
+            "Gemfile",
+            // Tool config
+            "context-builder.toml",
+            ".gitignore",
+            // Key project documentation (LLMs need these for context)
+            "README.md",
+            "README",
+            "README.txt",
+            "README.rst",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "GEMINI.md",
+            "COPILOT.md",
+            "CONTRIBUTING.md",
+            "CHANGELOG.md",
         ];
         if config_names.contains(&name) {
             return 0;
@@ -39,7 +65,9 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     }
 
     // Check path prefix for category
-    let first_component = relative.components().next()
+    let first_component = relative
+        .components()
+        .next()
         .and_then(|c| c.as_os_str().to_str())
         .unwrap_or("");
 
@@ -47,6 +75,8 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
         "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
         "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
+        // Build/CI infrastructure — useful context but not core source
+        ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
         _ => {
             // Check extensions for additional heuristics
             if let Some(ext) = relative.extension().and_then(|e| e.to_str()) {
@@ -55,11 +85,16 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
                     | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
                         // Source file not in a recognized dir — check if it's a test
                         // Use path boundaries to avoid false positives (e.g., "contest.rs")
-                        if rel_str.contains("/test/") || rel_str.contains("/tests/")
-                            || rel_str.contains("/spec/") || rel_str.contains("/__tests__/")
-                            || rel_str.ends_with("_test.rs") || rel_str.ends_with("_test.go")
-                            || rel_str.ends_with("_spec.rb") || rel_str.ends_with(".test.ts")
-                            || rel_str.ends_with(".test.js") || rel_str.ends_with(".spec.ts")
+                        if rel_str.contains("/test/")
+                            || rel_str.contains("/tests/")
+                            || rel_str.contains("/spec/")
+                            || rel_str.contains("/__tests__/")
+                            || rel_str.ends_with("_test.rs")
+                            || rel_str.ends_with("_test.go")
+                            || rel_str.ends_with("_spec.rb")
+                            || rel_str.ends_with(".test.ts")
+                            || rel_str.ends_with(".test.js")
+                            || rel_str.ends_with(".spec.ts")
                             || rel_str.starts_with("test_")
                         {
                             2
@@ -71,9 +106,32 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
                     _ => 1, // Unknown extension in root — treat as source
                 }
             } else {
-                3 // No extension — docs/other
+                // Check for build-related root files without extensions
+                if let Some(
+                    "Makefile" | "CMakeLists.txt" | "Dockerfile" | "Containerfile" | "Justfile"
+                    | "Taskfile" | "Rakefile" | "Vagrantfile",
+                ) = relative.file_name().and_then(|n| n.to_str())
+                {
+                    4
+                } else {
+                    3 // No extension — docs/other
+                }
             }
         }
+    }
+}
+
+/// Returns a sub-priority for sorting within the same relevance category.
+/// Lower values appear first. Entry points (main, lib, mod) get priority 0,
+/// other files get priority 1. This ensures LLMs see architectural entry
+/// points before helper modules.
+fn file_entry_point_priority(path: &Path) -> u8 {
+    if let Some("main" | "lib" | "mod" | "index" | "app" | "__init__") =
+        path.file_stem().and_then(|s| s.to_str())
+    {
+        0
+    } else {
+        1
     }
 }
 
@@ -146,13 +204,19 @@ pub fn collect_files(
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
         .collect();
 
-    // Sort files by relevance category, then alphabetically within each category.
-    // This puts config files first, then source code, then tests, then docs/other.
+    // Sort files by relevance category, then entry-point priority, then alphabetically.
+    // This puts config + docs first, then source code (entry points before helpers),
+    // then tests, then docs/other, then build/CI, then lockfiles.
     // LLMs comprehend codebases better when core source appears before test scaffolding.
     files.sort_by(|a, b| {
         let cat_a = file_relevance_category(a.path(), base_path);
         let cat_b = file_relevance_category(b.path(), base_path);
-        cat_a.cmp(&cat_b).then_with(|| a.path().cmp(b.path()))
+        cat_a
+            .cmp(&cat_b)
+            .then_with(|| {
+                file_entry_point_priority(a.path()).cmp(&file_entry_point_priority(b.path()))
+            })
+            .then_with(|| a.path().cmp(b.path()))
     });
 
     Ok(files)
