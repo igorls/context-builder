@@ -9,17 +9,28 @@ use std::path::{Path, PathBuf};
 /// 1 = Source code (src/, lib/)
 /// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
 /// 3 = Documentation and everything else
+/// 4 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
 fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     let relative = path.strip_prefix(base_path).unwrap_or(path);
     let rel_str = relative.to_string_lossy();
 
-    // Check filename for config files
+    // Check filename for lockfiles first — these are lowest priority
     if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
+        let lockfile_names = [
+            "Cargo.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+            "Gemfile.lock", "poetry.lock", "composer.lock", "go.sum",
+            "bun.lockb", "flake.lock",
+        ];
+        if lockfile_names.contains(&name) {
+            return 4;
+        }
+
+        // Check for config/manifest files — highest priority
         let config_names = [
-            "Cargo.toml", "Cargo.lock", "package.json", "package-lock.json",
+            "Cargo.toml", "package.json",
             "tsconfig.json", "pyproject.toml", "setup.py", "setup.cfg",
             "Makefile", "CMakeLists.txt", "build.gradle", "pom.xml",
-            "go.mod", "go.sum", "Gemfile", "Gemfile.lock",
+            "go.mod", "Gemfile",
             "context-builder.toml", ".gitignore",
         ];
         if config_names.contains(&name) {
@@ -43,7 +54,14 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
                     "rs" | "go" | "py" | "ts" | "js" | "java" | "c" | "cpp" | "h" | "hpp"
                     | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
                         // Source file not in a recognized dir — check if it's a test
-                        if rel_str.contains("test") || rel_str.contains("spec") {
+                        // Use path boundaries to avoid false positives (e.g., "contest.rs")
+                        if rel_str.contains("/test/") || rel_str.contains("/tests/")
+                            || rel_str.contains("/spec/") || rel_str.contains("/__tests__/")
+                            || rel_str.ends_with("_test.rs") || rel_str.ends_with("_test.go")
+                            || rel_str.ends_with("_spec.rb") || rel_str.ends_with(".test.ts")
+                            || rel_str.ends_with(".test.js") || rel_str.ends_with(".spec.ts")
+                            || rel_str.starts_with("test_")
+                        {
                             2
                         } else {
                             1

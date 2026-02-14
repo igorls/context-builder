@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 6c534f7e03f594da
+Content hash: 587cfca8caa38319
 
 ## File Tree Structure
 
@@ -46,12 +46,12 @@ Content hash: 6c534f7e03f594da
 ### File: `Cargo.toml`
 
 - Size: 1409 bytes
-- Modified: 2026-02-14 19:32:23 UTC
+- Modified: 2026-02-14 19:59:54 UTC
 
 ```toml
 [package]
 name = "context-builder"
-version = "0.6.1"
+version = "0.7.0"
 default-run = "context-builder"
 edition = "2024"
 authors = ["Igor Lins e Silva"]
@@ -2143,8 +2143,8 @@ mod tests {
 
 ### File: `src/file_utils.rs`
 
-- Size: 18147 bytes
-- Modified: 2026-02-14 19:50:00 UTC
+- Size: 19113 bytes
+- Modified: 2026-02-14 20:32:08 UTC
 
 ```rust
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
@@ -2158,17 +2158,28 @@ use std::path::{Path, PathBuf};
 /// 1 = Source code (src/, lib/)
 /// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
 /// 3 = Documentation and everything else
+/// 4 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
 fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     let relative = path.strip_prefix(base_path).unwrap_or(path);
     let rel_str = relative.to_string_lossy();
 
-    // Check filename for config files
+    // Check filename for lockfiles first — these are lowest priority
     if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
+        let lockfile_names = [
+            "Cargo.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+            "Gemfile.lock", "poetry.lock", "composer.lock", "go.sum",
+            "bun.lockb", "flake.lock",
+        ];
+        if lockfile_names.contains(&name) {
+            return 4;
+        }
+
+        // Check for config/manifest files — highest priority
         let config_names = [
-            "Cargo.toml", "Cargo.lock", "package.json", "package-lock.json",
+            "Cargo.toml", "package.json",
             "tsconfig.json", "pyproject.toml", "setup.py", "setup.cfg",
             "Makefile", "CMakeLists.txt", "build.gradle", "pom.xml",
-            "go.mod", "go.sum", "Gemfile", "Gemfile.lock",
+            "go.mod", "Gemfile",
             "context-builder.toml", ".gitignore",
         ];
         if config_names.contains(&name) {
@@ -2192,7 +2203,14 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
                     "rs" | "go" | "py" | "ts" | "js" | "java" | "c" | "cpp" | "h" | "hpp"
                     | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
                         // Source file not in a recognized dir — check if it's a test
-                        if rel_str.contains("test") || rel_str.contains("spec") {
+                        // Use path boundaries to avoid false positives (e.g., "contest.rs")
+                        if rel_str.contains("/test/") || rel_str.contains("/tests/")
+                            || rel_str.contains("/spec/") || rel_str.contains("/__tests__/")
+                            || rel_str.ends_with("_test.rs") || rel_str.ends_with("_test.go")
+                            || rel_str.ends_with("_spec.rb") || rel_str.ends_with(".test.ts")
+                            || rel_str.ends_with(".test.js") || rel_str.ends_with(".spec.ts")
+                            || rel_str.starts_with("test_")
+                        {
                             2
                         } else {
                             1
@@ -11840,13 +11858,29 @@ Happy benchmarking!
 
 ### File: `CHANGELOG.md`
 
-- Size: 7166 bytes
-- Modified: 2026-02-14 19:32:25 UTC
+- Size: 8052 bytes
+- Modified: 2026-02-14 19:59:56 UTC
 
 ```markdown
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## v0.7.0
+
+- **Deterministic Output**
+  - Replaced volatile timestamp (`Processed at: <timestamp>`) with a content hash (`Content hash: <hex>`) in the Markdown header
+  - Identical project states now produce byte-for-byte identical output files, enabling LLM prompt caching
+
+- **Context Budgeting (`--max-tokens N`)**
+  - New CLI argument `--max-tokens` and `context-builder.toml` config option to cap the output token budget
+  - Files are processed until the budget is exhausted, with a `<truncated>` marker appended
+  - Prevents API errors from excessively large contexts and reduces costs
+
+- **Relevance-Based File Ordering**
+  - Files are now sorted by relevance category: config files (0) → source code (1) → tests (2) → docs/other (3)
+  - Within each category, files remain alphabetically sorted
+  - Helps LLMs prioritize core logic and configuration over supporting files
 
 ## v0.6.1
 
