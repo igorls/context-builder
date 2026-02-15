@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 61d776a33d7a522f
+Content hash: 40c4383e078079b5
 
 ## File Tree Structure
 
@@ -218,13 +218,31 @@ cargo fmt --all
 
 ### File: `CHANGELOG.md`
 
-- Size: 8052 bytes
-- Modified: 2026-02-14 19:59:56 UTC
+- Size: 9078 bytes
+- Modified: 2026-02-15 04:21:58 UTC
 
 ```markdown
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## v0.7.1
+
+- **Bug Fixes** (identified by Gemini Deep Think multi-round code review)
+  - Fixed content hash using absolute OS paths — now normalized to relative unix-style for cross-platform determinism
+  - Fixed hash collision risk — added null byte delimiter between path and content in content hash
+  - Fixed `strip_prefix('+')` leaving extra space in diff_only mode, corrupting indentation
+  - Fixed auto_diff path bypassing `--max-tokens` budget entirely
+  - Fixed `src/tests/` files misclassified as source code instead of tests
+  - Fixed `sorted_paths` missing cwd fallback, silently dropping files when cwd ≠ base_path
+
+- **Auto-Ignore Common Directories**
+  - 19 heavy directories (node_modules, dist, build, __pycache__, .venv, vendor, etc.) are now excluded by default
+  - Prevents million-line outputs when processing projects without a `.git` directory
+
+- **Context Window Warnings**
+  - Shows estimated token count after every run
+  - Warns when output exceeds 128K tokens with actionable CLI suggestions
 
 ## v0.7.0
 
@@ -390,12 +408,12 @@ All notable changes to this project will be documented in this file.
 ### File: `Cargo.toml`
 
 - Size: 1464 bytes
-- Modified: 2026-02-14 22:06:10 UTC
+- Modified: 2026-02-15 04:22:00 UTC
 
 ```toml
 [package]
 name = "context-builder"
-version = "0.7.0"
+version = "0.7.1"
 default-run = "context-builder"
 edition = "2024"
 authors = ["Igor Lins e Silva"]

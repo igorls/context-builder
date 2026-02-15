@@ -44,7 +44,13 @@ It's a command-line utility that recursively processes directories and creates c
   Processes thousands of files in seconds by leveraging all available CPU cores.
 
 - 🧠 **Smart & Efficient File Discovery:**
-  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
+  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) even without a `.git` directory.
+
+- 📊 **Relevance-Based File Ordering:**
+  Files appear in LLM-optimized order: config & project docs first, then source code (entry points before helpers), tests, documentation, build/CI files, and lockfiles last. This helps LLMs build a mental model faster.
+
+- 💰 **Context Budgeting (`--max-tokens`):**
+  Cap token output to fit your model's context window. Warns when output exceeds 128K tokens with actionable suggestions.
 
 - 💾 **Memory-Efficient Streaming:**
   Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
@@ -55,15 +61,8 @@ It's a command-line utility that recursively processes directories and creates c
 - 🔍 **Powerful Filtering & Preview:**
   Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
 
-
-
  - ⚙️ **Configuration-First:**
-
-
   Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs. Initialize a new config file with `--init`, which will detect the major file types in your project (respecting `.gitignore` patterns) and suggest appropriate filters.
-
-
-
 
 - 🔁 **Automatic Per-File Diffs:**
   When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
@@ -157,6 +156,9 @@ context-builder -f rs -f toml
 # Ignore specific folders/files by name
 context-builder -i target -i node_modules -i .git
 
+# Cap output to a token budget (prevents context overflow)
+context-builder --max-tokens 100000
+
 # Preview mode (shows the file tree without generating output)
 context-builder --preview
 
@@ -178,7 +180,7 @@ context-builder --diff-only
 context-builder --clear-cache
 
 # Combine multiple options for a powerful workflow
-context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.md
+context-builder -d ./src -f rs -f toml -i tests --line-numbers --max-tokens 100000 -o rust_context.md
 ```
 
 ---
@@ -264,14 +266,15 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `-o, --output <FILE>` - Output file path (default: `output.md`).
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
+- `--max-tokens <N>` - Maximum token budget for the output. Files are truncated/skipped when exceeded.
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
 - `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
 - `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
+- `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
-- `-V, --version` - Show version information.
 ---
 
 ## Token Counting
