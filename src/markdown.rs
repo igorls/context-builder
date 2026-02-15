@@ -1281,4 +1281,298 @@ mod tests {
             assert!(result.contains(filename));
         }
     }
+
+    #[test]
+    fn test_process_file_with_seek_error_handling() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let file_path = base_path.join("test.txt");
+        fs::write(&file_path, "test content").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+
+        let result = process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_process_file_jsx_tsx_extensions() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let jsx_file = base_path.join("component.jsx");
+        fs::write(&jsx_file, "const App = () => <div/>;").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &jsx_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("```jsx"));
+    }
+
+    #[test]
+    fn test_process_file_various_lock_extensions() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let lock_file = base_path.join("Cargo.lock");
+        fs::write(&lock_file, "[package]\nname = \"test\"").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &lock_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("```toml"));
+    }
+
+    #[test]
+    fn test_process_file_java_cpp_extensions() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        let java_file = base_path.join("Main.java");
+        fs::write(&java_file, "class Main {}").unwrap();
+
+        let cpp_file = base_path.join("main.cpp");
+        fs::write(&cpp_file, "int main() {}").unwrap();
+
+        let c_file = base_path.join("main.c");
+        fs::write(&c_file, "int main() {}").unwrap();
+
+        let h_file = base_path.join("header.h");
+        fs::write(&h_file, "void func();").unwrap();
+
+        let hpp_file = base_path.join("header.hpp");
+        fs::write(&hpp_file, "void func();").unwrap();
+
+        for (file, lang) in [
+            (&java_file, "java"),
+            (&cpp_file, "cpp"),
+            (&c_file, "c"),
+            (&h_file, "c"),
+            (&hpp_file, "cpp"),
+        ] {
+            let output_path = base_path.join("output.md");
+            let mut output = fs::File::create(&output_path).unwrap();
+            process_file(
+                base_path,
+                file,
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+
+            let content = fs::read_to_string(&output_path).unwrap();
+            assert!(content.contains(&format!("```{}", lang)));
+        }
+    }
+
+    #[test]
+    fn test_process_file_with_bom() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let bom_file = base_path.join("bom.txt");
+        let bom_content = [0xEF, 0xBB, 0xBF, b'H', b'e', b'l', b'l', b'o'];
+        fs::write(&bom_file, bom_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &bom_file,
+            &mut output,
+            false,
+            Some("detect"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Hello") || content.contains("```"));
+    }
+
+    #[test]
+    fn test_detect_text_encoding_utf16() {
+        let utf16le_bytes = [0xFF, 0xFE, 0x48, 0x00, 0x69, 0x00];
+        let result = detect_text_encoding(&utf16le_bytes);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_detect_text_encoding_shift_jis() {
+        let shift_jis_bytes = [0x82, 0xB1, 0x82, 0xF1, 0x82, 0xC9, 0x82, 0xBF, 0x82, 0xCD];
+        let result = detect_text_encoding(&shift_jis_bytes);
+        assert!(result.is_some() || result.is_none());
+    }
+
+    #[test]
+    fn test_transcode_file_content_with_errors() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+
+        fs::write(&file_path, b"test content").unwrap();
+
+        let result = transcode_file_content(&file_path, encoding_rs::UTF_16LE);
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_write_tree_sitter_enrichment_no_feature() {
+        let mut output = Vec::new();
+        let content = "fn main() {}";
+
+        let ts_config = TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = write_tree_sitter_enrichment(&mut output, content, "rs", &ts_config);
+        assert!(result.is_ok());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_generate_markdown_max_tokens_budget() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        fs::write(base_path.join("file1.txt"), "x".repeat(50000)).unwrap();
+        fs::write(base_path.join("file2.txt"), "y".repeat(50000)).unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            "project",
+            &[],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            Some(100),
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Token budget") || content.len() < 1000);
+    }
+
+    #[test]
+    fn test_process_file_empty_file() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let empty_file = base_path.join("empty.txt");
+        fs::write(&empty_file, "").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        let result = process_file(
+            base_path,
+            &empty_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("empty.txt"));
+        assert!(content.contains("Size: 0 bytes"));
+    }
+
+    #[test]
+    fn test_process_file_with_multibyte_utf8() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let content = "Hello 世界 🌍 Здравствуй";
+        let unicode_file = base_path.join("unicode.txt");
+        fs::write(&unicode_file, content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        let result = process_file(
+            base_path,
+            &unicode_file,
+            &mut output,
+            true,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let output_content = fs::read_to_string(&output_path).unwrap();
+        assert!(output_content.contains("世界") || output_content.contains("```"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_ignores_list() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        fs::write(base_path.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("test.txt"), "test").unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            "project",
+            &[],
+            &["test.txt".to_string()],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+    }
 }

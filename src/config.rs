@@ -268,4 +268,48 @@ invalid_toml [
         assert!(config.truncate.is_none());
         assert!(config.visibility.is_none());
     }
+
+    #[test]
+    fn load_config_invalid_toml_in_cwd() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        let invalid_toml = r#"
+output = "test.md"
+invalid_toml [
+"#;
+        fs::write(&config_path, invalid_toml).unwrap();
+
+        let result = load_config();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_config_valid_in_cwd() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        let valid_toml = r#"
+output = "context.md"
+filter = ["rs"]
+"#;
+        fs::write(&config_path, valid_toml).unwrap();
+
+        let result = load_config();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_some());
+        let config = result.unwrap();
+        assert_eq!(config.output, Some("context.md".to_string()));
+    }
 }

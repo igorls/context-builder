@@ -1,4 +1,4 @@
-use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
+use ignore::{overrides::OverrideBuilder, DirEntry, WalkBuilder};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -420,12 +420,10 @@ mod tests {
 
         let result = collect_files(base, &filters, &ignores, &[]);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid ignore pattern")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid ignore pattern"));
     }
 
     #[test]
@@ -634,6 +632,208 @@ mod tests {
 
         let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         // Should find at least the regular file
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_file_relevance_category_lockfiles() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        let lockfiles = [
+            "Cargo.lock",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "Gemfile.lock",
+            "poetry.lock",
+            "composer.lock",
+            "go.sum",
+            "bun.lockb",
+            "flake.lock",
+        ];
+
+        for lockfile in &lockfiles {
+            fs::write(base.join(lockfile), "lock content").unwrap();
+        }
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        let paths: Vec<_> = files
+            .iter()
+            .map(|e| e.path().file_name().unwrap().to_str().unwrap())
+            .collect();
+
+        for lockfile in &lockfiles {
+            assert!(
+                paths.contains(lockfile),
+                "Expected {} to be collected",
+                lockfile
+            );
+        }
+    }
+
+    #[test]
+    fn test_file_relevance_category_test_files_in_src() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src/tests")).unwrap();
+        fs::create_dir_all(base.join("src/test")).unwrap();
+        fs::create_dir_all(base.join("src/__tests__")).unwrap();
+
+        fs::write(base.join("src/tests/auth.rs"), "fn test_auth() {}").unwrap();
+        fs::write(base.join("src/test/helper.rs"), "fn helper() {}").unwrap();
+        fs::write(base.join("src/__tests__/main.rs"), "fn main_test() {}").unwrap();
+        fs::write(base.join("src/lib.rs"), "pub fn lib() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_file_relevance_category_benchmarks_in_src() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src/benches")).unwrap();
+        fs::write(base.join("src/benches/my_bench.rs"), "fn bench() {}").unwrap();
+        fs::write(base.join("src/main.rs"), "fn main() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_file_relevance_category_test_file_patterns() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("my_test.rs"), "fn test() {}").unwrap();
+        fs::write(base.join("test_main.rs"), "fn test_main() {}").unwrap();
+        fs::write(base.join("my_test.go"), "func Test() {}").unwrap();
+        fs::write(base.join("my_spec.rb"), "describe 'test' do end").unwrap();
+        fs::write(base.join("app.test.ts"), "describe('test', () => {});").unwrap();
+        fs::write(base.join("app.spec.ts"), "it('works', () => {});").unwrap();
+        fs::write(base.join("main.rs"), "fn main() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 7);
+    }
+
+    #[test]
+    fn test_file_relevance_category_build_files_without_extension() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("Makefile"), "all:\n\techo hello").unwrap();
+        fs::write(base.join("Dockerfile"), "FROM alpine").unwrap();
+        fs::write(base.join("Justfile"), "default:\n\techo hi").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_collect_files_with_auto_ignores() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("test.txt"), "content").unwrap();
+
+        let auto_ignores = vec!["test.txt".to_string()];
+        let files = collect_files(base, &[], &[], &auto_ignores).unwrap();
+
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_file_relevance_ci_directories() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("ci")).unwrap();
+        fs::write(base.join("ci/build.sh"), "#!/bin/sh").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_file_relevance_docs_scripts_dirs() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("docs")).unwrap();
+        fs::create_dir_all(base.join("scripts")).unwrap();
+        fs::create_dir_all(base.join("examples")).unwrap();
+        fs::create_dir_all(base.join("tools")).unwrap();
+        fs::create_dir_all(base.join("assets")).unwrap();
+
+        fs::write(base.join("docs/guide.md"), "# Guide").unwrap();
+        fs::write(base.join("scripts/build.sh"), "#!/bin/sh").unwrap();
+        fs::write(base.join("examples/demo.rs"), "fn demo() {}").unwrap();
+        fs::write(base.join("tools/helper.py"), "def helper(): pass").unwrap();
+        fs::write(base.join("assets/logo.svg"), "<svg/>").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 5);
+    }
+
+    #[test]
+    fn test_file_relevance_various_source_extensions() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("main.go"), "package main").unwrap();
+        fs::write(base.join("App.java"), "class App {}").unwrap();
+        fs::write(base.join("main.py"), "print('hello')").unwrap();
+        fs::write(base.join("app.swift"), "import Foundation").unwrap();
+        fs::write(base.join("Main.kt"), "fun main() {}").unwrap();
+        fs::write(base.join("main.scala"), "object Main {}").unwrap();
+        fs::write(base.join("app.ex"), "defmodule App do end").unwrap();
+        fs::write(base.join("main.zig"), "pub fn main() void {}").unwrap();
+        fs::write(base.join("Lib.hs"), "module Lib where").unwrap();
+        fs::write(base.join("main.c"), "int main() { return 0; }").unwrap();
+        fs::write(base.join("main.cpp"), "int main() { return 0; }").unwrap();
+        fs::write(base.join("main.rb"), "puts 'hello'").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 12);
+    }
+
+    #[test]
+    fn test_file_entry_point_priority_various_names() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("lib.rs"), "pub fn lib() {}").unwrap();
+        fs::write(base.join("mod.rs"), "pub mod sub;").unwrap();
+        fs::write(base.join("index.js"), "module.exports = {};").unwrap();
+        fs::write(base.join("app.py"), "print('app')").unwrap();
+        fs::write(base.join("__init__.py"), "pass").unwrap();
+        fs::write(base.join("other.rs"), "fn other() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 7);
+    }
+
+    #[test]
+    fn test_collect_files_config_files_priority() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("package.json"), "{}").unwrap();
+        fs::write(base.join("tsconfig.json"), "{}").unwrap();
+        fs::write(base.join("pyproject.toml"), "[project]").unwrap();
+        fs::write(base.join("go.mod"), "module test").unwrap();
+        fs::write(base.join("Gemfile"), "gem 'rails'").unwrap();
+        fs::write(base.join("README.md"), "# Readme").unwrap();
+        fs::write(base.join("AGENTS.md"), "# Agents").unwrap();
+        fs::write(base.join("CONTRIBUTING.md"), "# Contrib").unwrap();
+        fs::write(base.join("CHANGELOG.md"), "# Changes").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
         assert!(!files.is_empty());
     }
 }

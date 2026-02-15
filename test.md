@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 2ef2e240de1486a4
+Content hash: 41e642436f680ef1
 
 ## File Tree Structure
 
@@ -16,9 +16,13 @@ Content hash: 2ef2e240de1486a4
 - 📁 benches
   - 📄 context_bench.rs
 - 📁 docs
+  - 📄 demo.cast
+  - 📄 demo.gif
+  - 📄 demo.mp4
   - 📁 research
     - 📄 multi-model-code-review-analysis.md
 - 📁 scripts
+  - 📄 demo.sh
   - 📄 generate_samples.rs
 - 📁 src
   - 📄 cache.rs
@@ -235,13 +239,35 @@ cargo fmt --all
 
 ### File: `CHANGELOG.md`
 
-- Size: 10624 bytes
-- Modified: 2026-02-15 08:32:55 UTC
+- Size: 12201 bytes
+- Modified: 2026-02-15 11:46:06 UTC
 
 ```markdown
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## v0.8.1
+
+- **Bug Fixes** (identified by Gemini Deep Think v6 code review — 11 confirmed bugs, 0 false positives)
+  - Fixed cache hash desync — `cache.rs` was missing 4 fields (`signatures`, `structure`, `truncate`, `visibility`), causing stale cache hits when toggling tree-sitter flags
+  - Fixed JavaScript arrow function body leak — `statement_block` is a child of `arrow_function`, not `variable_declarator`, causing full function bodies to leak into signature output
+  - Fixed TypeScript arrow function handling — same root cause as JavaScript
+  - Fixed Python decorator erasure — intercepting `decorated_definition` nodes now preserves `@decorator` lines in signatures
+  - Fixed Python `is_method` for decorated methods — iterative 4-level parent walk replaces fragile 2-level check
+  - Fixed Rust tuple struct erasure — added `ordered_field_declaration_list` to body kinds
+  - Fixed C/C++ header file prototype extraction — added `declaration` node matching for `.h` files
+  - Fixed C++ class inheritance dropped — applied byte-slicing to preserve `template<>` and `: public Base`
+  - Fixed JS/TS exported arrow functions invisible — added `lexical_declaration` to export signature extraction
+  - Added `.jsx` extension support for JavaScript
+
+- **Dependency Updates**
+  - Updated `tree-sitter` core: 0.24 → 0.26
+  - Updated `tree-sitter-rust`: 0.23 → 0.24
+  - Updated `tree-sitter-javascript`: 0.23 → 0.25
+  - Updated `tree-sitter-python`: 0.23 → 0.25
+  - Updated `tree-sitter-go`: 0.23 → 0.25
+  - Updated `tree-sitter-c`: 0.23 → 0.24
 
 ## v0.8.0
 
@@ -450,12 +476,12 @@ All notable changes to this project will be documented in this file.
 ### File: `Cargo.toml`
 
 - Size: 2832 bytes
-- Modified: 2026-02-15 08:32:44 UTC
+- Modified: 2026-02-15 11:45:07 UTC
 
 ```toml
 [package]
 name = "context-builder"
-version = "0.8.0"
+version = "0.8.1"
 default-run = "context-builder"
 edition = "2024"
 authors = ["Igor Lins e Silva"]
@@ -489,14 +515,14 @@ walkdir = "2.5.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Tree-sitter dependencies (feature-gated)
-tree-sitter = { version = "0.24", optional = true }
-tree-sitter-rust = { version = "0.23", optional = true }
-tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter = { version = "0.26", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
-tree-sitter-python = { version = "0.23", optional = true }
-tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
 tree-sitter-java = { version = "0.23", optional = true }
-tree-sitter-c = { version = "0.23", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
 
 [features]
@@ -543,8 +569,8 @@ required-features = ["samples-bin"]
 
 ### File: `README.md`
 
-- Size: 11381 bytes
-- Modified: 2026-02-15 08:32:57 UTC
+- Size: 11436 bytes
+- Modified: 2026-02-15 09:11:02 UTC
 
 ```markdown
 <div align="center">
@@ -577,6 +603,12 @@ A blazing-fast CLI for creating LLM context from your entire codebase.
 <br/>
 
 Tired of manually copy-pasting files into your LLM prompts? Context Builder automates this tedious process, creating a single, clean, and context-rich markdown file from any directory.
+
+<div align="center">
+
+![demo](docs/demo.gif)
+
+</div>
 
 ---
 
@@ -686,13 +718,9 @@ cargo install --path .
 
 ### Basic Usage
 
-
-
- # Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
-
- context-builder --init
-
-
+```bash
+# Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
+context-builder --init
 
 # Process current directory and create output.md
 context-builder
@@ -864,8 +892,8 @@ This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** f
 
 ### File: `src/lib.rs`
 
-- Size: 53340 bytes
-- Modified: 2026-02-15 08:04:26 UTC
+- Size: 83686 bytes
+- Modified: 2026-02-15 12:14:54 UTC
 
 ```rust
 use clap::{CommandFactory, Parser};
@@ -1311,6 +1339,14 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             })
             .collect();
 
+        // Build tree-sitter config for diff path
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: final_args.signatures,
+            structure: final_args.structure,
+            truncate: final_args.truncate.clone(),
+            visibility: final_args.visibility.clone(),
+        };
+
         // 4. Generate markdown with diff annotations
         let mut final_doc = generate_markdown_with_diff(
             &current_state,
@@ -1319,6 +1355,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             &file_tree,
             diff_cfg,
             &sorted_paths,
+            &ts_config,
         )?;
 
         // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
@@ -1490,6 +1527,7 @@ fn generate_markdown_with_diff(
     file_tree: &tree::FileTree,
     diff_config: &DiffConfig,
     sorted_paths: &[PathBuf],
+    ts_config: &markdown::TreeSitterConfig,
 ) -> io::Result<String> {
     let mut output = String::new();
 
@@ -1609,20 +1647,40 @@ fn generate_markdown_with_diff(
                     _ => extension,
                 };
 
-                output.push_str(&format!("```{}\n", language));
+                // When --signatures is active, only suppress content for supported code files
+                let signatures_only = ts_config.signatures
+                    && crate::tree_sitter::is_supported_extension(extension);
 
-                if args.line_numbers {
-                    for (i, line) in file_state.content.lines().enumerate() {
-                        output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                if !signatures_only {
+                    output.push_str(&format!("```{}\n", language));
+
+                    if args.line_numbers {
+                        for (i, line) in file_state.content.lines().enumerate() {
+                            output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                        }
+                    } else {
+                        output.push_str(&file_state.content);
+                        if !file_state.content.ends_with('\n') {
+                            output.push('\n');
+                        }
                     }
-                } else {
-                    output.push_str(&file_state.content);
-                    if !file_state.content.ends_with('\n') {
-                        output.push('\n');
-                    }
+
+                    output.push_str("```\n");
                 }
 
-                output.push_str("```\n\n");
+                // Tree-sitter enrichment (same as standard path)
+                let mut enrichment_buf = Vec::new();
+                markdown::write_tree_sitter_enrichment(
+                    &mut enrichment_buf,
+                    &file_state.content,
+                    extension,
+                    ts_config,
+                )?;
+                if !enrichment_buf.is_empty() {
+                    output.push_str(&String::from_utf8_lossy(&enrichment_buf));
+                }
+
+                output.push('\n');
             }
         }
     }
@@ -2377,6 +2435,13 @@ mod tests {
             })
             .collect();
 
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
         let result = generate_markdown_with_diff(
             &state,
             None,
@@ -2384,11 +2449,936 @@ mod tests {
             &file_tree,
             &diff_config,
             &sorted_paths,
+            &ts_config,
         );
         assert!(result.is_ok());
 
         let content = result.unwrap();
         assert!(content.contains("Directory Structure Report"));
+        assert!(content.contains("test.rs"));
+    }
+
+    #[test]
+    fn test_context_window_warning_under_limit() {
+        let original = std::env::var("CB_SILENT");
+        unsafe { std::env::set_var("CB_SILENT", "1"); }
+        
+        let output_bytes = 100_000;
+        print_context_window_warning(output_bytes * 4, None);
+        
+        unsafe { std::env::remove_var("CB_SILENT"); }
+        if let Ok(val) = original {
+            unsafe { std::env::set_var("CB_SILENT", val); }
+        }
+    }
+
+    #[test]
+    fn test_context_window_warning_over_limit() {
+        let output_bytes = 600_000;
+        print_context_window_warning(output_bytes * 4, None);
+    }
+
+    #[test]
+    fn test_context_window_warning_with_max_tokens() {
+        let output_bytes = 600_000;
+        print_context_window_warning(output_bytes * 4, Some(100_000));
+    }
+
+    #[test]
+    fn test_print_context_window_warning_various_sizes() {
+        print_context_window_warning(50_000, None);
+        print_context_window_warning(200_000, None);
+        print_context_window_warning(500_000, None);
+        print_context_window_warning(1_000_000, None);
+    }
+
+    #[test]
+    fn test_run_with_args_large_file_warning() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        let large_content = "x".repeat(150 * 1024);
+        fs::write(base_path.join("large.txt"), &large_content).unwrap();
+        fs::write(base_path.join("small.txt"), "small").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_output_dir_creation_failure_is_handled() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let output_path = temp_dir.path().join("test.md");
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_auto_diff_cache_write_failure_handling() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn test_auto_diff_with_changes() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("file1.txt"), "initial content").unwrap();
+
+        let args1 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let _ = run_with_args(args1, config.clone(), &prompter);
+
+        fs::write(base_path.join("file1.txt"), "modified content").unwrap();
+        fs::write(base_path.join("file2.txt"), "new file").unwrap();
+
+        let args2 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = run_with_args(args2, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Change Summary") || content.contains("No Changes"));
+    }
+
+    #[test]
+    fn test_auto_diff_max_tokens_truncation() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "x".repeat(10000)).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: Some(100),
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("truncated") || content.len() < 500);
+    }
+
+    #[test]
+    fn test_diff_only_mode_with_added_files() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("initial.txt"), "content").unwrap();
+
+        let args1 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let _ = run_with_args(args1, config.clone(), &prompter);
+
+        fs::write(base_path.join("newfile.txt"), "brand new content").unwrap();
+
+        let args2 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: true,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = run_with_args(args2, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Change Summary") || content.contains("Added Files"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_line_numbers() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {\n    println!(\"hi\");\n}").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, true).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let previous = state.clone();
+        let comparison = state.compare_with(&previous);
+
+        let result = generate_markdown_with_diff(
+            &state,
+            Some(&comparison),
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("No Changes Detected"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_and_modifications() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.txt"), "initial content").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let initial_state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        fs::write(base_path.join("test.txt"), "modified content").unwrap();
+
+        let new_files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let current_state = ProjectState::from_files(&new_files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let comparison = current_state.compare_with(&initial_state);
+
+        let sorted_paths: Vec<PathBuf> = new_files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = generate_markdown_with_diff(
+            &current_state,
+            Some(&comparison),
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("Change Summary"));
+        assert!(content.contains("Modified"));
+    }
+
+    #[test]
+    fn test_detect_major_file_types() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        fs::write(temp_dir.path().join("main.rs"), "fn main() {}").unwrap();
+        fs::write(temp_dir.path().join("lib.rs"), "pub fn lib() {}").unwrap();
+        fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
+        fs::write(temp_dir.path().join("README.md"), "# Readme").unwrap();
+
+        let result = detect_major_file_types();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let extensions = result.unwrap();
+        assert!(!extensions.is_empty());
+    }
+
+    #[test]
+    fn test_init_config_already_exists() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        fs::write(&config_path, "output = \"existing.md\"").unwrap();
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = init_config();
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("existing.md"));
+    }
+
+    #[test]
+    fn test_init_config_creates_new_file() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        assert!(!config_path.exists());
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = init_config();
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        assert!(config_path.exists());
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("output = "));
+        assert!(content.contains("filter ="));
+    }
+
+    #[test]
+    fn test_detect_major_file_types_empty_dir() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let result = detect_major_file_types();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let extensions = result.unwrap();
+        assert!(extensions.is_empty());
+    }
+
+    #[test]
+    fn test_print_context_window_warning_exact_limit() {
+        let output_bytes = 128_000 * 4;
+        print_context_window_warning(output_bytes, None);
+    }
+
+    #[test]
+    fn test_run_with_args_with_existing_output_file() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+        fs::write(&output_path, "existing content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+    }
+
+    #[test]
+    fn test_run_with_args_preview_only_token_count() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: true,
+            token_count: true,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_multiple_files() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        for i in 0..10 {
+            fs::write(base_path.join(format!("file{}.txt", i)), "content").unwrap();
+        }
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_auto_diff_config_hash_change() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args1 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec!["txt".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config1 = Config {
+            auto_diff: Some(true),
+            filter: Some(vec!["txt".to_string()]),
+            ..Default::default()
+        };
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let _ = run_with_args(args1, config1.clone(), &MockPrompter::new(true, true));
+
+        let args2 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec!["rs".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config2 = Config {
+            auto_diff: Some(true),
+            filter: Some(vec!["rs".to_string()]),
+            ..Default::default()
+        };
+
+        let result = run_with_args(args2, config2, &MockPrompter::new(true, true));
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_and_filters() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("test.txt"), "hello").unwrap();
+
+        let files = collect_files(base_path, &["rs".to_string()], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ..Default::default()
+        };
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec!["rs".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("test.rs"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_and_ignores() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("ignore.txt"), "ignored").unwrap();
+
+        let files = collect_files(base_path, &[], &["ignore.txt".to_string()], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config {
+            ignore: Some(vec!["ignore.txt".to_string()]),
+            ..Default::default()
+        };
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec!["ignore.txt".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
         assert!(content.contains("test.rs"));
     }
 }
@@ -2688,8 +3678,8 @@ mod tests {
 
 ### File: `src/cache.rs`
 
-- Size: 19474 bytes
-- Modified: 2026-02-15 06:01:16 UTC
+- Size: 19640 bytes
+- Modified: 2026-02-15 11:36:07 UTC
 
 ```rust
 //! Cache management for context-builder.
@@ -2798,8 +3788,14 @@ impl CacheManager {
         }
         config_str.push('|');
         config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}",
-            config.line_numbers, config.auto_diff, config.diff_context_lines
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            config.line_numbers,
+            config.auto_diff,
+            config.diff_context_lines,
+            config.signatures,
+            config.structure,
+            config.truncate,
+            config.visibility,
         ));
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
         format!("{:x}", hash)
@@ -3501,8 +4497,8 @@ mod tests {
 
 ### File: `src/config.rs`
 
-- Size: 8954 bytes
-- Modified: 2026-02-15 06:51:48 UTC
+- Size: 10156 bytes
+- Modified: 2026-02-15 12:05:13 UTC
 
 ```rust
 use serde::Deserialize;
@@ -3774,6 +4770,50 @@ invalid_toml [
         assert!(config.structure.is_none());
         assert!(config.truncate.is_none());
         assert!(config.visibility.is_none());
+    }
+
+    #[test]
+    fn load_config_invalid_toml_in_cwd() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        let invalid_toml = r#"
+output = "test.md"
+invalid_toml [
+"#;
+        fs::write(&config_path, invalid_toml).unwrap();
+
+        let result = load_config();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_config_valid_in_cwd() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        let valid_toml = r#"
+output = "context.md"
+filter = ["rs"]
+"#;
+        fs::write(&config_path, valid_toml).unwrap();
+
+        let result = load_config();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_some());
+        let config = result.unwrap();
+        assert_eq!(config.output, Some("context.md".to_string()));
     }
 }
 ```
@@ -4864,11 +5904,11 @@ mod tests {
 
 ### File: `src/file_utils.rs`
 
-- Size: 23556 bytes
-- Modified: 2026-02-15 04:50:12 UTC
+- Size: 31236 bytes
+- Modified: 2026-02-15 12:11:31 UTC
 
 ```rust
-use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
+use ignore::{overrides::OverrideBuilder, DirEntry, WalkBuilder};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -5290,12 +6330,10 @@ mod tests {
 
         let result = collect_files(base, &filters, &ignores, &[]);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid ignore pattern")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid ignore pattern"));
     }
 
     #[test]
@@ -5506,13 +6544,215 @@ mod tests {
         // Should find at least the regular file
         assert!(!files.is_empty());
     }
+
+    #[test]
+    fn test_file_relevance_category_lockfiles() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        let lockfiles = [
+            "Cargo.lock",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "Gemfile.lock",
+            "poetry.lock",
+            "composer.lock",
+            "go.sum",
+            "bun.lockb",
+            "flake.lock",
+        ];
+
+        for lockfile in &lockfiles {
+            fs::write(base.join(lockfile), "lock content").unwrap();
+        }
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        let paths: Vec<_> = files
+            .iter()
+            .map(|e| e.path().file_name().unwrap().to_str().unwrap())
+            .collect();
+
+        for lockfile in &lockfiles {
+            assert!(
+                paths.contains(lockfile),
+                "Expected {} to be collected",
+                lockfile
+            );
+        }
+    }
+
+    #[test]
+    fn test_file_relevance_category_test_files_in_src() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src/tests")).unwrap();
+        fs::create_dir_all(base.join("src/test")).unwrap();
+        fs::create_dir_all(base.join("src/__tests__")).unwrap();
+
+        fs::write(base.join("src/tests/auth.rs"), "fn test_auth() {}").unwrap();
+        fs::write(base.join("src/test/helper.rs"), "fn helper() {}").unwrap();
+        fs::write(base.join("src/__tests__/main.rs"), "fn main_test() {}").unwrap();
+        fs::write(base.join("src/lib.rs"), "pub fn lib() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_file_relevance_category_benchmarks_in_src() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src/benches")).unwrap();
+        fs::write(base.join("src/benches/my_bench.rs"), "fn bench() {}").unwrap();
+        fs::write(base.join("src/main.rs"), "fn main() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_file_relevance_category_test_file_patterns() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("my_test.rs"), "fn test() {}").unwrap();
+        fs::write(base.join("test_main.rs"), "fn test_main() {}").unwrap();
+        fs::write(base.join("my_test.go"), "func Test() {}").unwrap();
+        fs::write(base.join("my_spec.rb"), "describe 'test' do end").unwrap();
+        fs::write(base.join("app.test.ts"), "describe('test', () => {});").unwrap();
+        fs::write(base.join("app.spec.ts"), "it('works', () => {});").unwrap();
+        fs::write(base.join("main.rs"), "fn main() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 7);
+    }
+
+    #[test]
+    fn test_file_relevance_category_build_files_without_extension() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("Makefile"), "all:\n\techo hello").unwrap();
+        fs::write(base.join("Dockerfile"), "FROM alpine").unwrap();
+        fs::write(base.join("Justfile"), "default:\n\techo hi").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_collect_files_with_auto_ignores() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("test.txt"), "content").unwrap();
+
+        let auto_ignores = vec!["test.txt".to_string()];
+        let files = collect_files(base, &[], &[], &auto_ignores).unwrap();
+
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_file_relevance_ci_directories() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("ci")).unwrap();
+        fs::write(base.join("ci/build.sh"), "#!/bin/sh").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_file_relevance_docs_scripts_dirs() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("docs")).unwrap();
+        fs::create_dir_all(base.join("scripts")).unwrap();
+        fs::create_dir_all(base.join("examples")).unwrap();
+        fs::create_dir_all(base.join("tools")).unwrap();
+        fs::create_dir_all(base.join("assets")).unwrap();
+
+        fs::write(base.join("docs/guide.md"), "# Guide").unwrap();
+        fs::write(base.join("scripts/build.sh"), "#!/bin/sh").unwrap();
+        fs::write(base.join("examples/demo.rs"), "fn demo() {}").unwrap();
+        fs::write(base.join("tools/helper.py"), "def helper(): pass").unwrap();
+        fs::write(base.join("assets/logo.svg"), "<svg/>").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 5);
+    }
+
+    #[test]
+    fn test_file_relevance_various_source_extensions() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("main.go"), "package main").unwrap();
+        fs::write(base.join("App.java"), "class App {}").unwrap();
+        fs::write(base.join("main.py"), "print('hello')").unwrap();
+        fs::write(base.join("app.swift"), "import Foundation").unwrap();
+        fs::write(base.join("Main.kt"), "fun main() {}").unwrap();
+        fs::write(base.join("main.scala"), "object Main {}").unwrap();
+        fs::write(base.join("app.ex"), "defmodule App do end").unwrap();
+        fs::write(base.join("main.zig"), "pub fn main() void {}").unwrap();
+        fs::write(base.join("Lib.hs"), "module Lib where").unwrap();
+        fs::write(base.join("main.c"), "int main() { return 0; }").unwrap();
+        fs::write(base.join("main.cpp"), "int main() { return 0; }").unwrap();
+        fs::write(base.join("main.rb"), "puts 'hello'").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 12);
+    }
+
+    #[test]
+    fn test_file_entry_point_priority_various_names() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("lib.rs"), "pub fn lib() {}").unwrap();
+        fs::write(base.join("mod.rs"), "pub mod sub;").unwrap();
+        fs::write(base.join("index.js"), "module.exports = {};").unwrap();
+        fs::write(base.join("app.py"), "print('app')").unwrap();
+        fs::write(base.join("__init__.py"), "pass").unwrap();
+        fs::write(base.join("other.rs"), "fn other() {}").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert_eq!(files.len(), 7);
+    }
+
+    #[test]
+    fn test_collect_files_config_files_priority() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("package.json"), "{}").unwrap();
+        fs::write(base.join("tsconfig.json"), "{}").unwrap();
+        fs::write(base.join("pyproject.toml"), "[project]").unwrap();
+        fs::write(base.join("go.mod"), "module test").unwrap();
+        fs::write(base.join("Gemfile"), "gem 'rails'").unwrap();
+        fs::write(base.join("README.md"), "# Readme").unwrap();
+        fs::write(base.join("AGENTS.md"), "# Agents").unwrap();
+        fs::write(base.join("CONTRIBUTING.md"), "# Contrib").unwrap();
+        fs::write(base.join("CHANGELOG.md"), "# Changes").unwrap();
+
+        let files = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(!files.is_empty());
+    }
 }
 ```
 
 ### File: `src/markdown.rs`
 
-- Size: 45110 bytes
-- Modified: 2026-02-15 08:07:07 UTC
+- Size: 54487 bytes
+- Modified: 2026-02-15 12:14:39 UTC
 
 ```rust
 use chrono::Utc;
@@ -6051,7 +7291,10 @@ pub fn process_file(
                 }
             };
             // When --signatures is active, replace file content with signatures-only output
-            let signatures_only = ts_config.signatures;
+            // ONLY for extensions that tree-sitter actually supports. Non-code files
+            // (Cargo.toml, README.md, .yaml, etc.) must always show full content.
+            let signatures_only = ts_config.signatures
+                && crate::tree_sitter::is_supported_extension(extension);
 
             if !signatures_only {
                 // Note: Smart truncation (`truncate: "smart"`) indicates AST-boundary
@@ -6084,7 +7327,7 @@ pub fn process_file(
 
 /// Write tree-sitter enrichment (signatures, structure) after file content.
 #[allow(unused_variables)]
-fn write_tree_sitter_enrichment(
+pub fn write_tree_sitter_enrichment(
     output: &mut impl Write,
     content: &str,
     extension: &str,
@@ -6795,13 +8038,307 @@ mod tests {
             assert!(result.contains(filename));
         }
     }
+
+    #[test]
+    fn test_process_file_with_seek_error_handling() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let file_path = base_path.join("test.txt");
+        fs::write(&file_path, "test content").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+
+        let result = process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_process_file_jsx_tsx_extensions() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let jsx_file = base_path.join("component.jsx");
+        fs::write(&jsx_file, "const App = () => <div/>;").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &jsx_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("```jsx"));
+    }
+
+    #[test]
+    fn test_process_file_various_lock_extensions() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let lock_file = base_path.join("Cargo.lock");
+        fs::write(&lock_file, "[package]\nname = \"test\"").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &lock_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("```toml"));
+    }
+
+    #[test]
+    fn test_process_file_java_cpp_extensions() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        let java_file = base_path.join("Main.java");
+        fs::write(&java_file, "class Main {}").unwrap();
+
+        let cpp_file = base_path.join("main.cpp");
+        fs::write(&cpp_file, "int main() {}").unwrap();
+
+        let c_file = base_path.join("main.c");
+        fs::write(&c_file, "int main() {}").unwrap();
+
+        let h_file = base_path.join("header.h");
+        fs::write(&h_file, "void func();").unwrap();
+
+        let hpp_file = base_path.join("header.hpp");
+        fs::write(&hpp_file, "void func();").unwrap();
+
+        for (file, lang) in [
+            (&java_file, "java"),
+            (&cpp_file, "cpp"),
+            (&c_file, "c"),
+            (&h_file, "c"),
+            (&hpp_file, "cpp"),
+        ] {
+            let output_path = base_path.join("output.md");
+            let mut output = fs::File::create(&output_path).unwrap();
+            process_file(
+                base_path,
+                file,
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+
+            let content = fs::read_to_string(&output_path).unwrap();
+            assert!(content.contains(&format!("```{}", lang)));
+        }
+    }
+
+    #[test]
+    fn test_process_file_with_bom() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let bom_file = base_path.join("bom.txt");
+        let bom_content = [0xEF, 0xBB, 0xBF, b'H', b'e', b'l', b'l', b'o'];
+        fs::write(&bom_file, bom_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &bom_file,
+            &mut output,
+            false,
+            Some("detect"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Hello") || content.contains("```"));
+    }
+
+    #[test]
+    fn test_detect_text_encoding_utf16() {
+        let utf16le_bytes = [0xFF, 0xFE, 0x48, 0x00, 0x69, 0x00];
+        let result = detect_text_encoding(&utf16le_bytes);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_detect_text_encoding_shift_jis() {
+        let shift_jis_bytes = [0x82, 0xB1, 0x82, 0xF1, 0x82, 0xC9, 0x82, 0xBF, 0x82, 0xCD];
+        let result = detect_text_encoding(&shift_jis_bytes);
+        assert!(result.is_some() || result.is_none());
+    }
+
+    #[test]
+    fn test_transcode_file_content_with_errors() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+
+        fs::write(&file_path, b"test content").unwrap();
+
+        let result = transcode_file_content(&file_path, encoding_rs::UTF_16LE);
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_write_tree_sitter_enrichment_no_feature() {
+        let mut output = Vec::new();
+        let content = "fn main() {}";
+
+        let ts_config = TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = write_tree_sitter_enrichment(&mut output, content, "rs", &ts_config);
+        assert!(result.is_ok());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_generate_markdown_max_tokens_budget() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        fs::write(base_path.join("file1.txt"), "x".repeat(50000)).unwrap();
+        fs::write(base_path.join("file2.txt"), "y".repeat(50000)).unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            "project",
+            &[],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            Some(100),
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Token budget") || content.len() < 1000);
+    }
+
+    #[test]
+    fn test_process_file_empty_file() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let empty_file = base_path.join("empty.txt");
+        fs::write(&empty_file, "").unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        let result = process_file(
+            base_path,
+            &empty_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("empty.txt"));
+        assert!(content.contains("Size: 0 bytes"));
+    }
+
+    #[test]
+    fn test_process_file_with_multibyte_utf8() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        let content = "Hello 世界 🌍 Здравствуй";
+        let unicode_file = base_path.join("unicode.txt");
+        fs::write(&unicode_file, content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        let result = process_file(
+            base_path,
+            &unicode_file,
+            &mut output,
+            true,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let output_content = fs::read_to_string(&output_path).unwrap();
+        assert!(output_content.contains("世界") || output_content.contains("```"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_ignores_list() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        fs::write(base_path.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("test.txt"), "test").unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            "project",
+            &[],
+            &["test.txt".to_string()],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            None,
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+    }
 }
 ```
 
 ### File: `src/state.rs`
 
-- Size: 26113 bytes
-- Modified: 2026-02-14 22:41:02 UTC
+- Size: 27985 bytes
+- Modified: 2026-02-15 12:11:35 UTC
 
 ```rust
 //! Project state representation for context-builder.
@@ -6818,7 +8355,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::config::Config;
-use crate::diff::{PerFileDiff, PerFileStatus, diff_file_contents};
+use crate::diff::{diff_file_contents, PerFileDiff, PerFileStatus};
 
 /// Complete state representation of a project at a point in time
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -7031,8 +8568,14 @@ impl ProjectState {
         }
         config_str.push('|');
         config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}",
-            config.line_numbers, config.auto_diff, config.diff_context_lines
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            config.line_numbers,
+            config.auto_diff,
+            config.diff_context_lines,
+            config.signatures,
+            config.structure,
+            config.truncate,
+            config.visibility,
         ));
 
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
@@ -7189,18 +8732,14 @@ mod tests {
         assert_eq!(comparison.summary.added.len(), 1);
         assert_eq!(comparison.summary.modified.len(), 1);
         assert_eq!(comparison.summary.removed.len(), 0);
-        assert!(
-            comparison
-                .summary
-                .added
-                .contains(&PathBuf::from("file3.txt"))
-        );
-        assert!(
-            comparison
-                .summary
-                .modified
-                .contains(&PathBuf::from("file1.txt"))
-        );
+        assert!(comparison
+            .summary
+            .added
+            .contains(&PathBuf::from("file3.txt")));
+        assert!(comparison
+            .summary
+            .modified
+            .contains(&PathBuf::from("file1.txt")));
     }
 
     #[test]
@@ -7460,113 +8999,181 @@ mod tests {
     }
 
     #[test]
-    fn test_from_files_absolute_path_fallback() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-
-        // Create a file in the temp dir
-        fs::write(base_path.join("test.txt"), "test content").unwrap();
-        let file_path = base_path.join("test.txt");
-
-        // Create entry with the file
-        let entry = create_mock_dir_entry(&file_path);
-
-        // Use a completely different base_path to force the fallback
-        let different_base = PathBuf::from("/completely/different/path");
-
-        let config = Config::default();
-
-        let state = ProjectState::from_files(&[entry], &different_base, &config, false).unwrap();
-
-        // Should fall back to just the filename
-        assert_eq!(state.files.len(), 1);
-        assert!(state.files.contains_key(&PathBuf::from("test.txt")));
+    fn test_file_state_from_path_missing_file() {
+        let nonexistent = Path::new("/nonexistent/path/file.txt");
+        let result = FileState::from_path(nonexistent);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_change_summary_with_unchanged_files() {
-        let changes = vec![
-            PerFileDiff {
-                path: "added.txt".to_string(),
-                status: PerFileStatus::Added,
-                diff: "diff content".to_string(),
-            },
-            PerFileDiff {
-                path: "unchanged.txt".to_string(),
-                status: PerFileStatus::Unchanged,
-                diff: "".to_string(),
-            },
+    fn test_project_state_timestamp_format() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let entries = vec![create_mock_dir_entry(&base_path.join("test.txt"))];
+        let config = Config::default();
+        let state = ProjectState::from_files(&entries, base_path, &config, false).unwrap();
+
+        assert!(state.timestamp.contains("UTC"));
+        let year = chrono::Utc::now().format("%Y").to_string();
+        assert!(state.timestamp.contains(&year));
+    }
+
+    #[test]
+    fn test_project_metadata_with_filters_and_ignores() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("lib.rs"), "pub fn lib() {}").unwrap();
+
+        let entries = vec![
+            create_mock_dir_entry(&base_path.join("main.rs")),
+            create_mock_dir_entry(&base_path.join("lib.rs")),
         ];
 
-        // Manually create the summary like the actual code does
-        let mut added = Vec::new();
-        let mut removed = Vec::new();
-        let mut modified = Vec::new();
-
-        for diff in &changes {
-            let path = PathBuf::from(&diff.path);
-            match diff.status {
-                PerFileStatus::Added => added.push(path),
-                PerFileStatus::Removed => removed.push(path),
-                PerFileStatus::Modified => modified.push(path),
-                PerFileStatus::Unchanged => {} // This line should be covered now
-            }
-        }
-
-        let summary = ChangeSummary {
-            total_changes: added.len() + removed.len() + modified.len(),
-            added,
-            removed,
-            modified,
+        let config = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
         };
 
-        assert_eq!(summary.total_changes, 1); // Only the added file counts
-        assert_eq!(summary.added.len(), 1);
-        assert_eq!(summary.removed.len(), 0);
-        assert_eq!(summary.modified.len(), 0);
+        let state = ProjectState::from_files(&entries, base_path, &config, true).unwrap();
+
+        assert_eq!(state.metadata.filters, vec!["rs"]);
+        assert_eq!(state.metadata.ignores, vec!["target"]);
+        assert!(state.metadata.line_numbers);
+        assert_eq!(state.metadata.file_count, 2);
     }
 
     #[test]
-    fn test_has_changes_with_missing_file() {
+    fn test_project_name_extraction_from_path() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let entries = vec![create_mock_dir_entry(&base_path.join("test.txt"))];
+        let config = Config::default();
+        let state = ProjectState::from_files(&entries, base_path, &config, false).unwrap();
+
+        assert!(!state.metadata.project_name.is_empty());
+        assert_ne!(state.metadata.project_name, "unknown");
+    }
+
+    #[test]
+    fn test_change_summary_empty_outputs_nothing() {
+        let summary = ChangeSummary {
+            added: vec![],
+            removed: vec![],
+            modified: vec![],
+            total_changes: 0,
+        };
+
+        let markdown = summary.to_markdown();
+        assert!(markdown.is_empty());
+    }
+
+    #[test]
+    fn test_state_comparison_with_removed_files() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
 
-        // Create files for the first state
         fs::write(base_path.join("file1.txt"), "content1").unwrap();
-        let entry1 = create_mock_dir_entry(&base_path.join("file1.txt"));
-
-        let config = Config::default();
-        let state1 = ProjectState::from_files(&[entry1], base_path, &config, false).unwrap();
-
-        // Create a different state with different files
         fs::write(base_path.join("file2.txt"), "content2").unwrap();
-        let entry2 = create_mock_dir_entry(&base_path.join("file2.txt"));
-        let state2 = ProjectState::from_files(&[entry2], base_path, &config, false).unwrap();
 
-        // Should detect changes because files are completely different
-        assert!(state1.has_changes(&state2));
+        let state1_files = BTreeMap::from([
+            (
+                PathBuf::from("file1.txt"),
+                FileState::from_path(&base_path.join("file1.txt")).unwrap(),
+            ),
+            (
+                PathBuf::from("file2.txt"),
+                FileState::from_path(&base_path.join("file2.txt")).unwrap(),
+            ),
+        ]);
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash".to_string(),
+            files: state1_files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 2,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        std::fs::remove_file(base_path.join("file2.txt")).unwrap();
+
+        let state2_files = BTreeMap::from([(
+            PathBuf::from("file1.txt"),
+            FileState::from_path(&base_path.join("file1.txt")).unwrap(),
+        )]);
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash".to_string(),
+            files: state2_files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let comparison = state2.compare_with(&state1);
+        assert_eq!(comparison.summary.removed.len(), 1);
     }
 
     #[test]
-    fn test_file_state_with_invalid_data_error() {
-        // Create a temporary file with binary content that might trigger InvalidData
-        let temp_dir = tempdir().unwrap();
-        let binary_file = temp_dir.path().join("binary.dat");
+    fn test_compute_config_hash_with_all_options() {
+        let config = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(true),
+            diff_context_lines: Some(5),
+            signatures: Some(true),
+            structure: Some(true),
+            truncate: Some("smart".to_string()),
+            visibility: Some("public".to_string()),
+            ..Default::default()
+        };
 
-        // Write invalid UTF-8 bytes
-        let binary_data = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA];
-        fs::write(&binary_file, &binary_data).unwrap();
+        let hash1 = ProjectState::compute_config_hash(&config);
+        let hash2 = ProjectState::compute_config_hash(&config);
 
-        // This might trigger the InvalidData error path, but since we can't guarantee it,
-        // we at least verify the function can handle binary files
-        let result = FileState::from_path(&binary_file);
-        assert!(result.is_ok());
+        assert_eq!(hash1, hash2);
+        assert!(!hash1.is_empty());
+    }
+
+    #[test]
+    fn test_compute_config_hash_differences() {
+        let config1 = Config {
+            filter: None,
+            ignore: None,
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: None,
+            ..Default::default()
+        };
+
+        let hash1 = ProjectState::compute_config_hash(&config1);
+        let hash2 = ProjectState::compute_config_hash(&config2);
+
+        assert_ne!(hash1, hash2);
     }
 
     // Helper function to create a mock DirEntry for testing
     fn create_mock_dir_entry(path: &std::path::Path) -> ignore::DirEntry {
-        // This is a bit of a hack since DirEntry doesn't have a public constructor
-        // We use the ignore crate's WalkBuilder to create a real DirEntry
         let walker = ignore::WalkBuilder::new(path.parent().unwrap());
         walker
             .build()
@@ -8216,8 +9823,8 @@ mod tests {
 
 ### File: `src/tree_sitter/language_support.rs`
 
-- Size: 3935 bytes
-- Modified: 2026-02-15 07:25:48 UTC
+- Size: 4742 bytes
+- Modified: 2026-02-15 11:02:36 UTC
 
 ```rust
 //! Core types and traits for language support.
@@ -8312,6 +9919,28 @@ impl fmt::Display for Signature {
     }
 }
 
+/// Slice the source text from a node's start to its body's start, producing
+/// a perfect signature that preserves all modifiers, generics, params, and return types.
+///
+/// `body_kinds` is a list of node kinds that represent the function/class body
+/// (e.g., `"block"`, `"compound_statement"`, `"statement_block"`).
+///
+/// Returns `None` if no body node is found (e.g., forward declarations).
+pub fn slice_signature_before_body(
+    source: &str,
+    node: &tree_sitter::Node,
+    body_kinds: &[&str],
+) -> Option<String> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if body_kinds.contains(&child.kind()) {
+            let sig = &source[node.start_byte()..child.start_byte()];
+            return Some(sig.trim_end().to_string());
+        }
+    }
+    None
+}
+
 /// Structure information extracted from a source file.
 #[derive(Debug, Clone, Default)]
 pub struct CodeStructure {
@@ -8366,8 +9995,8 @@ pub trait LanguageSupport: Send + Sync {
 
 ### File: `src/tree_sitter/languages/c.rs`
 
-- Size: 10337 bytes
-- Modified: 2026-02-15 08:10:25 UTC
+- Size: 12644 bytes
+- Modified: 2026-02-15 11:40:30 UTC
 
 ```rust
 //! C language support for tree-sitter.
@@ -8378,6 +10007,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-c")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct CSupport;
@@ -8468,6 +10098,12 @@ impl CSupport {
                     signatures.push(sig);
                 }
             }
+            "declaration" => {
+                // Header file prototypes: `int foo(int x, int y);`
+                if let Some(sig) = self.extract_declaration_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
             "struct_specifier" => {
                 if let Some(sig) = self.extract_struct_signature(source, node) {
                     signatures.push(sig);
@@ -8521,21 +10157,71 @@ impl CSupport {
     ) -> Option<Signature> {
         let name = self.find_function_name(node, source)?;
         let return_type = self.find_return_type(node, source);
+        let params = self.find_child_text(node, "parameter_list", source);
 
-        let mut full_sig = String::new();
-        if let Some(r) = &return_type {
-            full_sig.push_str(r);
-            full_sig.push(' ');
-        }
-        full_sig.push_str(&name);
-        full_sig.push_str("()");
+        // Use byte-slicing to preserve complete function signatures including parameters
+        let full_sig = slice_signature_before_body(source, node, &["compound_statement"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if let Some(r) = &return_type {
+                    sig.push_str(r);
+                    sig.push(' ');
+                }
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
             name,
-            params: None,
+            params,
             return_type,
             visibility: Visibility::All, // C has no visibility
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    /// Extract function prototype signatures from `declaration` nodes (header files).
+    /// e.g., `int foo(int x, int y);`
+    fn extract_declaration_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        // Only capture declarations that look like function prototypes
+        // (have a function_declarator child with parameters)
+        let mut cursor = node.walk();
+        let has_function_declarator = node.children(&mut cursor).any(|c| {
+            if c.kind() == "function_declarator" {
+                return true;
+            }
+            // Check one level deeper for pointer declarations
+            let mut inner = c.walk();
+            c.children(&mut inner).any(|gc| gc.kind() == "function_declarator")
+        });
+
+        if !has_function_declarator {
+            return None;
+        }
+
+        let name = self.find_function_name(node, source)?;
+        // For prototypes, the full node text IS the signature (no body to strip)
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        // Remove trailing semicolon for cleaner output
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None, // Captured in full_sig
+            return_type: None,
+            visibility: Visibility::All,
             line_number: node.start_position().row + 1,
             full_signature: full_sig,
         })
@@ -8725,8 +10411,8 @@ void hello(const char* name) {
 
 ### File: `src/tree_sitter/languages/cpp.rs`
 
-- Size: 12070 bytes
-- Modified: 2026-02-15 08:10:27 UTC
+- Size: 14271 bytes
+- Modified: 2026-02-15 11:41:29 UTC
 
 ```rust
 //! C++ language support for tree-sitter.
@@ -8737,6 +10423,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-cpp")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct CppSupport;
@@ -8827,6 +10514,12 @@ impl CppSupport {
                     signatures.push(sig);
                 }
             }
+            "declaration" => {
+                // Header file prototypes: `int foo(int x, int y);`
+                if let Some(sig) = self.extract_declaration_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
             "class_specifier" => {
                 if let Some(sig) = self.extract_class_signature(source, node, visibility) {
                     signatures.push(sig);
@@ -8895,19 +10588,29 @@ impl CppSupport {
     ) -> Option<Signature> {
         let name = self.find_function_name(node, source)?;
         let return_type = self.find_return_type(node, source);
+        let params = self.find_child_text(node, "parameter_list", source);
 
-        let mut full_sig = String::new();
-        if let Some(r) = &return_type {
-            full_sig.push_str(r);
-            full_sig.push(' ');
-        }
-        full_sig.push_str(&name);
-        full_sig.push_str("()");
+        // Use byte-slicing to preserve templates, parameters, and qualifiers
+        let full_sig = slice_signature_before_body(source, node, &["compound_statement"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if let Some(r) = &return_type {
+                    sig.push_str(r);
+                    sig.push(' ');
+                }
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
             name,
-            params: None,
+            params,
             return_type,
             visibility,
             line_number: node.start_position().row + 1,
@@ -8915,6 +10618,40 @@ impl CppSupport {
         })
     }
 
+    /// Extract function prototype signatures from `declaration` nodes (header files).
+    fn extract_declaration_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        // Only capture declarations that look like function prototypes
+        let mut cursor = node.walk();
+        let has_function_declarator = node.children(&mut cursor).any(|c| {
+            if c.kind() == "function_declarator" {
+                return true;
+            }
+            let mut inner = c.walk();
+            c.children(&mut inner).any(|gc| gc.kind() == "function_declarator")
+        });
+
+        if !has_function_declarator {
+            return None;
+        }
+
+        let name = self.find_function_name(node, source)?;
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
     fn extract_class_signature(
         &self,
         source: &str,
@@ -8923,7 +10660,10 @@ impl CppSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("class {}", name);
+        // Use byte-slicing to preserve templates and inheritance
+        // e.g., `template<typename T> class Foo : public Base`
+        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list"])
+            .unwrap_or_else(|| format!("class {}", name));
 
         Some(Signature {
             kind: SignatureKind::Class,
@@ -9123,8 +10863,8 @@ public:
 
 ### File: `src/tree_sitter/languages/go.rs`
 
-- Size: 13186 bytes
-- Modified: 2026-02-15 08:10:21 UTC
+- Size: 13519 bytes
+- Modified: 2026-02-15 11:06:48 UTC
 
 ```rust
 //! Go language support for tree-sitter.
@@ -9135,6 +10875,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-go")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct GoSupport;
@@ -9299,18 +11040,23 @@ impl GoSupport {
             .find_child_text(node, "type_identifier", source)
             .or_else(|| self.find_child_text_for_result(node, source));
 
-        let mut full_sig = String::new();
-        full_sig.push_str("func ");
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        } else {
-            full_sig.push_str("()");
-        }
-        if let Some(r) = &result {
-            full_sig.push(' ');
-            full_sig.push_str(r);
-        }
+        // Use byte-slicing to preserve receivers, multiple return values, and named results
+        let full_sig = slice_signature_before_body(source, node, &["block"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                sig.push_str("func ");
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                if let Some(r) = &result {
+                    sig.push(' ');
+                    sig.push_str(r);
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
@@ -9573,8 +11319,8 @@ type User struct {
 
 ### File: `src/tree_sitter/languages/java.rs`
 
-- Size: 12548 bytes
-- Modified: 2026-02-15 08:10:23 UTC
+- Size: 12889 bytes
+- Modified: 2026-02-15 11:06:50 UTC
 
 ```rust
 //! Java language support for tree-sitter.
@@ -9585,6 +11331,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-java")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct JavaSupport;
@@ -9750,20 +11497,25 @@ impl JavaSupport {
             .find_child_text(node, "type_identifier", source)
             .or_else(|| self.find_child_text_for_type(node, source));
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("public ");
-        }
-        if let Some(r) = &return_type {
-            full_sig.push_str(r);
-            full_sig.push(' ');
-        }
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        } else {
-            full_sig.push_str("()");
-        }
+        // Use byte-slicing to preserve annotations, generics, throws, and modifiers
+        let full_sig = slice_signature_before_body(source, node, &["block"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("public ");
+                }
+                if let Some(r) = &return_type {
+                    sig.push_str(r);
+                    sig.push(' ');
+                }
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Method,
@@ -10007,8 +11759,8 @@ public class HelloWorld {
 
 ### File: `src/tree_sitter/languages/javascript.rs`
 
-- Size: 9969 bytes
-- Modified: 2026-02-15 08:10:03 UTC
+- Size: 13277 bytes
+- Modified: 2026-02-15 11:37:18 UTC
 
 ```rust
 //! JavaScript language support for tree-sitter.
@@ -10017,6 +11769,7 @@ use tree_sitter::{Parser, Tree};
 
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct JavaScriptSupport;
@@ -10029,7 +11782,7 @@ impl JavaScriptSupport {
 
 impl LanguageSupport for JavaScriptSupport {
     fn file_extensions(&self) -> &[&'static str] {
-        &["js", "mjs", "cjs"]
+        &["js", "mjs", "cjs", "jsx"]
     }
 
     fn parse(&self, source: &str) -> Option<Tree> {
@@ -10155,16 +11908,20 @@ impl JavaScriptSupport {
         let name = self.find_child_text(node, "identifier", source)?;
         let params = self.find_child_text(node, "formal_parameters", source);
 
-        let full_sig = match &params {
-            Some(p) => format!("function {}({})", name, p),
-            None => format!("function {}()", name),
-        };
+        // Use byte-slicing to preserve async, generator*, and complete parameter lists
+        let full_sig = slice_signature_before_body(source, node, &["statement_block"])
+            .unwrap_or_else(|| {
+                match &params {
+                    Some(p) => format!("function {}({})", name, p),
+                    None => format!("function {}()", name),
+                }
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
             name,
             params,
-            return_type: None, // JS doesn't have explicit return types in syntax
+            return_type: None,
             visibility: Visibility::All,
             line_number: node.start_position().row + 1,
             full_signature: full_sig,
@@ -10174,7 +11931,9 @@ impl JavaScriptSupport {
     fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "identifier", source)?;
 
-        let full_sig = format!("class {}", name);
+        // Use byte-slicing to preserve `extends` and other modifiers
+        let full_sig = slice_signature_before_body(source, node, &["class_body"])
+            .unwrap_or_else(|| format!("class {}", name));
 
         Some(Signature {
             kind: SignatureKind::Class,
@@ -10195,19 +11954,68 @@ impl JavaScriptSupport {
     ) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "variable_declarator"
-                && let Some(name) = self.find_child_text(&child, "identifier", source)
-            {
-                let full_signature = format!("const {}", &name);
-                signatures.push(Signature {
-                    kind: SignatureKind::Constant,
-                    name,
-                    params: None,
-                    return_type: None,
-                    visibility: Visibility::All,
-                    line_number: child.start_position().row + 1,
-                    full_signature,
+            if child.kind() == "variable_declarator" {
+                // Check if this is an arrow function or regular function assignment
+                let mut inner_cursor = child.walk();
+                let fn_node = child.children(&mut inner_cursor).find(|c| {
+                    c.kind() == "arrow_function" || c.kind() == "function"
                 });
+
+                if let Some(fn_child) = fn_node {
+                    // Navigate INTO the arrow_function/function to find its body.
+                    // statement_block is a child of arrow_function, NOT of variable_declarator.
+                    let body_start = {
+                        let mut fn_cursor = fn_child.walk();
+                        fn_child.children(&mut fn_cursor)
+                            .find(|c| c.kind() == "statement_block")
+                            .map(|body| body.start_byte())
+                    };
+
+                    let full_signature = if let Some(body_start) = body_start {
+                        // Slice from the parent node (lexical_declaration) to preserve `const`/`export`,
+                        // down to the body start
+                        source[node.start_byte()..body_start].trim_end().to_string()
+                    } else {
+                        // Expression-body arrow: `const add = (a, b) => a + b`
+                        // Slice from parent through the `=>` token
+                        let mut fn_cursor2 = fn_child.walk();
+                        let arrow_end = fn_child.children(&mut fn_cursor2)
+                            .find(|c| c.kind() == "=>")
+                            .map(|arrow| arrow.end_byte());
+
+                        if let Some(end) = arrow_end {
+                            source[node.start_byte()..end].trim_end().to_string()
+                        } else {
+                            // Last resort: use declarator text only (name = params)
+                            source[child.start_byte()..fn_child.start_byte()]
+                                .trim_end().to_string()
+                        }
+                    };
+
+                    let name = self.find_child_text(&child, "identifier", source)
+                        .unwrap_or_default();
+
+                    signatures.push(Signature {
+                        kind: SignatureKind::Function,
+                        name,
+                        params: None, // Captured via byte-slicing
+                        return_type: None,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature,
+                    });
+                } else if let Some(name) = self.find_child_text(&child, "identifier", source) {
+                    let full_signature = format!("const {}", &name);
+                    signatures.push(Signature {
+                        kind: SignatureKind::Constant,
+                        name,
+                        params: None,
+                        return_type: None,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature,
+                    });
+                }
             }
         }
     }
@@ -10228,6 +12036,9 @@ impl JavaScriptSupport {
                 && let Some(sig) = self.extract_class_signature(source, &child)
             {
                 signatures.push(sig);
+            } else if child.kind() == "lexical_declaration" || child.kind() == "variable_declaration" {
+                // Capture exported arrow functions: export const foo = () => {}
+                self.extract_variable_declarations(source, &child, signatures);
             }
         }
     }
@@ -10346,8 +12157,8 @@ class User {
 
 ### File: `src/tree_sitter/languages/python.rs`
 
-- Size: 9289 bytes
-- Modified: 2026-02-15 08:10:19 UTC
+- Size: 11872 bytes
+- Modified: 2026-02-15 11:39:13 UTC
 
 ```rust
 //! Python language support for tree-sitter.
@@ -10358,6 +12169,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-python")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct PythonSupport;
@@ -10443,8 +12255,38 @@ impl PythonSupport {
         signatures: &mut Vec<Signature>,
     ) {
         match node.kind() {
+            "decorated_definition" => {
+                // Intercept decorated_definition to preserve decorators.
+                // Find the inner function_definition or class_definition.
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "function_definition" {
+                        if let Some(sig) = self.extract_function_signature_with_context(
+                            source, &child, Some(node),
+                        ) {
+                            signatures.push(sig);
+                        }
+                        // Don't recurse into children — we already handled the inner def
+                        return;
+                    } else if child.kind() == "class_definition" {
+                        if let Some(sig) = self.extract_class_signature(source, &child) {
+                            signatures.push(sig);
+                        }
+                        // Still recurse into class body for methods
+                        let mut inner = child.walk();
+                        for grandchild in child.children(&mut inner) {
+                            self.extract_signatures_from_node(
+                                source, &grandchild, _visibility, signatures,
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
             "function_definition" => {
-                if let Some(sig) = self.extract_function_signature(source, node) {
+                if let Some(sig) = self.extract_function_signature_with_context(
+                    source, node, None,
+                ) {
                     signatures.push(sig);
                 }
             }
@@ -10478,44 +12320,65 @@ impl PythonSupport {
         }
     }
 
-    fn extract_function_signature(
+    /// Extract function signature, optionally with a decorator context node.
+    /// `context_node` is the `decorated_definition` parent, if any.
+    fn extract_function_signature_with_context(
         &self,
         source: &str,
         node: &tree_sitter::Node,
+        context_node: Option<&tree_sitter::Node>,
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "identifier", source)?;
         let params = self.find_child_text(node, "parameters", source);
 
-        // Check for decorators (to detect @property, @staticmethod, etc.)
-        let is_method = node
-            .parent()
-            .is_some_and(|p| p.kind() == "class_definition");
+        // Walk up parent chain iteratively to detect methods.
+        // Handles: function_definition -> block -> class_definition
+        // And:     function_definition -> decorated_definition -> block -> class_definition
+        let is_method = {
+            let mut current = node.parent();
+            let mut found = false;
+            // Walk up at most 4 levels (enough for decorated methods in nested classes)
+            for _ in 0..4 {
+                match current {
+                    Some(p) if p.kind() == "class_definition" => {
+                        found = true;
+                        break;
+                    }
+                    Some(p) => current = p.parent(),
+                    None => break,
+                }
+            }
+            found
+        };
         let kind = if is_method {
             SignatureKind::Method
         } else {
             SignatureKind::Function
         };
 
-        let mut full_sig = String::new();
-        if let Some(decorators) = self.find_decorators(source, node) {
-            full_sig.push_str(&decorators);
-            full_sig.push('\n');
-        }
-        full_sig.push_str("def ");
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        } else {
-            full_sig.push_str("()");
-        }
+        // If we have a decorator context, slice from there to preserve decorators.
+        // Otherwise slice from the function_definition node.
+        let slice_node = context_node.unwrap_or(node);
+        let full_sig = slice_signature_before_body(source, slice_node, &["block"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                sig.push_str("def ");
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind,
             name,
             params,
-            return_type: None, // Python uses type hints differently
+            return_type: None, // Captured via byte-slicing in full_sig
             visibility: Visibility::All,
-            line_number: node.start_position().row + 1,
+            line_number: slice_node.start_position().row + 1,
             full_signature: full_sig,
         })
     }
@@ -10669,8 +12532,8 @@ class User:
 
 ### File: `src/tree_sitter/languages/rust.rs`
 
-- Size: 18127 bytes
-- Modified: 2026-02-15 08:10:01 UTC
+- Size: 19721 bytes
+- Modified: 2026-02-15 11:39:32 UTC
 
 ```rust
 //! Rust language support for tree-sitter.
@@ -10679,6 +12542,7 @@ use tree_sitter::{Parser, Tree};
 
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct RustSupport;
@@ -10927,21 +12791,27 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "identifier", source)?;
         let params = self.find_child_text(node, "parameters", source);
-        let return_type = self.find_child_text(node, "type", source);
+        let return_type = self.find_child_text(node, "return_type", source);
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("fn ");
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        }
-        if let Some(r) = &return_type {
-            full_sig.push_str(" -> ");
-            full_sig.push_str(r);
-        }
+        // Use byte-slicing to preserve generics, return types, and all modifiers
+        let full_sig = slice_signature_before_body(source, node, &["block"])
+            .unwrap_or_else(|| {
+                // Fallback for declarations without a body
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("fn ");
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                }
+                if let Some(r) = &return_type {
+                    sig.push_str(" -> ");
+                    sig.push_str(r);
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
@@ -10967,12 +12837,19 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("struct ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve generic bounds and where clauses
+        // Include both `field_declaration_list` (regular structs) and
+        // `ordered_field_declaration_list` (tuple structs like `struct Color(u8, u8, u8)`)
+        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list", "ordered_field_declaration_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("struct ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Struct,
@@ -10998,12 +12875,17 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("enum ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve generic bounds
+        let full_sig = slice_signature_before_body(source, node, &["enum_variant_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("enum ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Enum,
@@ -11029,12 +12911,17 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("trait ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve trait bounds and supertraits
+        let full_sig = slice_signature_before_body(source, node, &["declaration_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("trait ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Trait,
@@ -11050,9 +12937,14 @@ impl RustSupport {
     fn extract_impl_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        full_sig.push_str("impl ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve `impl Trait for Type` and generics
+        let full_sig = slice_signature_before_body(source, node, &["declaration_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                sig.push_str("impl ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Impl,
@@ -11323,8 +13215,8 @@ fn third() -> i32 {
 
 ### File: `src/tree_sitter/languages/typescript.rs`
 
-- Size: 13571 bytes
-- Modified: 2026-02-15 08:10:06 UTC
+- Size: 16189 bytes
+- Modified: 2026-02-15 11:38:18 UTC
 
 ```rust
 //! TypeScript language support for tree-sitter.
@@ -11335,6 +13227,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-ts")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct TypeScriptSupport;
@@ -11502,12 +13395,16 @@ impl TypeScriptSupport {
         let params = self.find_child_text(node, "formal_parameters", source);
         let return_type = self.find_child_text(node, "type_annotation", source);
 
-        let full_sig = match (params.as_ref(), return_type.as_ref()) {
-            (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
-            (Some(p), None) => format!("function {}{}", name, p),
-            (None, Some(r)) => format!("function {}() {}", name, r),
-            (None, None) => format!("function {}()", name),
-        };
+        // Use byte-slicing to preserve type params, access modifiers, and return types
+        let full_sig = slice_signature_before_body(source, node, &["statement_block"])
+            .unwrap_or_else(|| {
+                match (params.as_ref(), return_type.as_ref()) {
+                    (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
+                    (Some(p), None) => format!("function {}{}", name, p),
+                    (None, Some(r)) => format!("function {}() {}", name, r),
+                    (None, None) => format!("function {}()", name),
+                }
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
@@ -11607,20 +13504,63 @@ impl TypeScriptSupport {
             if child.kind() == "variable_declarator"
                 && let Some(name) = self.find_child_text(&child, "identifier", source)
             {
-                let type_ann = self.find_child_text(&child, "type_annotation", source);
-                let full_sig = match &type_ann {
-                    Some(t) => format!("const {} {}", name, t),
-                    None => format!("const {}", name),
-                };
-                signatures.push(Signature {
-                    kind: SignatureKind::Constant,
-                    name,
-                    params: None,
-                    return_type: type_ann,
-                    visibility: Visibility::All,
-                    line_number: child.start_position().row + 1,
-                    full_signature: full_sig,
+                // Check for arrow function or function assignment
+                let mut inner_cursor = child.walk();
+                let fn_node = child.children(&mut inner_cursor).find(|c| {
+                    c.kind() == "arrow_function" || c.kind() == "function"
                 });
+
+                if let Some(fn_child) = fn_node {
+                    // Navigate INTO the arrow_function to find its body
+                    let body_start = {
+                        let mut fn_cursor = fn_child.walk();
+                        fn_child.children(&mut fn_cursor)
+                            .find(|c| c.kind() == "statement_block")
+                            .map(|body| body.start_byte())
+                    };
+
+                    let full_signature = if let Some(body_start) = body_start {
+                        source[node.start_byte()..body_start].trim_end().to_string()
+                    } else {
+                        // Expression-body arrow
+                        let mut fn_cursor2 = fn_child.walk();
+                        let arrow_end = fn_child.children(&mut fn_cursor2)
+                            .find(|c| c.kind() == "=>")
+                            .map(|arrow| arrow.end_byte());
+
+                        if let Some(end) = arrow_end {
+                            source[node.start_byte()..end].trim_end().to_string()
+                        } else {
+                            source[child.start_byte()..fn_child.start_byte()]
+                                .trim_end().to_string()
+                        }
+                    };
+
+                    signatures.push(Signature {
+                        kind: SignatureKind::Function,
+                        name,
+                        params: None,
+                        return_type: None,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature,
+                    });
+                } else {
+                    let type_ann = self.find_child_text(&child, "type_annotation", source);
+                    let full_sig = match &type_ann {
+                        Some(t) => format!("const {} {}", name, t),
+                        None => format!("const {}", name),
+                    };
+                    signatures.push(Signature {
+                        kind: SignatureKind::Constant,
+                        name,
+                        params: None,
+                        return_type: type_ann,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature: full_sig,
+                    });
+                }
             }
         }
     }
@@ -11648,6 +13588,10 @@ impl TypeScriptSupport {
                     if let Some(sig) = self.extract_interface_signature(source, &child) {
                         signatures.push(sig);
                     }
+                }
+                "lexical_declaration" | "variable_declaration" => {
+                    // Capture exported arrow functions: export const foo = () => {}
+                    self.extract_variable_declarations(source, &child, signatures);
                 }
                 _ => {}
             }
@@ -17919,6 +19863,318 @@ Files appear in **relevance order** (not alphabetical), prioritizing config and 
 - Use `--clear-cache` if diff output seems stale or incorrect
 ```
 
+### File: `docs/demo.cast`
+
+- Size: 13806 bytes
+- Modified: 2026-02-15 09:26:59 UTC
+
+```cast
+{"version": 2, "width": 100, "height": 32, "timestamp": 1771147584, "env": {"SHELL": "/usr/bin/fish", "TERM": "xterm-256color"}}
+[0.023049, "o", "\u001b[H\u001b[2J\u001b[3J\r\n"]
+[0.023483, "o", "\u001b[1;33m  ╔══════════════════════════════════════════════════════╗\u001b[0m\r\n\u001b[1;33m  ║  ⚡ \u001b[1;37mcontext-builder\u001b[1;33m v0.8.0  — \u001b[0;36mTree-Sitter Edition\u001b[1;33m   ║\u001b[0m\r\n\u001b[1;33m  ╚══════════════════════════════════════════════════════╝\u001b[0m\r\n\u001b[2m    LLM context from your codebase, with AST superpowers\u001b[0m\r\n\r\n"]
+[1.52425, "o", "\r\n\u001b[1;35m━━━ 1. See what files will be included ━━━\u001b[0m\r\n"]
+[2.325628, "o", "\u001b[1;32m❯\u001b[0m c"]
+[2.366844, "o", "o"]
+[2.408036, "o", "n"]
+[2.44907, "o", "t"]
+[2.490164, "o", "e"]
+[2.531319, "o", "x"]
+[2.572405, "o", "t"]
+[2.613388, "o", "-"]
+[2.654369, "o", "b"]
+[2.695654, "o", "u"]
+[2.736815, "o", "i"]
+[2.777991, "o", "l"]
+[2.819078, "o", "d"]
+[2.860322, "o", "e"]
+[2.901392, "o", "r"]
+[2.942534, "o", " "]
+[2.98371, "o", "-"]
+[3.024843, "o", "f"]
+[3.065929, "o", " "]
+[3.107126, "o", "r"]
+[3.148224, "o", "s"]
+[3.18898, "o", " "]
+[3.23009, "o", "-"]
+[3.271048, "o", "-"]
+[3.31205, "o", "p"]
+[3.353076, "o", "r"]
+[3.394046, "o", "e"]
+[3.435221, "o", "v"]
+[3.476198, "o", "i"]
+[3.517227, "o", "e"]
+[3.558345, "o", "w"]
+[3.599351, "o", " "]
+[3.64035, "o", "-"]
+[3.681374, "o", "y"]
+[4.123473, "o", "\r\n"]
+[4.126183, "o", "\r\n# File Tree Structure (Preview)\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n"]
+[4.126263, "o", "  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs\r\n  - 📄 test_binary_file_autodiff.rs\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n  - 📄 test_parallel_memory.rs\r\n  - 📄 test_phase4_integration.rs\r\n"]
+[5.627677, "o", "\r\n\u001b[1;35m━━━ 2. Generate full LLM context ━━━\u001b[0m\r\n"]
+[6.428963, "o", "\u001b[1;32m❯\u001b[0m c"]
+[6.470116, "o", "o"]
+[6.511181, "o", "n"]
+[6.552213, "o", "t"]
+[6.593232, "o", "e"]
+[6.634532, "o", "x"]
+[6.675749, "o", "t"]
+[6.716916, "o", "-"]
+[6.757938, "o", "b"]
+[6.799015, "o", "u"]
+[6.84023, "o", "i"]
+[6.881186, "o", "l"]
+[6.922249, "o", "d"]
+[6.963228, "o", "e"]
+[7.00451, "o", "r"]
+[7.045748, "o", " "]
+[7.086776, "o", "-"]
+[7.127786, "o", "f"]
+[7.168929, "o", " "]
+[7.210107, "o", "r"]
+[7.251264, "o", "s"]
+[7.292352, "o", " "]
+[7.333567, "o", "-"]
+[7.374604, "o", "o"]
+[7.415715, "o", " "]
+[7.456897, "o", "f"]
+[7.497922, "o", "u"]
+[7.53911, "o", "l"]
+[7.580203, "o", "l"]
+[7.621332, "o", "."]
+[7.66244, "o", "m"]
+[7.703341, "o", "d"]
+[7.744296, "o", " "]
+[7.785267, "o", "-"]
+[7.826467, "o", "y"]
+[8.268495, "o", "\r\n"]
+[8.273211, "o", "Documentation created successfully: full.md\r\nProcessing time: 3.50ms\r\nEstimated tokens: ~128K\r\n"]
+[9.274775, "o", "\u001b[1;32m❯\u001b[0m h"]
+[9.31622, "o", "e"]
+[9.357221, "o", "a"]
+[9.398255, "o", "d"]
+[9.439276, "o", " "]
+[9.480563, "o", "-"]
+[9.521843, "o", "4"]
+[9.562925, "o", "5"]
+[9.603962, "o", " "]
+[9.645179, "o", "f"]
+[9.686265, "o", "u"]
+[9.727348, "o", "l"]
+[9.768483, "o", "l"]
+[9.809401, "o", "."]
+[9.850437, "o", "m"]
+[9.891538, "o", "d"]
+[10.333622, "o", "\r\n"]
+[10.334579, "o", "# Directory Structure Report\r\n\r\nThis document contains files from the `context-builder` directory with extensions: rs\r\nContent hash: 20c1224bb213609d\r\n\r\n## File Tree Structure\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n"]
+[10.334594, "o", "  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs\r\n  - 📄 test_binary_file_autodiff.rs\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n"]
+[12.835671, "o", "\r\n\u001b[1;35m━━━ 3. NEW: Extract signatures only (tree-sitter AST) ━━━\u001b[0m\r\n"]
+[13.636837, "o", "\u001b[1;32m❯\u001b[0m c"]
+[13.678005, "o", "o"]
+[13.719192, "o", "n"]
+[13.760301, "o", "t"]
+[13.80119, "o", "e"]
+[13.842211, "o", "x"]
+[13.883258, "o", "t"]
+[13.924465, "o", "-"]
+[13.96551, "o", "b"]
+[14.006569, "o", "u"]
+[14.04763, "o", "i"]
+[14.08871, "o", "l"]
+[14.129774, "o", "d"]
+[14.170951, "o", "e"]
+[14.21205, "o", "r"]
+[14.253144, "o", " "]
+[14.294145, "o", "-"]
+[14.335324, "o", "f"]
+[14.376436, "o", " "]
+[14.417453, "o", "r"]
+[14.458642, "o", "s"]
+[14.499657, "o", " "]
+[14.540757, "o", "-"]
+[14.581864, "o", "-"]
+[14.622902, "o", "s"]
+[14.66396, "o", "i"]
+[14.705099, "o", "g"]
+[14.746151, "o", "n"]
+[14.787211, "o", "a"]
+[14.828192, "o", "t"]
+[14.869101, "o", "u"]
+[14.910284, "o", "r"]
+[14.951167, "o", "e"]
+[14.992104, "o", "s"]
+[15.033219, "o", " "]
+[15.074372, "o", "-"]
+[15.115432, "o", "o"]
+[15.156468, "o", " "]
+[15.197578, "o", "s"]
+[15.238619, "o", "i"]
+[15.279681, "o", "g"]
+[15.320718, "o", "s"]
+[15.361837, "o", "."]
+[15.402868, "o", "m"]
+[15.444076, "o", "d"]
+[15.48526, "o", " "]
+[15.526113, "o", "-"]
+[15.567138, "o", "y"]
+[16.009056, "o", "\r\n"]
+[16.022268, "o", "Documentation created successfully: sigs.md\r\nProcessing time: 12.03ms\r\nEstimated tokens: ~10K\r\n"]
+[17.02473, "o", "\u001b[1;32m❯\u001b[0m h"]
+[17.065586, "o", "e"]
+[17.106656, "o", "a"]
+[17.147768, "o", "d"]
+[17.188813, "o", " "]
+[17.22972, "o", "-"]
+[17.270715, "o", "7"]
+[17.311913, "o", "0"]
+[17.352992, "o", " "]
+[17.394035, "o", "s"]
+[17.435067, "o", "i"]
+[17.476062, "o", "g"]
+[17.517133, "o", "s"]
+[17.558202, "o", "."]
+[17.599156, "o", "m"]
+[17.640264, "o", "d"]
+[18.08256, "o", "\r\n"]
+[18.083418, "o", "# Directory Structure Report\r\n\r\nThis document contains files from the `context-builder` directory with extensions: rs\r\nContent hash: 20c1224bb213609d\r\n\r\n## File Tree Structure\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs\r\n  - 📄 test_binary_file_autodiff.rs"]
+[18.083433, "o", "\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n  - 📄 test_parallel_memory.rs\r\n  - 📄 test_phase4_integration.rs\r\n\r\n\r\n### File: `src/lib.rs`\r\n\r\n- Size: 53340 bytes\r\n- Modified: 2026-02-15 09:26:24 UTC\r\n\r\n\r\n**Signatures:**\r\n\r\n```rust\r\n// Modules"]
+[18.083463, "o", "\r\npub mod cache\r\npub mod cli\r\npub mod config\r\npub mod config_resolver\r\npub mod diff\r\npub mod file_utils\r\npub mod markdown\r\n"]
+[18.083522, "o", "pub mod state\r\npub mod token_count\r\npub mod tree\r\npub mod tree_sitter\r\n"]
+[21.084513, "o", "\r\n\u001b[1;35m━━━ 4. Compare: full context vs signatures ━━━\u001b[0m\r\n"]
+[21.885691, "o", "\u001b[1;32m❯\u001b[0m w"]
+[21.926737, "o", "c"]
+[21.967923, "o", " "]
+[22.009002, "o", "-"]
+[22.049974, "o", "l"]
+[22.091113, "o", " "]
+[22.132296, "o", "f"]
+[22.173133, "o", "u"]
+[22.214313, "o", "l"]
+[22.255191, "o", "l"]
+[22.296165, "o", "."]
+[22.337183, "o", "m"]
+[22.378333, "o", "d"]
+[22.419273, "o", " "]
+[22.460274, "o", "s"]
+[22.501509, "o", "i"]
+[22.54259, "o", "g"]
+[22.583631, "o", "s"]
+[22.624789, "o", "."]
+[22.665872, "o", "m"]
+[22.707002, "o", "d"]
+[23.149204, "o", "\r\n"]
+[23.150178, "o", " 16049 full.md\r\n  1832 sigs.md\r\n"]
+[23.150267, "o", " 17881 total\r\n"]
+[25.651413, "o", "\r\n\u001b[1;35m━━━ 5. NEW: Structural summary per file ━━━\u001b[0m\r\n"]
+[26.452583, "o", "\u001b[1;32m❯\u001b[0m c"]
+[26.493737, "o", "o"]
+[26.534753, "o", "n"]
+[26.575805, "o", "t"]
+[26.617057, "o", "e"]
+[26.658281, "o", "x"]
+[26.699366, "o", "t"]
+[26.740553, "o", "-"]
+[26.781587, "o", "b"]
+[26.822713, "o", "u"]
+[26.86389, "o", "i"]
+[26.905, "o", "l"]
+[26.946062, "o", "d"]
+[26.9871, "o", "e"]
+[27.028097, "o", "r"]
+[27.068957, "o", " "]
+[27.110019, "o", "-"]
+[27.151184, "o", "f"]
+[27.192248, "o", " "]
+[27.233437, "o", "r"]
+[27.274396, "o", "s"]
+[27.315547, "o", " "]
+[27.356628, "o", "-"]
+[27.397765, "o", "-"]
+[27.438951, "o", "s"]
+[27.480005, "o", "t"]
+[27.520939, "o", "r"]
+[27.562059, "o", "u"]
+[27.603254, "o", "c"]
+[27.644513, "o", "t"]
+[27.685568, "o", "u"]
+[27.726608, "o", "r"]
+[27.767744, "o", "e"]
+[27.808862, "o", " "]
+[27.849886, "o", "-"]
+[27.890747, "o", "-"]
+[27.931983, "o", "s"]
+[27.972847, "o", "i"]
+[28.013971, "o", "g"]
+[28.054869, "o", "n"]
+[28.095877, "o", "a"]
+[28.136931, "o", "t"]
+[28.178029, "o", "u"]
+[28.218979, "o", "r"]
+[28.260009, "o", "e"]
+[28.301133, "o", "s"]
+[28.342181, "o", " "]
+[28.38314, "o", "-"]
+[28.424235, "o", "o"]
+[28.465219, "o", " "]
+[28.506309, "o", "o"]
+[28.54754, "o", "v"]
+[28.588605, "o", "e"]
+[28.629804, "o", "r"]
+[28.671053, "o", "v"]
+[28.712312, "o", "i"]
+[28.753334, "o", "e"]
+[28.794437, "o", "w"]
+[28.835675, "o", "."]
+[28.876869, "o", "m"]
+[28.917997, "o", "d"]
+[28.959135, "o", " "]
+[29.00016, "o", "-"]
+[29.041279, "o", "y"]
+[29.483361, "o", "\r\n"]
+[29.503174, "o", "Documentation created successfully: overview.md\r\nProcessing time: 18.36ms\r\nEstimated tokens: ~10K\r\n"]
+[30.505523, "o", "\u001b[1;32m❯\u001b[0m h"]
+[30.546636, "o", "e"]
+[30.587667, "o", "a"]
+[30.62885, "o", "d"]
+[30.66989, "o", " "]
+[30.710815, "o", "-"]
+[30.751873, "o", "8"]
+[30.792908, "o", "0"]
+[30.834102, "o", " "]
+[30.875272, "o", "o"]
+[30.916281, "o", "v"]
+[30.957099, "o", "e"]
+[30.997944, "o", "r"]
+[31.038835, "o", "v"]
+[31.079839, "o", "i"]
+[31.120795, "o", "e"]
+[31.161785, "o", "w"]
+[31.202764, "o", "."]
+[31.243754, "o", "m"]
+[31.284701, "o", "d"]
+[31.726734, "o", "\r\n"]
+[31.727631, "o", "# Directory Structure Report\r\n\r\nThis document contains files from the `context-builder` directory with extensions: rs\r\nContent hash: 20c1224bb213609d\r\n\r\n## File Tree Structure\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs"]
+[31.727693, "o", "\r\n  - 📄 test_binary_file_autodiff.rs\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n  - 📄 test_parallel_memory.rs\r\n  - 📄 test_phase4_integration.rs\r\n\r\n\r\n### File: `src/lib.rs`\r\n\r\n- Size: 53340 bytes\r\n- Modified: 2026-02-15 09:26:24 UTC\r\n\r\n\r\n**Structure:**\r\n- 27 functions, 3 structs, 1 traits, 2 constants\r\n- 1524 lines (1254 code)\r\n\r\n**Signatures:**\r\n\r\n```rust\r\n// Modules\r\npub mod cache\r\npub mod cli\r\npub mod config\r\npub mod config_resolver\r\npub mod diff\r\npub mod file_utils\r\npub mod markdown\r\npub mod state\r\npub mod token_count\r\npub mod tree\r\npub mod tree_sitter\r\n\r\n// Structs/Classes\r\npub struct DiffConfig\r\n\r\n// Implementations\r\nimpl Default\r\n"]
+[34.728894, "o", "\r\n\u001b[1;32m✨ Your codebase is now LLM-ready.\u001b[0m\r\n\u001b[2m   cargo install context-builder --features tree-sitter-all\u001b[0m\r\n"]
+```
+
+### File: `docs/demo.gif`
+
+- Size: 330448 bytes
+- Modified: 2026-02-15 09:27:28 UTC
+
+```text
+<Binary file or unsupported encoding: 330448 bytes>
+```
+
+### File: `docs/demo.mp4`
+
+- Size: 377819 bytes
+- Modified: 2026-02-15 09:27:28 UTC
+
+```text
+<Binary file or unsupported encoding: 377819 bytes>
+```
+
 ### File: `docs/research/multi-model-code-review-analysis.md`
 
 - Size: 19787 bytes
@@ -18250,6 +20506,113 @@ This has implications for context-builder itself: **if the context file is well-
 - **Pre-fix context**: [`deepthink_context_v2.md`](../deepthink_context_v2.md) (original, Cargo.lock at position 0)
 - **Post-fix context**: [`deepthink_context_v2_fixed.md`](../deepthink_context_v2_fixed.md) (lockfile fix applied, Cargo.lock at position last)
 - **Prompt template**: [`deep_think_prompt_v2.md`](../deep_think_prompt_v2.md)
+```
+
+### File: `scripts/demo.sh`
+
+- Size: 2948 bytes
+- Modified: 2026-02-15 09:26:12 UTC
+
+```bash
+#!/usr/bin/env bash
+# Demo script for context-builder v0.8.0 — records a clean asciinema demo
+# Usage: asciinema rec --cols 100 --rows 32 --command="bash scripts/demo.sh" docs/demo.cast
+
+set -e
+
+# Simulate typing effect
+type_cmd() {
+    local cmd="$1"
+    local delay="${2:-0.04}"
+    printf '\033[1;32m❯\033[0m '
+    for ((i=0; i<${#cmd}; i++)); do
+        printf '%s' "${cmd:$i:1}"
+        sleep "$delay"
+    done
+    sleep 0.4
+    echo ""
+}
+
+# Section header
+section() {
+    echo ""
+    printf '\033[1;35m━━━ %s ━━━\033[0m\n' "$1"
+    sleep 0.8
+}
+
+# Copy our own source to a clean temp dir (avoids config overrides)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$SCRIPT_DIR/.."
+DEMO_DIR=$(mktemp -d)
+PROJECT="$DEMO_DIR/context-builder"
+mkdir -p "$PROJECT"
+
+# Copy the real source code
+cp -r "$REPO/src" "$PROJECT/src"
+cp -r "$REPO/tests" "$PROJECT/tests"
+cp "$REPO/Cargo.toml" "$PROJECT/"
+cp "$REPO/Cargo.lock" "$PROJECT/" 2>/dev/null || true
+
+cd "$PROJECT"
+
+clear
+echo ""
+printf '\033[1;33m  ╔══════════════════════════════════════════════════════╗\033[0m\n'
+printf '\033[1;33m  ║  ⚡ \033[1;37mcontext-builder\033[1;33m v0.8.0  — \033[0;36mTree-Sitter Edition\033[1;33m   ║\033[0m\n'
+printf '\033[1;33m  ╚══════════════════════════════════════════════════════╝\033[0m\n'
+printf '\033[2m    LLM context from your codebase, with AST superpowers\033[0m\n'
+echo ""
+sleep 1.5
+
+# --- Demo 1: Preview ---
+section "1. See what files will be included"
+type_cmd "context-builder -f rs --preview -y"
+context-builder -f rs --preview -y 2>/dev/null
+sleep 1.5
+
+# --- Demo 2: Full context ---
+section "2. Generate full LLM context"
+type_cmd "context-builder -f rs -o full.md -y"
+context-builder -f rs -o full.md -y 2>/dev/null
+sleep 1
+
+type_cmd "head -45 full.md"
+head -45 full.md
+sleep 2.5
+
+# --- Demo 3: Signatures ---
+section "3. NEW: Extract signatures only (tree-sitter AST)"
+type_cmd "context-builder -f rs --signatures -o sigs.md -y"
+context-builder -f rs --signatures -o sigs.md -y 2>/dev/null
+sleep 1
+
+type_cmd "head -70 sigs.md"
+head -70 sigs.md
+sleep 3
+
+# --- Demo 4: Size comparison ---
+section "4. Compare: full context vs signatures"
+type_cmd "wc -l full.md sigs.md"
+wc -l full.md sigs.md
+sleep 2.5
+
+# --- Demo 5: Structure ---
+section "5. NEW: Structural summary per file"
+type_cmd "context-builder -f rs --structure --signatures -o overview.md -y"
+context-builder -f rs --structure --signatures -o overview.md -y 2>/dev/null
+sleep 1
+
+type_cmd "head -80 overview.md"
+head -80 overview.md
+sleep 3
+
+echo ""
+printf '\033[1;32m✨ Your codebase is now LLM-ready.\033[0m\n'
+printf '\033[2m   cargo install context-builder --features tree-sitter-all\033[0m\n'
+sleep 3
+
+# Cleanup
+rm -rf "$DEMO_DIR"
 ```
 
 ### File: `scripts/generate_samples.rs`

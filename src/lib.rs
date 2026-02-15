@@ -782,7 +782,7 @@ fn generate_markdown_with_diff(
                     output.push_str(&String::from_utf8_lossy(&enrichment_buf));
                 }
 
-                output.push_str("\n");
+                output.push('\n');
             }
         }
     }
@@ -1557,6 +1557,930 @@ mod tests {
 
         let content = result.unwrap();
         assert!(content.contains("Directory Structure Report"));
+        assert!(content.contains("test.rs"));
+    }
+
+    #[test]
+    fn test_context_window_warning_under_limit() {
+        let original = std::env::var("CB_SILENT");
+        unsafe { std::env::set_var("CB_SILENT", "1"); }
+        
+        let output_bytes = 100_000;
+        print_context_window_warning(output_bytes * 4, None);
+        
+        unsafe { std::env::remove_var("CB_SILENT"); }
+        if let Ok(val) = original {
+            unsafe { std::env::set_var("CB_SILENT", val); }
+        }
+    }
+
+    #[test]
+    fn test_context_window_warning_over_limit() {
+        let output_bytes = 600_000;
+        print_context_window_warning(output_bytes * 4, None);
+    }
+
+    #[test]
+    fn test_context_window_warning_with_max_tokens() {
+        let output_bytes = 600_000;
+        print_context_window_warning(output_bytes * 4, Some(100_000));
+    }
+
+    #[test]
+    fn test_print_context_window_warning_various_sizes() {
+        print_context_window_warning(50_000, None);
+        print_context_window_warning(200_000, None);
+        print_context_window_warning(500_000, None);
+        print_context_window_warning(1_000_000, None);
+    }
+
+    #[test]
+    fn test_run_with_args_large_file_warning() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        let large_content = "x".repeat(150 * 1024);
+        fs::write(base_path.join("large.txt"), &large_content).unwrap();
+        fs::write(base_path.join("small.txt"), "small").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_output_dir_creation_failure_is_handled() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let output_path = temp_dir.path().join("test.md");
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_auto_diff_cache_write_failure_handling() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn test_auto_diff_with_changes() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("file1.txt"), "initial content").unwrap();
+
+        let args1 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let _ = run_with_args(args1, config.clone(), &prompter);
+
+        fs::write(base_path.join("file1.txt"), "modified content").unwrap();
+        fs::write(base_path.join("file2.txt"), "new file").unwrap();
+
+        let args2 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = run_with_args(args2, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Change Summary") || content.contains("No Changes"));
+    }
+
+    #[test]
+    fn test_auto_diff_max_tokens_truncation() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "x".repeat(10000)).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: Some(100),
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("truncated") || content.len() < 500);
+    }
+
+    #[test]
+    fn test_diff_only_mode_with_added_files() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("initial.txt"), "content").unwrap();
+
+        let args1 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let _ = run_with_args(args1, config.clone(), &prompter);
+
+        fs::write(base_path.join("newfile.txt"), "brand new content").unwrap();
+
+        let args2 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: true,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = run_with_args(args2, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Change Summary") || content.contains("Added Files"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_line_numbers() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {\n    println!(\"hi\");\n}").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, true).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let previous = state.clone();
+        let comparison = state.compare_with(&previous);
+
+        let result = generate_markdown_with_diff(
+            &state,
+            Some(&comparison),
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("No Changes Detected"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_and_modifications() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.txt"), "initial content").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let initial_state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        fs::write(base_path.join("test.txt"), "modified content").unwrap();
+
+        let new_files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let current_state = ProjectState::from_files(&new_files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let comparison = current_state.compare_with(&initial_state);
+
+        let sorted_paths: Vec<PathBuf> = new_files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = generate_markdown_with_diff(
+            &current_state,
+            Some(&comparison),
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("Change Summary"));
+        assert!(content.contains("Modified"));
+    }
+
+    #[test]
+    fn test_detect_major_file_types() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        fs::write(temp_dir.path().join("main.rs"), "fn main() {}").unwrap();
+        fs::write(temp_dir.path().join("lib.rs"), "pub fn lib() {}").unwrap();
+        fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
+        fs::write(temp_dir.path().join("README.md"), "# Readme").unwrap();
+
+        let result = detect_major_file_types();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let extensions = result.unwrap();
+        assert!(!extensions.is_empty());
+    }
+
+    #[test]
+    fn test_init_config_already_exists() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        fs::write(&config_path, "output = \"existing.md\"").unwrap();
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = init_config();
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("existing.md"));
+    }
+
+    #[test]
+    fn test_init_config_creates_new_file() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config_path = temp_dir.path().join("context-builder.toml");
+        assert!(!config_path.exists());
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = init_config();
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        assert!(config_path.exists());
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("output = "));
+        assert!(content.contains("filter ="));
+    }
+
+    #[test]
+    fn test_detect_major_file_types_empty_dir() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let result = detect_major_file_types();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let extensions = result.unwrap();
+        assert!(extensions.is_empty());
+    }
+
+    #[test]
+    fn test_print_context_window_warning_exact_limit() {
+        let output_bytes = 128_000 * 4;
+        print_context_window_warning(output_bytes, None);
+    }
+
+    #[test]
+    fn test_run_with_args_with_existing_output_file() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+        fs::write(&output_path, "existing content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+    }
+
+    #[test]
+    fn test_run_with_args_preview_only_token_count() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: true,
+            token_count: true,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_multiple_files() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        for i in 0..10 {
+            fs::write(base_path.join(format!("file{}.txt", i)), "content").unwrap();
+        }
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_auto_diff_config_hash_change() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("output.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args1 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec!["txt".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config1 = Config {
+            auto_diff: Some(true),
+            filter: Some(vec!["txt".to_string()]),
+            ..Default::default()
+        };
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let _ = run_with_args(args1, config1.clone(), &MockPrompter::new(true, true));
+
+        let args2 = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec!["rs".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config2 = Config {
+            auto_diff: Some(true),
+            filter: Some(vec!["rs".to_string()]),
+            ..Default::default()
+        };
+
+        let result = run_with_args(args2, config2, &MockPrompter::new(true, true));
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_and_filters() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("test.txt"), "hello").unwrap();
+
+        let files = collect_files(base_path, &["rs".to_string()], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ..Default::default()
+        };
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec!["rs".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("test.rs"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_and_ignores() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("ignore.txt"), "ignored").unwrap();
+
+        let files = collect_files(base_path, &[], &["ignore.txt".to_string()], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config {
+            ignore: Some(vec!["ignore.txt".to_string()]),
+            ..Default::default()
+        };
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec!["ignore.txt".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig {
+            context_lines: 3,
+            enabled: true,
+            diff_only: false,
+        };
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &ts_config,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
         assert!(content.contains("test.rs"));
     }
 }

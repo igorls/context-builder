@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::config::Config;
-use crate::diff::{PerFileDiff, PerFileStatus, diff_file_contents};
+use crate::diff::{diff_file_contents, PerFileDiff, PerFileStatus};
 
 /// Complete state representation of a project at a point in time
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -389,18 +389,14 @@ mod tests {
         assert_eq!(comparison.summary.added.len(), 1);
         assert_eq!(comparison.summary.modified.len(), 1);
         assert_eq!(comparison.summary.removed.len(), 0);
-        assert!(
-            comparison
-                .summary
-                .added
-                .contains(&PathBuf::from("file3.txt"))
-        );
-        assert!(
-            comparison
-                .summary
-                .modified
-                .contains(&PathBuf::from("file1.txt"))
-        );
+        assert!(comparison
+            .summary
+            .added
+            .contains(&PathBuf::from("file3.txt")));
+        assert!(comparison
+            .summary
+            .modified
+            .contains(&PathBuf::from("file1.txt")));
     }
 
     #[test]
@@ -660,113 +656,181 @@ mod tests {
     }
 
     #[test]
-    fn test_from_files_absolute_path_fallback() {
-        let temp_dir = tempdir().unwrap();
-        let base_path = temp_dir.path();
-
-        // Create a file in the temp dir
-        fs::write(base_path.join("test.txt"), "test content").unwrap();
-        let file_path = base_path.join("test.txt");
-
-        // Create entry with the file
-        let entry = create_mock_dir_entry(&file_path);
-
-        // Use a completely different base_path to force the fallback
-        let different_base = PathBuf::from("/completely/different/path");
-
-        let config = Config::default();
-
-        let state = ProjectState::from_files(&[entry], &different_base, &config, false).unwrap();
-
-        // Should fall back to just the filename
-        assert_eq!(state.files.len(), 1);
-        assert!(state.files.contains_key(&PathBuf::from("test.txt")));
+    fn test_file_state_from_path_missing_file() {
+        let nonexistent = Path::new("/nonexistent/path/file.txt");
+        let result = FileState::from_path(nonexistent);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_change_summary_with_unchanged_files() {
-        let changes = vec![
-            PerFileDiff {
-                path: "added.txt".to_string(),
-                status: PerFileStatus::Added,
-                diff: "diff content".to_string(),
-            },
-            PerFileDiff {
-                path: "unchanged.txt".to_string(),
-                status: PerFileStatus::Unchanged,
-                diff: "".to_string(),
-            },
+    fn test_project_state_timestamp_format() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let entries = vec![create_mock_dir_entry(&base_path.join("test.txt"))];
+        let config = Config::default();
+        let state = ProjectState::from_files(&entries, base_path, &config, false).unwrap();
+
+        assert!(state.timestamp.contains("UTC"));
+        let year = chrono::Utc::now().format("%Y").to_string();
+        assert!(state.timestamp.contains(&year));
+    }
+
+    #[test]
+    fn test_project_metadata_with_filters_and_ignores() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("lib.rs"), "pub fn lib() {}").unwrap();
+
+        let entries = vec![
+            create_mock_dir_entry(&base_path.join("main.rs")),
+            create_mock_dir_entry(&base_path.join("lib.rs")),
         ];
 
-        // Manually create the summary like the actual code does
-        let mut added = Vec::new();
-        let mut removed = Vec::new();
-        let mut modified = Vec::new();
-
-        for diff in &changes {
-            let path = PathBuf::from(&diff.path);
-            match diff.status {
-                PerFileStatus::Added => added.push(path),
-                PerFileStatus::Removed => removed.push(path),
-                PerFileStatus::Modified => modified.push(path),
-                PerFileStatus::Unchanged => {} // This line should be covered now
-            }
-        }
-
-        let summary = ChangeSummary {
-            total_changes: added.len() + removed.len() + modified.len(),
-            added,
-            removed,
-            modified,
+        let config = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
         };
 
-        assert_eq!(summary.total_changes, 1); // Only the added file counts
-        assert_eq!(summary.added.len(), 1);
-        assert_eq!(summary.removed.len(), 0);
-        assert_eq!(summary.modified.len(), 0);
+        let state = ProjectState::from_files(&entries, base_path, &config, true).unwrap();
+
+        assert_eq!(state.metadata.filters, vec!["rs"]);
+        assert_eq!(state.metadata.ignores, vec!["target"]);
+        assert!(state.metadata.line_numbers);
+        assert_eq!(state.metadata.file_count, 2);
     }
 
     #[test]
-    fn test_has_changes_with_missing_file() {
+    fn test_project_name_extraction_from_path() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let entries = vec![create_mock_dir_entry(&base_path.join("test.txt"))];
+        let config = Config::default();
+        let state = ProjectState::from_files(&entries, base_path, &config, false).unwrap();
+
+        assert!(!state.metadata.project_name.is_empty());
+        assert_ne!(state.metadata.project_name, "unknown");
+    }
+
+    #[test]
+    fn test_change_summary_empty_outputs_nothing() {
+        let summary = ChangeSummary {
+            added: vec![],
+            removed: vec![],
+            modified: vec![],
+            total_changes: 0,
+        };
+
+        let markdown = summary.to_markdown();
+        assert!(markdown.is_empty());
+    }
+
+    #[test]
+    fn test_state_comparison_with_removed_files() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
 
-        // Create files for the first state
         fs::write(base_path.join("file1.txt"), "content1").unwrap();
-        let entry1 = create_mock_dir_entry(&base_path.join("file1.txt"));
-
-        let config = Config::default();
-        let state1 = ProjectState::from_files(&[entry1], base_path, &config, false).unwrap();
-
-        // Create a different state with different files
         fs::write(base_path.join("file2.txt"), "content2").unwrap();
-        let entry2 = create_mock_dir_entry(&base_path.join("file2.txt"));
-        let state2 = ProjectState::from_files(&[entry2], base_path, &config, false).unwrap();
 
-        // Should detect changes because files are completely different
-        assert!(state1.has_changes(&state2));
+        let state1_files = BTreeMap::from([
+            (
+                PathBuf::from("file1.txt"),
+                FileState::from_path(&base_path.join("file1.txt")).unwrap(),
+            ),
+            (
+                PathBuf::from("file2.txt"),
+                FileState::from_path(&base_path.join("file2.txt")).unwrap(),
+            ),
+        ]);
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash".to_string(),
+            files: state1_files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 2,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        std::fs::remove_file(base_path.join("file2.txt")).unwrap();
+
+        let state2_files = BTreeMap::from([(
+            PathBuf::from("file1.txt"),
+            FileState::from_path(&base_path.join("file1.txt")).unwrap(),
+        )]);
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash".to_string(),
+            files: state2_files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let comparison = state2.compare_with(&state1);
+        assert_eq!(comparison.summary.removed.len(), 1);
     }
 
     #[test]
-    fn test_file_state_with_invalid_data_error() {
-        // Create a temporary file with binary content that might trigger InvalidData
-        let temp_dir = tempdir().unwrap();
-        let binary_file = temp_dir.path().join("binary.dat");
+    fn test_compute_config_hash_with_all_options() {
+        let config = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(true),
+            diff_context_lines: Some(5),
+            signatures: Some(true),
+            structure: Some(true),
+            truncate: Some("smart".to_string()),
+            visibility: Some("public".to_string()),
+            ..Default::default()
+        };
 
-        // Write invalid UTF-8 bytes
-        let binary_data = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA];
-        fs::write(&binary_file, &binary_data).unwrap();
+        let hash1 = ProjectState::compute_config_hash(&config);
+        let hash2 = ProjectState::compute_config_hash(&config);
 
-        // This might trigger the InvalidData error path, but since we can't guarantee it,
-        // we at least verify the function can handle binary files
-        let result = FileState::from_path(&binary_file);
-        assert!(result.is_ok());
+        assert_eq!(hash1, hash2);
+        assert!(!hash1.is_empty());
+    }
+
+    #[test]
+    fn test_compute_config_hash_differences() {
+        let config1 = Config {
+            filter: None,
+            ignore: None,
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: None,
+            ..Default::default()
+        };
+
+        let hash1 = ProjectState::compute_config_hash(&config1);
+        let hash2 = ProjectState::compute_config_hash(&config2);
+
+        assert_ne!(hash1, hash2);
     }
 
     // Helper function to create a mock DirEntry for testing
     fn create_mock_dir_entry(path: &std::path::Path) -> ignore::DirEntry {
-        // This is a bit of a hack since DirEntry doesn't have a public constructor
-        // We use the ignore crate's WalkBuilder to create a real DirEntry
         let walker = ignore::WalkBuilder::new(path.parent().unwrap());
         walker
             .build()
