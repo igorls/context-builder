@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::config::Config;
-use crate::diff::{diff_file_contents, PerFileDiff, PerFileStatus};
+use crate::diff::{PerFileDiff, PerFileStatus, diff_file_contents};
 
 /// Complete state representation of a project at a point in time
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -389,14 +389,18 @@ mod tests {
         assert_eq!(comparison.summary.added.len(), 1);
         assert_eq!(comparison.summary.modified.len(), 1);
         assert_eq!(comparison.summary.removed.len(), 0);
-        assert!(comparison
-            .summary
-            .added
-            .contains(&PathBuf::from("file3.txt")));
-        assert!(comparison
-            .summary
-            .modified
-            .contains(&PathBuf::from("file1.txt")));
+        assert!(
+            comparison
+                .summary
+                .added
+                .contains(&PathBuf::from("file3.txt"))
+        );
+        assert!(
+            comparison
+                .summary
+                .modified
+                .contains(&PathBuf::from("file1.txt"))
+        );
     }
 
     #[test]

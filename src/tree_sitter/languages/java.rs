@@ -173,24 +173,23 @@ impl JavaSupport {
             .or_else(|| self.find_child_text_for_type(node, source));
 
         // Use byte-slicing to preserve annotations, generics, throws, and modifiers
-        let full_sig = slice_signature_before_body(source, node, &["block"])
-            .unwrap_or_else(|| {
-                let mut sig = String::new();
-                if vis == Visibility::Public {
-                    sig.push_str("public ");
-                }
-                if let Some(r) = &return_type {
-                    sig.push_str(r);
-                    sig.push(' ');
-                }
-                sig.push_str(&name);
-                if let Some(p) = &params {
-                    sig.push_str(p);
-                } else {
-                    sig.push_str("()");
-                }
-                sig
-            });
+        let full_sig = slice_signature_before_body(source, node, &["block"]).unwrap_or_else(|| {
+            let mut sig = String::new();
+            if vis == Visibility::Public {
+                sig.push_str("public ");
+            }
+            if let Some(r) = &return_type {
+                sig.push_str(r);
+                sig.push(' ');
+            }
+            sig.push_str(&name);
+            if let Some(p) = &params {
+                sig.push_str(p);
+            } else {
+                sig.push_str("()");
+            }
+            sig
+        });
 
         Some(Signature {
             kind: SignatureKind::Method,
@@ -544,4 +543,3 @@ enum Status { ACTIVE, INACTIVE }
         assert!(!JavaSupport.supports_extension("rs"));
     }
 }
-

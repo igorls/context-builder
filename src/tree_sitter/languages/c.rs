@@ -202,7 +202,8 @@ impl CSupport {
             }
             // Check one level deeper for pointer declarations
             let mut inner = c.walk();
-            c.children(&mut inner).any(|gc| gc.kind() == "function_declarator")
+            c.children(&mut inner)
+                .any(|gc| gc.kind() == "function_declarator")
         });
 
         if !has_function_declarator {
@@ -529,4 +530,3 @@ void helper() {}
         assert!(!CSupport.supports_extension("cpp"));
     }
 }
-

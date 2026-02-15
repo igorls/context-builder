@@ -145,11 +145,9 @@ impl JavaScriptSupport {
 
         // Use byte-slicing to preserve async, generator*, and complete parameter lists
         let full_sig = slice_signature_before_body(source, node, &["statement_block"])
-            .unwrap_or_else(|| {
-                match &params {
-                    Some(p) => format!("function {}({})", name, p),
-                    None => format!("function {}()", name),
-                }
+            .unwrap_or_else(|| match &params {
+                Some(p) => format!("function {}({})", name, p),
+                None => format!("function {}()", name),
             });
 
         Some(Signature {
@@ -192,16 +190,17 @@ impl JavaScriptSupport {
             if child.kind() == "variable_declarator" {
                 // Check if this is an arrow function or regular function assignment
                 let mut inner_cursor = child.walk();
-                let fn_node = child.children(&mut inner_cursor).find(|c| {
-                    c.kind() == "arrow_function" || c.kind() == "function"
-                });
+                let fn_node = child
+                    .children(&mut inner_cursor)
+                    .find(|c| c.kind() == "arrow_function" || c.kind() == "function");
 
                 if let Some(fn_child) = fn_node {
                     // Navigate INTO the arrow_function/function to find its body.
                     // statement_block is a child of arrow_function, NOT of variable_declarator.
                     let body_start = {
                         let mut fn_cursor = fn_child.walk();
-                        fn_child.children(&mut fn_cursor)
+                        fn_child
+                            .children(&mut fn_cursor)
                             .find(|c| c.kind() == "statement_block")
                             .map(|body| body.start_byte())
                     };
@@ -214,7 +213,8 @@ impl JavaScriptSupport {
                         // Expression-body arrow: `const add = (a, b) => a + b`
                         // Slice from parent through the `=>` token
                         let mut fn_cursor2 = fn_child.walk();
-                        let arrow_end = fn_child.children(&mut fn_cursor2)
+                        let arrow_end = fn_child
+                            .children(&mut fn_cursor2)
                             .find(|c| c.kind() == "=>")
                             .map(|arrow| arrow.end_byte());
 
@@ -223,11 +223,13 @@ impl JavaScriptSupport {
                         } else {
                             // Last resort: use declarator text only (name = params)
                             source[child.start_byte()..fn_child.start_byte()]
-                                .trim_end().to_string()
+                                .trim_end()
+                                .to_string()
                         }
                     };
 
-                    let name = self.find_child_text(&child, "identifier", source)
+                    let name = self
+                        .find_child_text(&child, "identifier", source)
                         .unwrap_or_default();
 
                     signatures.push(Signature {
@@ -271,7 +273,9 @@ impl JavaScriptSupport {
                 && let Some(sig) = self.extract_class_signature(source, &child)
             {
                 signatures.push(sig);
-            } else if child.kind() == "lexical_declaration" || child.kind() == "variable_declaration" {
+            } else if child.kind() == "lexical_declaration"
+                || child.kind() == "variable_declaration"
+            {
                 // Capture exported arrow functions: export const foo = () => {}
                 self.extract_variable_declarations(source, &child, signatures);
             }

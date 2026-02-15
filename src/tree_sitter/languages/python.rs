@@ -98,9 +98,9 @@ impl PythonSupport {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     if child.kind() == "function_definition" {
-                        if let Some(sig) = self.extract_function_signature_with_context(
-                            source, &child, Some(node),
-                        ) {
+                        if let Some(sig) =
+                            self.extract_function_signature_with_context(source, &child, Some(node))
+                        {
                             signatures.push(sig);
                         }
                         // Don't recurse into children — we already handled the inner def
@@ -113,7 +113,10 @@ impl PythonSupport {
                         let mut inner = child.walk();
                         for grandchild in child.children(&mut inner) {
                             self.extract_signatures_from_node(
-                                source, &grandchild, _visibility, signatures,
+                                source,
+                                &grandchild,
+                                _visibility,
+                                signatures,
                             );
                         }
                         return;
@@ -121,9 +124,8 @@ impl PythonSupport {
                 }
             }
             "function_definition" => {
-                if let Some(sig) = self.extract_function_signature_with_context(
-                    source, node, None,
-                ) {
+                if let Some(sig) = self.extract_function_signature_with_context(source, node, None)
+                {
                     signatures.push(sig);
                 }
             }
@@ -196,8 +198,8 @@ impl PythonSupport {
         // If we have a decorator context, slice from there to preserve decorators.
         // Otherwise slice from the function_definition node.
         let slice_node = context_node.unwrap_or(node);
-        let full_sig = slice_signature_before_body(source, slice_node, &["block"])
-            .unwrap_or_else(|| {
+        let full_sig =
+            slice_signature_before_body(source, slice_node, &["block"]).unwrap_or_else(|| {
                 let mut sig = String::new();
                 sig.push_str("def ");
                 sig.push_str(&name);

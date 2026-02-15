@@ -536,8 +536,8 @@ pub fn process_file(
             // When --signatures is active, replace file content with signatures-only output
             // ONLY for extensions that tree-sitter actually supports. Non-code files
             // (Cargo.toml, README.md, .yaml, etc.) must always show full content.
-            let signatures_only = ts_config.signatures
-                && crate::tree_sitter::is_supported_extension(extension);
+            let signatures_only =
+                ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
 
             if !signatures_only {
                 // Note: Smart truncation (`truncate: "smart"`) indicates AST-boundary

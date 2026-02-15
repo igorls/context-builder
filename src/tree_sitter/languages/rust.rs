@@ -256,24 +256,23 @@ impl RustSupport {
         let return_type = self.find_child_text(node, "return_type", source);
 
         // Use byte-slicing to preserve generics, return types, and all modifiers
-        let full_sig = slice_signature_before_body(source, node, &["block"])
-            .unwrap_or_else(|| {
-                // Fallback for declarations without a body
-                let mut sig = String::new();
-                if vis == Visibility::Public {
-                    sig.push_str("pub ");
-                }
-                sig.push_str("fn ");
-                sig.push_str(&name);
-                if let Some(p) = &params {
-                    sig.push_str(p);
-                }
-                if let Some(r) = &return_type {
-                    sig.push_str(" -> ");
-                    sig.push_str(r);
-                }
-                sig
-            });
+        let full_sig = slice_signature_before_body(source, node, &["block"]).unwrap_or_else(|| {
+            // Fallback for declarations without a body
+            let mut sig = String::new();
+            if vis == Visibility::Public {
+                sig.push_str("pub ");
+            }
+            sig.push_str("fn ");
+            sig.push_str(&name);
+            if let Some(p) = &params {
+                sig.push_str(p);
+            }
+            if let Some(r) = &return_type {
+                sig.push_str(" -> ");
+                sig.push_str(r);
+            }
+            sig
+        });
 
         Some(Signature {
             kind: SignatureKind::Function,
@@ -302,16 +301,20 @@ impl RustSupport {
         // Use byte-slicing to preserve generic bounds and where clauses
         // Include both `field_declaration_list` (regular structs) and
         // `ordered_field_declaration_list` (tuple structs like `struct Color(u8, u8, u8)`)
-        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list", "ordered_field_declaration_list"])
-            .unwrap_or_else(|| {
-                let mut sig = String::new();
-                if vis == Visibility::Public {
-                    sig.push_str("pub ");
-                }
-                sig.push_str("struct ");
-                sig.push_str(&name);
-                sig
-            });
+        let full_sig = slice_signature_before_body(
+            source,
+            node,
+            &["field_declaration_list", "ordered_field_declaration_list"],
+        )
+        .unwrap_or_else(|| {
+            let mut sig = String::new();
+            if vis == Visibility::Public {
+                sig.push_str("pub ");
+            }
+            sig.push_str("struct ");
+            sig.push_str(&name);
+            sig
+        });
 
         Some(Signature {
             kind: SignatureKind::Struct,
@@ -886,4 +889,3 @@ fn third() -> i32 {
         assert!(!RustSupport.supports_extension("py"));
     }
 }
-

@@ -1,4 +1,4 @@
-use ignore::{overrides::OverrideBuilder, DirEntry, WalkBuilder};
+use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -420,10 +420,12 @@ mod tests {
 
         let result = collect_files(base, &filters, &ignores, &[]);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid ignore pattern"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid ignore pattern")
+        );
     }
 
     #[test]

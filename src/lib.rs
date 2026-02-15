@@ -750,8 +750,8 @@ fn generate_markdown_with_diff(
                 };
 
                 // When --signatures is active, only suppress content for supported code files
-                let signatures_only = ts_config.signatures
-                    && crate::tree_sitter::is_supported_extension(extension);
+                let signatures_only =
+                    ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
 
                 if !signatures_only {
                     output.push_str(&format!("```{}\n", language));
@@ -1564,14 +1564,20 @@ mod tests {
     #[test]
     fn test_context_window_warning_under_limit() {
         let original = std::env::var("CB_SILENT");
-        unsafe { std::env::set_var("CB_SILENT", "1"); }
-        
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+
         let output_bytes = 100_000;
         print_context_window_warning(output_bytes * 4, None);
-        
-        unsafe { std::env::remove_var("CB_SILENT"); }
+
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
         if let Ok(val) = original {
-            unsafe { std::env::set_var("CB_SILENT", val); }
+            unsafe {
+                std::env::set_var("CB_SILENT", val);
+            }
         }
     }
 
@@ -1907,7 +1913,11 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
 
-        fs::write(base_path.join("test.rs"), "fn main() {\n    println!(\"hi\");\n}").unwrap();
+        fs::write(
+            base_path.join("test.rs"),
+            "fn main() {\n    println!(\"hi\");\n}",
+        )
+        .unwrap();
 
         let files = collect_files(base_path, &[], &[], &[]).unwrap();
         let file_tree = build_file_tree(&files, base_path);
@@ -1989,7 +1999,8 @@ mod tests {
         fs::write(base_path.join("test.txt"), "modified content").unwrap();
 
         let new_files = collect_files(base_path, &[], &[], &[]).unwrap();
-        let current_state = ProjectState::from_files(&new_files, base_path, &config, false).unwrap();
+        let current_state =
+            ProjectState::from_files(&new_files, base_path, &config, false).unwrap();
 
         let args = Args {
             input: base_path.to_string_lossy().to_string(),

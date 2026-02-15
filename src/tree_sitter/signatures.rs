@@ -60,8 +60,8 @@ pub fn format_signatures_as_markdown(signatures: &[Signature], language: &str) -
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::language_support::SignatureKind;
+    use super::*;
 
     fn make_sig(kind: SignatureKind, name: &str, full_sig: &str) -> Signature {
         Signature {
@@ -182,6 +182,9 @@ mod tests {
         let source = "pub fn visible() { }\nfn hidden() { }";
         let sigs = extract_signatures(source, lang, Visibility::Public);
         // Only pub functions should be included
-        assert!(sigs.iter().all(|s| s.name == "visible" || s.visibility == Visibility::Public));
+        assert!(
+            sigs.iter()
+                .all(|s| s.name == "visible" || s.visibility == Visibility::Public)
+        );
     }
 }

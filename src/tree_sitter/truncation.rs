@@ -98,10 +98,10 @@ mod tests {
     #[cfg(feature = "tree-sitter-rust")]
     fn test_find_truncation_point_source_exceeds_limit() {
         let lang = super::super::languages::get_language_support("rs").unwrap();
-        let source = "fn foo() {\n    let x = 1;\n    let y = 2;\n}\nfn bar() {\n    let z = 3;\n}\n";
+        let source =
+            "fn foo() {\n    let x = 1;\n    let y = 2;\n}\nfn bar() {\n    let z = 3;\n}\n";
         let point = find_truncation_point(source, 20, lang);
         assert!(point <= source.len());
         assert!(point > 0);
     }
 }
-

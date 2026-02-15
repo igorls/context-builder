@@ -176,13 +176,11 @@ impl TypeScriptSupport {
 
         // Use byte-slicing to preserve type params, access modifiers, and return types
         let full_sig = slice_signature_before_body(source, node, &["statement_block"])
-            .unwrap_or_else(|| {
-                match (params.as_ref(), return_type.as_ref()) {
-                    (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
-                    (Some(p), None) => format!("function {}{}", name, p),
-                    (None, Some(r)) => format!("function {}() {}", name, r),
-                    (None, None) => format!("function {}()", name),
-                }
+            .unwrap_or_else(|| match (params.as_ref(), return_type.as_ref()) {
+                (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
+                (Some(p), None) => format!("function {}{}", name, p),
+                (None, Some(r)) => format!("function {}() {}", name, r),
+                (None, None) => format!("function {}()", name),
             });
 
         Some(Signature {
@@ -285,15 +283,16 @@ impl TypeScriptSupport {
             {
                 // Check for arrow function or function assignment
                 let mut inner_cursor = child.walk();
-                let fn_node = child.children(&mut inner_cursor).find(|c| {
-                    c.kind() == "arrow_function" || c.kind() == "function"
-                });
+                let fn_node = child
+                    .children(&mut inner_cursor)
+                    .find(|c| c.kind() == "arrow_function" || c.kind() == "function");
 
                 if let Some(fn_child) = fn_node {
                     // Navigate INTO the arrow_function to find its body
                     let body_start = {
                         let mut fn_cursor = fn_child.walk();
-                        fn_child.children(&mut fn_cursor)
+                        fn_child
+                            .children(&mut fn_cursor)
                             .find(|c| c.kind() == "statement_block")
                             .map(|body| body.start_byte())
                     };
@@ -303,7 +302,8 @@ impl TypeScriptSupport {
                     } else {
                         // Expression-body arrow
                         let mut fn_cursor2 = fn_child.walk();
-                        let arrow_end = fn_child.children(&mut fn_cursor2)
+                        let arrow_end = fn_child
+                            .children(&mut fn_cursor2)
                             .find(|c| c.kind() == "=>")
                             .map(|arrow| arrow.end_byte());
 
@@ -311,7 +311,8 @@ impl TypeScriptSupport {
                             source[node.start_byte()..end].trim_end().to_string()
                         } else {
                             source[child.start_byte()..fn_child.start_byte()]
-                                .trim_end().to_string()
+                                .trim_end()
+                                .to_string()
                         }
                     };
 
@@ -609,4 +610,3 @@ const helper = (): void => {};
         assert!(!TypeScriptSupport.supports_extension("js"));
     }
 }
-
