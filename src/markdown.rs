@@ -533,10 +533,48 @@ pub fn process_file(
                     return Ok(());
                 }
             };
+            // When --signatures is active, replace file content with signatures-only output
+            let signatures_only = ts_config.signatures;
 
-            write_text_content(output, &content, language, line_numbers)?;
+            if !signatures_only {
+                // Apply smart truncation if configured
+                let content = if ts_config.truncate == "smart" {
+                    #[cfg(feature = "tree-sitter-base")]
+                    {
+                        if let Some(truncation_point) =
+                            crate::tree_sitter::find_smart_truncation_point(
+                                &content,
+                                content.len() / 2,
+                                extension,
+                            )
+                        {
+                            if truncation_point < content.len() {
+                                info!(
+                                    "Smart truncated {} from {} to {} bytes (AST boundary)",
+                                    relative_path.display(),
+                                    content.len(),
+                                    truncation_point
+                                );
+                                content[..truncation_point].to_string()
+                            } else {
+                                content.clone()
+                            }
+                        } else {
+                            content.clone()
+                        }
+                    }
+                    #[cfg(not(feature = "tree-sitter-base"))]
+                    {
+                        content.clone()
+                    }
+                } else {
+                    content.clone()
+                };
 
-            // Tree-sitter enrichment: add structure summary and/or signatures
+                write_text_content(output, &content, language, line_numbers)?;
+            }
+
+            // Tree-sitter enrichment: signatures and/or structure
             write_tree_sitter_enrichment(output, &content, extension, ts_config)?;
         }
         Err(e) => {

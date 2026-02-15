@@ -395,6 +395,7 @@ mod tests {
         let source = r#"
 function hello(name: string): string {
     return `Hello, ${name}!`;
+}
 "#;
 
         let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);

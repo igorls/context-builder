@@ -288,6 +288,7 @@ mod tests {
         let source = r#"
 function hello(name) {
     return `Hello, ${name}!`;
+}
 
 const add = (a, b) => a + b;
 "#;

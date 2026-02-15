@@ -393,10 +393,10 @@ package main
 
 func Hello(name string) string {
     return "Hello, " + name
+}
 
 func internal() int {
     return 42
-}
 }
 "#;
 
