@@ -27,6 +27,10 @@ pub struct ResolvedConfig {
     pub diff_context_lines: usize,
     pub max_tokens: Option<usize>,
     pub init: bool,
+    pub signatures: bool,
+    pub structure: bool,
+    pub truncate: String,
+    pub visibility: String,
 }
 
 /// Result of configuration resolution including the final config and any warnings
@@ -74,6 +78,24 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
         diff_context_lines: final_config.diff_context_lines.unwrap_or(3),
         max_tokens: args.max_tokens.or(final_config.max_tokens),
         init: args.init,
+        signatures: args.signatures || final_config.signatures.unwrap_or(false),
+        structure: args.structure || final_config.structure.unwrap_or(false),
+        truncate: if args.truncate != "smart" {
+            args.truncate.clone()
+        } else {
+            final_config
+                .truncate
+                .clone()
+                .unwrap_or_else(|| args.truncate.clone())
+        },
+        visibility: if args.visibility != "all" {
+            args.visibility.clone()
+        } else {
+            final_config
+                .visibility
+                .clone()
+                .unwrap_or_else(|| args.visibility.clone())
+        },
     };
 
     ConfigResolution {
@@ -219,6 +241,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -252,6 +278,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -296,6 +326,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -326,6 +360,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -354,6 +392,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -384,6 +426,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -414,6 +460,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let resolution = resolve_final_config(args.clone(), None);

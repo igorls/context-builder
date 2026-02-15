@@ -67,6 +67,10 @@ fn preview_mode_does_not_create_output_file() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -108,6 +112,10 @@ fn preview_mode_skips_overwrite_confirmation() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Use false for overwrite response to verify it's not called
@@ -154,6 +162,10 @@ fn token_count_mode_skips_overwrite_confirmation() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Use false for overwrite response to verify it's not called
@@ -197,6 +209,10 @@ fn both_preview_and_token_count_modes_work_together() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
@@ -253,6 +269,10 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Always proceed without interactive prompts
@@ -341,6 +361,10 @@ fn overwrite_prompt_is_respected() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Deny overwrite
@@ -381,6 +405,10 @@ fn confirm_processing_receives_large_count() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -418,6 +446,10 @@ fn token_count_mode_does_not_create_output_file() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);

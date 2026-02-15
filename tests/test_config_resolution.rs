@@ -64,6 +64,10 @@ fn run_with_resolved_config(
         clear_cache: resolution.config.clear_cache,
         init: resolution.config.init,
         max_tokens: resolution.config.max_tokens,
+        signatures: resolution.config.signatures,
+        structure: resolution.config.structure,
+        truncate: resolution.config.truncate,
+        visibility: resolution.config.visibility,
     };
 
     // Create final Config with resolved values
@@ -120,6 +124,10 @@ output = "from_config.md"
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -198,6 +206,10 @@ ignore = ["target"]
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -280,6 +292,10 @@ timestamped_output = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -357,6 +373,10 @@ yes = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -429,6 +449,10 @@ timestamped_output = false
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();

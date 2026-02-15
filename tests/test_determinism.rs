@@ -92,6 +92,10 @@ fn test_deterministic_output_multiple_runs() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         },
         Config::default(),
         &prompter,
@@ -115,6 +119,10 @@ fn test_deterministic_output_multiple_runs() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         },
         Config::default(),
         &prompter,
@@ -257,6 +265,10 @@ fn test_deterministic_file_tree_order() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -321,6 +333,10 @@ fn test_cache_collision_prevention() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -345,6 +361,10 @@ fn test_cache_collision_prevention() {
 
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -410,6 +430,10 @@ fn test_custom_ignores_performance() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -465,6 +489,10 @@ fn test_configuration_affects_cache_key() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let args2 = Args {
@@ -480,6 +508,10 @@ fn test_configuration_affects_cache_key() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -545,6 +577,10 @@ auto_diff = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;

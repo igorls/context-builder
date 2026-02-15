@@ -96,6 +96,10 @@ filter = ["txt"]
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Apply config settings to args (mimicking the run() function logic)
@@ -184,6 +188,10 @@ timestamped_output = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Apply timestamping manually since we're bypassing run()

@@ -51,6 +51,22 @@ pub struct Args {
     /// Initialize a new context-builder.toml config file in the current directory
     #[clap(long)]
     pub init: bool,
+
+    /// Extract function/class signatures only (requires tree-sitter feature)
+    #[clap(long)]
+    pub signatures: bool,
+
+    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    #[clap(long)]
+    pub structure: bool,
+
+    /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
+    #[clap(long, value_name = "MODE", default_value = "smart")]
+    pub truncate: String,
+
+    /// Filter signatures by visibility: "all", "public", or "private"
+    #[clap(long, default_value = "all")]
+    pub visibility: String,
 }
 
 #[cfg(test)]
@@ -158,5 +174,41 @@ mod tests {
             .expect("should parse clear-cache flag");
         assert!(args.clear_cache);
         assert!(!args.diff_only);
+    }
+
+    #[test]
+    fn parses_signatures_flag() {
+        let args = Args::try_parse_from(["context-builder", "--signatures"])
+            .expect("should parse signatures flag");
+        assert!(args.signatures);
+    }
+
+    #[test]
+    fn parses_structure_flag() {
+        let args = Args::try_parse_from(["context-builder", "--structure"])
+            .expect("should parse structure flag");
+        assert!(args.structure);
+    }
+
+    #[test]
+    fn parses_truncate_mode() {
+        let args = Args::try_parse_from(["context-builder", "--truncate", "byte"])
+            .expect("should parse truncate flag");
+        assert_eq!(args.truncate, "byte");
+
+        let args_default =
+            Args::try_parse_from(["context-builder"]).expect("should parse with default truncate");
+        assert_eq!(args_default.truncate, "smart");
+    }
+
+    #[test]
+    fn parses_visibility_filter() {
+        let args = Args::try_parse_from(["context-builder", "--visibility", "public"])
+            .expect("should parse visibility flag");
+        assert_eq!(args.visibility, "public");
+
+        let args_default = Args::try_parse_from(["context-builder"])
+            .expect("should parse with default visibility");
+        assert_eq!(args_default.visibility, "all");
     }
 }

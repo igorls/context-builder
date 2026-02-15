@@ -119,6 +119,10 @@ fn test_comprehensive_binary_file_edge_cases() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let prompter = TestPrompter::new(true, true);
@@ -204,6 +208,10 @@ fn test_configuration_precedence_edge_cases() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -240,6 +248,10 @@ fn test_configuration_precedence_edge_cases() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -296,6 +308,10 @@ timestamped_output = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
@@ -398,6 +414,10 @@ fn test_error_conditions_and_exit_codes() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -424,6 +444,10 @@ fn test_error_conditions_and_exit_codes() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter_deny = TestPrompter::new(false, true); // Deny overwrite
@@ -447,6 +471,10 @@ fn test_error_conditions_and_exit_codes() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter_cancel = TestPrompter::new(true, false); // Allow overwrite, deny processing
@@ -492,6 +520,10 @@ fn test_memory_usage_under_parallel_processing() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -579,6 +611,10 @@ line_numbers = true
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config =
@@ -677,6 +713,10 @@ fn test_edge_case_filenames_and_paths() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);

@@ -111,6 +111,10 @@ fn test_binary_files_dont_crash_autodiff() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -190,6 +194,10 @@ fn test_mixed_text_and_binary_files_autodiff() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -253,6 +261,10 @@ fn test_large_binary_file_autodiff() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);

@@ -211,6 +211,10 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = NoPrompt;
@@ -255,6 +259,10 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     clear_cache: false,
                     init: false,
                     max_tokens: None,
+                    signatures: false,
+                    structure: false,
+                    truncate: "smart".to_string(),
+                    visibility: "all".to_string(),
                 },
                 Config::default(),
                 &prompter,

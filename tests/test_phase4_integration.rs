@@ -122,6 +122,10 @@ filter = ["rs", "txt"]
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Apply config manually (simulating what happens in the real application)
@@ -296,6 +300,10 @@ fn test_encoding_strategy_configuration() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let result = run_with_args(args, config, &prompter);

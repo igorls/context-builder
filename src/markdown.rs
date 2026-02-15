@@ -13,6 +13,19 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 #[cfg(feature = "parallel")]
 use std::thread;
 
+/// Configuration for tree-sitter powered output.
+#[derive(Debug, Clone, Default)]
+pub struct TreeSitterConfig {
+    /// Output only signatures (function/type declarations) instead of full content.
+    pub signatures: bool,
+    /// Include a structure summary (counts of functions, structs, etc.) per file.
+    pub structure: bool,
+    /// Truncation mode: "smart" uses AST boundaries, anything else uses byte truncation.
+    pub truncate: String,
+    /// Visibility filter: "public", "private", or "all".
+    pub visibility: String,
+}
+
 /// Generates the final Markdown file.
 #[allow(clippy::too_many_arguments, unused_variables)]
 pub fn generate_markdown(
@@ -26,6 +39,7 @@ pub fn generate_markdown(
     line_numbers: bool,
     encoding_strategy: Option<&str>,
     max_tokens: Option<usize>,
+    ts_config: &TreeSitterConfig,
 ) -> io::Result<()> {
     if let Some(parent) = Path::new(output_path).parent()
         && !parent.exists()
@@ -203,6 +217,7 @@ pub fn generate_markdown(
         };
 
         // Process files in parallel and send results to writer
+        let ts_config_clone = ts_config.clone();
         files.par_iter().enumerate().for_each(|(index, entry)| {
             let mut buf = Vec::new();
             let result = process_file(
@@ -211,6 +226,7 @@ pub fn generate_markdown(
                 &mut buf,
                 line_numbers,
                 encoding_strategy,
+                &ts_config_clone,
             )
             .map(|_| buf);
 
@@ -258,6 +274,7 @@ pub fn generate_markdown(
                 &mut output,
                 line_numbers,
                 encoding_strategy,
+                ts_config,
             )?;
         }
     }
@@ -268,12 +285,11 @@ pub fn generate_markdown(
 /// Processes a single file and writes its content to the output.
 pub fn process_file(
     base_path: &Path,
-
     file_path: &Path,
-
     output: &mut impl Write,
     line_numbers: bool,
     encoding_strategy: Option<&str>,
+    ts_config: &TreeSitterConfig,
 ) -> io::Result<()> {
     let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
     info!("Processing file: {}", relative_path.display());
@@ -519,6 +535,9 @@ pub fn process_file(
             };
 
             write_text_content(output, &content, language, line_numbers)?;
+
+            // Tree-sitter enrichment: add structure summary and/or signatures
+            write_tree_sitter_enrichment(output, &content, extension, ts_config)?;
         }
         Err(e) => {
             warn!(
@@ -533,6 +552,75 @@ pub fn process_file(
             )?;
             writeln!(output, "```")?;
         }
+    }
+
+    Ok(())
+}
+
+/// Write tree-sitter enrichment (signatures, structure) after file content.
+#[allow(unused_variables)]
+fn write_tree_sitter_enrichment(
+    output: &mut impl Write,
+    content: &str,
+    extension: &str,
+    ts_config: &TreeSitterConfig,
+) -> io::Result<()> {
+    if !ts_config.signatures && !ts_config.structure {
+        return Ok(());
+    }
+
+    #[cfg(feature = "tree-sitter-base")]
+    {
+        use crate::tree_sitter::language_support::Visibility;
+
+        let vis_filter: Visibility = ts_config.visibility.parse().unwrap_or(Visibility::All);
+
+        if ts_config.structure {
+            if let Some(structure) =
+                crate::tree_sitter::extract_structure_for_file(content, extension)
+            {
+                let summary =
+                    crate::tree_sitter::structure::format_structure_as_markdown(&structure);
+                if !summary.is_empty() {
+                    writeln!(output)?;
+                    write!(output, "{}", summary)?;
+                }
+            }
+        }
+
+        if ts_config.signatures {
+            if let Some(signatures) =
+                crate::tree_sitter::extract_signatures_for_file(content, extension, vis_filter)
+            {
+                if !signatures.is_empty() {
+                    let language = match extension {
+                        "rs" => "rust",
+                        "js" | "mjs" | "cjs" => "javascript",
+                        "ts" | "tsx" | "mts" | "cts" => "typescript",
+                        "py" | "pyw" => "python",
+                        "go" => "go",
+                        "java" => "java",
+                        "c" | "h" => "c",
+                        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
+                        _ => extension,
+                    };
+                    writeln!(output)?;
+                    writeln!(output, "**Signatures:**")?;
+                    writeln!(output)?;
+                    let formatted = crate::tree_sitter::signatures::format_signatures_as_markdown(
+                        &signatures,
+                        language,
+                    );
+                    write!(output, "{}", formatted)?;
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "tree-sitter-base"))]
+    {
+        // Tree-sitter not compiled in — flags have no effect.
+        // Warning is printed once at startup in lib.rs.
     }
 
     Ok(())
@@ -646,7 +734,7 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
-        process_file(base_path, &file_path, &mut output, false, None).unwrap();
+        process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
 
         // Read the output
         let content = fs::read_to_string(&output_path).unwrap();
@@ -670,7 +758,7 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
-        process_file(base_path, &file_path, &mut output, false, None).unwrap();
+        process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
 
         // Read the output
         let content = fs::read_to_string(&output_path).unwrap();
@@ -709,7 +797,7 @@ mod tests {
                 .unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, true, None).unwrap();
+        process_file(base_path, &file_path, &mut output, true, None, &TreeSitterConfig::default()).unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -754,7 +842,7 @@ mod tests {
         fs::write(&file_path, bytes).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, None).unwrap();
+        process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -787,7 +875,7 @@ mod tests {
         fs::write(&file_path, windows1252_content).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, Some("detect")).unwrap();
+        process_file(base_path, &file_path, &mut output, false, Some("detect"), &TreeSitterConfig::default()).unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -818,7 +906,7 @@ mod tests {
         fs::write(&file_path, non_utf8_content).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, Some("strict")).unwrap();
+        process_file(base_path, &file_path, &mut output, false, Some("strict"), &TreeSitterConfig::default()).unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -847,7 +935,7 @@ mod tests {
         fs::write(&file_path, utf16_content).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, Some("skip")).unwrap();
+        process_file(base_path, &file_path, &mut output, false, Some("skip"), &TreeSitterConfig::default()).unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -885,6 +973,7 @@ mod tests {
             false,
             None,
             None, // max_tokens
+            &TreeSitterConfig::default(),
         );
 
         // Restore original directory
@@ -918,6 +1007,7 @@ mod tests {
             false,
             None,
             None, // max_tokens
+            &TreeSitterConfig::default(),
         );
 
         assert!(result.is_ok());
@@ -949,6 +1039,7 @@ mod tests {
             true,
             Some("strict"),
             None, // max_tokens
+            &TreeSitterConfig::default(),
         );
 
         assert!(result.is_ok());
@@ -1073,7 +1164,7 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // This should handle the metadata error gracefully
-        let result = process_file(base_path, &nonexistent_file, &mut output, false, None);
+        let result = process_file(base_path, &nonexistent_file, &mut output, false, None, &TreeSitterConfig::default());
         assert!(result.is_ok());
 
         // Output should be minimal since file doesn't exist
@@ -1104,7 +1195,7 @@ mod tests {
             fs::write(&file_path, content).unwrap();
 
             let mut output = fs::File::create(&output_path).unwrap();
-            process_file(base_path, &file_path, &mut output, false, None).unwrap();
+            process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
 
             let result = fs::read_to_string(&output_path).unwrap();
             assert!(result.contains(&format!("```{}", expected_lang)));

@@ -66,6 +66,10 @@ fn test_streaming_parallel_processing() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = Config::default();
@@ -180,6 +184,10 @@ fn test_parallel_error_handling() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = Config::default();
@@ -238,6 +246,10 @@ fn test_memory_efficiency_with_large_files() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = Config::default();

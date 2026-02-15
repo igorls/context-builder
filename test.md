@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 96161218ff9a7fe4
+Content hash: 2893d0e064dedc38
 
 ## File Tree Structure
 
@@ -33,6 +33,22 @@ Content hash: 96161218ff9a7fe4
   - 📄 state.rs
   - 📄 token_count.rs
   - 📄 tree.rs
+  - 📁 tree_sitter
+    - 📄 language_support.rs
+    - 📁 languages
+      - 📄 c.rs
+      - 📄 cpp.rs
+      - 📄 go.rs
+      - 📄 java.rs
+      - 📄 javascript.rs
+      - 📄 mod.rs
+      - 📄 python.rs
+      - 📄 rust.rs
+      - 📄 typescript.rs
+    - 📄 mod.rs
+    - 📄 signatures.rs
+    - 📄 structure.rs
+    - 📄 truncation.rs
 - 📄 tarpaulin.toml
 - 📁 tests
   - 📄 cli_integration.rs
@@ -408,8 +424,8 @@ All notable changes to this project will be documented in this file.
 
 ### File: `Cargo.toml`
 
-- Size: 1464 bytes
-- Modified: 2026-02-15 04:22:00 UTC
+- Size: 2905 bytes
+- Modified: 2026-02-15 06:44:58 UTC
 
 ```toml
 [package]
@@ -447,10 +463,43 @@ encoding_rs = "0.8.35"
 walkdir = "2.5.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
+# Tree-sitter dependencies (feature-gated)
+# Note: tree-sitter 0.22.x requires grammars compiled for ABI version 14
+tree-sitter = { version = "0.22", optional = true }
+tree-sitter-rust = { version = "0.21", optional = true }
+tree-sitter-javascript = { version = "0.21", optional = true }
+tree-sitter-typescript = { version = "0.21", optional = true }
+tree-sitter-python = { version = "0.21", optional = true }
+tree-sitter-go = { version = "0.21", optional = true }
+tree-sitter-java = { version = "0.21", optional = true }
+tree-sitter-c = { version = "0.21", optional = true }
+tree-sitter-cpp = { version = "0.21", optional = true }
+
 [features]
 default = ["parallel"]
 parallel = ["rayon"]
 samples-bin = []
+
+# Tree-sitter features - language grammar support
+tree-sitter-base = ["dep:tree-sitter"]
+tree-sitter-rust = ["tree-sitter-base", "dep:tree-sitter-rust"]
+tree-sitter-js = ["tree-sitter-base", "dep:tree-sitter-javascript"]
+tree-sitter-ts = ["tree-sitter-base", "dep:tree-sitter-typescript"]
+tree-sitter-python = ["tree-sitter-base", "dep:tree-sitter-python"]
+tree-sitter-go = ["tree-sitter-base", "dep:tree-sitter-go"]
+tree-sitter-java = ["tree-sitter-base", "dep:tree-sitter-java"]
+tree-sitter-c = ["tree-sitter-base", "dep:tree-sitter-c"]
+tree-sitter-cpp = ["tree-sitter-base", "dep:tree-sitter-cpp"]
+tree-sitter-all = [
+    "tree-sitter-rust",
+    "tree-sitter-js",
+    "tree-sitter-ts",
+    "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-java",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+]
 
 [dev-dependencies]
 tempfile = "3.25.0"
@@ -780,8 +829,8 @@ This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** f
 
 ### File: `src/lib.rs`
 
-- Size: 50542 bytes
-- Modified: 2026-02-15 06:01:31 UTC
+- Size: 52500 bytes
+- Modified: 2026-02-15 06:52:27 UTC
 
 ```rust
 use clap::{CommandFactory, Parser};
@@ -1586,6 +1635,10 @@ pub fn run() -> io::Result<()> {
         clear_cache: resolution.config.clear_cache,
         max_tokens: resolution.config.max_tokens,
         init: false,
+        signatures: resolution.config.signatures,
+        structure: resolution.config.structure,
+        truncate: resolution.config.truncate,
+        visibility: resolution.config.visibility,
     };
 
     // Create final Config with resolved values
@@ -1772,6 +1825,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1804,6 +1861,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1841,6 +1902,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1876,6 +1941,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1914,6 +1983,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, false); // Deny overwrite
@@ -1953,6 +2026,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false, true); // Deny processing
@@ -1991,6 +2068,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -2035,6 +2116,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -2078,6 +2163,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -2120,6 +2209,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2165,6 +2258,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -2207,6 +2304,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let diff_config = DiffConfig::default();
@@ -2248,6 +2349,285 @@ use std::io;
 
 fn main() -> io::Result<()> {
     context_builder::run()
+}
+```
+
+### File: `src/tree_sitter/languages/mod.rs`
+
+- Size: 3447 bytes
+- Modified: 2026-02-15 06:47:05 UTC
+
+```rust
+//! Language support registry.
+//!
+//! This module provides access to language-specific parsers based on file extensions.
+
+#[cfg(feature = "tree-sitter-base")]
+use super::language_support::LanguageSupport;
+
+#[cfg(feature = "tree-sitter-rust")]
+mod rust;
+
+#[cfg(feature = "tree-sitter-js")]
+mod javascript;
+
+#[cfg(feature = "tree-sitter-ts")]
+mod typescript;
+
+#[cfg(feature = "tree-sitter-python")]
+mod python;
+
+#[cfg(feature = "tree-sitter-go")]
+mod go;
+
+#[cfg(feature = "tree-sitter-java")]
+mod java;
+
+#[cfg(feature = "tree-sitter-c")]
+mod c;
+
+#[cfg(feature = "tree-sitter-cpp")]
+mod cpp;
+
+#[cfg(feature = "tree-sitter-rust")]
+static RUST_SUPPORT: rust::RustSupport = rust::RustSupport;
+
+#[cfg(feature = "tree-sitter-js")]
+static JS_SUPPORT: javascript::JavaScriptSupport = javascript::JavaScriptSupport;
+
+#[cfg(feature = "tree-sitter-ts")]
+static TS_SUPPORT: typescript::TypeScriptSupport = typescript::TypeScriptSupport;
+
+#[cfg(feature = "tree-sitter-python")]
+static PYTHON_SUPPORT: python::PythonSupport = python::PythonSupport;
+
+#[cfg(feature = "tree-sitter-go")]
+static GO_SUPPORT: go::GoSupport = go::GoSupport;
+
+#[cfg(feature = "tree-sitter-java")]
+static JAVA_SUPPORT: java::JavaSupport = java::JavaSupport;
+
+#[cfg(feature = "tree-sitter-c")]
+static C_SUPPORT: c::CSupport = c::CSupport;
+
+#[cfg(feature = "tree-sitter-cpp")]
+static CPP_SUPPORT: cpp::CppSupport = cpp::CppSupport;
+
+#[cfg(feature = "tree-sitter-base")]
+pub fn get_language_support(ext: &str) -> Option<&'static dyn LanguageSupport> {
+    match ext.to_lowercase().as_str() {
+        #[cfg(feature = "tree-sitter-rust")]
+        "rs" => Some(&RUST_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-js")]
+        "js" | "mjs" | "cjs" => Some(&JS_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-ts")]
+        "ts" | "tsx" | "mts" | "cts" => Some(&TS_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-python")]
+        "py" | "pyw" => Some(&PYTHON_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-go")]
+        "go" => Some(&GO_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-java")]
+        "java" => Some(&JAVA_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-c")]
+        "c" | "h" => Some(&C_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-cpp")]
+        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => Some(&CPP_SUPPORT),
+
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn get_language_support(_ext: &str) -> Option<()> {
+    None
+}
+
+#[cfg(feature = "tree-sitter-base")]
+pub fn supported_extensions() -> Vec<&'static str> {
+    let mut extensions = Vec::new();
+
+    #[cfg(feature = "tree-sitter-rust")]
+    extensions.extend(RUST_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-js")]
+    extensions.extend(JS_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-ts")]
+    extensions.extend(TS_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-python")]
+    extensions.extend(PYTHON_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-go")]
+    extensions.extend(GO_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-java")]
+    extensions.extend(JAVA_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-c")]
+    extensions.extend(C_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-cpp")]
+    extensions.extend(CPP_SUPPORT.file_extensions());
+
+    extensions
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn supported_extensions() -> Vec<&'static str> {
+    Vec::new()
+}
+```
+
+### File: `src/tree_sitter/mod.rs`
+
+- Size: 4071 bytes
+- Modified: 2026-02-15 06:40:01 UTC
+
+```rust
+//! Tree-sitter integration for intelligent code parsing.
+//!
+//! This module provides:
+//! - Signature extraction (function/class signatures without bodies)
+//! - Smart truncation (truncate at AST boundaries)
+//! - Structure extraction (imports, exports, symbol counts)
+//!
+//! Feature-gated: Only compiled when one of the tree-sitter-* features is enabled.
+
+#[cfg(feature = "tree-sitter-base")]
+mod language_support;
+
+#[cfg(feature = "tree-sitter-base")]
+mod signatures;
+
+#[cfg(feature = "tree-sitter-base")]
+mod structure;
+
+#[cfg(feature = "tree-sitter-base")]
+mod truncation;
+
+#[cfg(feature = "tree-sitter-base")]
+pub mod languages;
+
+#[cfg(feature = "tree-sitter-base")]
+use std::path::Path;
+
+#[cfg(feature = "tree-sitter-base")]
+pub use language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+#[cfg(feature = "tree-sitter-base")]
+pub use signatures::extract_signatures;
+
+#[cfg(feature = "tree-sitter-base")]
+pub use structure::extract_structure;
+
+#[cfg(feature = "tree-sitter-base")]
+pub use truncation::find_truncation_point;
+
+/// Check if tree-sitter is available for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn is_supported_extension(ext: &str) -> bool {
+    languages::get_language_support(ext).is_some()
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn is_supported_extension(_ext: &str) -> bool {
+    false
+}
+
+/// Extract file extension from a path.
+#[cfg(feature = "tree-sitter-base")]
+fn get_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+}
+
+/// Get language support for a file path.
+#[cfg(feature = "tree-sitter-base")]
+pub fn get_language_for_path(path: &Path) -> Option<&'static dyn LanguageSupport> {
+    let ext = get_extension(path)?;
+    languages::get_language_support(&ext)
+}
+
+/// Extract signatures from source code for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn extract_signatures_for_file(
+    source: &str,
+    ext: &str,
+    visibility_filter: Visibility,
+) -> Option<Vec<Signature>> {
+    let support = languages::get_language_support(ext)?;
+    Some(extract_signatures(source, support, visibility_filter))
+}
+
+/// Extract structure from source code for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn extract_structure_for_file(source: &str, ext: &str) -> Option<CodeStructure> {
+    let support = languages::get_language_support(ext)?;
+    Some(extract_structure(source, support))
+}
+
+/// Find a smart truncation point for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn find_smart_truncation_point(source: &str, max_bytes: usize, ext: &str) -> Option<usize> {
+    let support = languages::get_language_support(ext)?;
+    Some(find_truncation_point(source, max_bytes, support))
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn extract_signatures_for_file(
+    _source: &str,
+    _ext: &str,
+    _visibility_filter: (),
+) -> Option<()> {
+    None
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn extract_structure_for_file(_source: &str, _ext: &str) -> Option<()> {
+    None
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn find_smart_truncation_point(_source: &str, _max_bytes: usize, _ext: &str) -> Option<usize> {
+    None
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn get_language_for_path(_path: &std::path::Path) -> Option<()> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_is_supported_extension() {
+        #[cfg(feature = "tree-sitter-rust")]
+        assert!(is_supported_extension("rs"));
+        #[cfg(feature = "tree-sitter-python")]
+        assert!(is_supported_extension("py"));
+        #[cfg(feature = "tree-sitter-js")]
+        assert!(is_supported_extension("js"));
+        assert!(!is_supported_extension("xyz"));
+    }
+
+    #[test]
+    #[cfg(not(feature = "tree-sitter-base"))]
+    fn test_no_tree_sitter_support() {
+        assert!(!is_supported_extension("rs"));
+        assert!(!is_supported_extension("py"));
+    }
 }
 ```
 
@@ -2844,8 +3224,8 @@ mod tests {
 
 ### File: `src/cli.rs`
 
-- Size: 4720 bytes
-- Modified: 2026-02-14 19:48:15 UTC
+- Size: 6553 bytes
+- Modified: 2026-02-15 06:50:55 UTC
 
 ```rust
 use clap::Parser;
@@ -2901,6 +3281,22 @@ pub struct Args {
     /// Initialize a new context-builder.toml config file in the current directory
     #[clap(long)]
     pub init: bool,
+
+    /// Extract function/class signatures only (requires tree-sitter feature)
+    #[clap(long)]
+    pub signatures: bool,
+
+    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    #[clap(long)]
+    pub structure: bool,
+
+    /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
+    #[clap(long, value_name = "MODE", default_value = "smart")]
+    pub truncate: String,
+
+    /// Filter signatures by visibility: "all", "public", or "private"
+    #[clap(long, default_value = "all")]
+    pub visibility: String,
 }
 
 #[cfg(test)]
@@ -3009,13 +3405,49 @@ mod tests {
         assert!(args.clear_cache);
         assert!(!args.diff_only);
     }
+
+    #[test]
+    fn parses_signatures_flag() {
+        let args = Args::try_parse_from(["context-builder", "--signatures"])
+            .expect("should parse signatures flag");
+        assert!(args.signatures);
+    }
+
+    #[test]
+    fn parses_structure_flag() {
+        let args = Args::try_parse_from(["context-builder", "--structure"])
+            .expect("should parse structure flag");
+        assert!(args.structure);
+    }
+
+    #[test]
+    fn parses_truncate_mode() {
+        let args = Args::try_parse_from(["context-builder", "--truncate", "byte"])
+            .expect("should parse truncate flag");
+        assert_eq!(args.truncate, "byte");
+
+        let args_default =
+            Args::try_parse_from(["context-builder"]).expect("should parse with default truncate");
+        assert_eq!(args_default.truncate, "smart");
+    }
+
+    #[test]
+    fn parses_visibility_filter() {
+        let args = Args::try_parse_from(["context-builder", "--visibility", "public"])
+            .expect("should parse visibility flag");
+        assert_eq!(args.visibility, "public");
+
+        let args_default = Args::try_parse_from(["context-builder"])
+            .expect("should parse with default visibility");
+        assert_eq!(args_default.visibility, "all");
+    }
 }
 ```
 
 ### File: `src/config.rs`
 
-- Size: 8266 bytes
-- Modified: 2026-02-15 06:01:24 UTC
+- Size: 8954 bytes
+- Modified: 2026-02-15 06:51:48 UTC
 
 ```rust
 use serde::Deserialize;
@@ -3092,6 +3524,18 @@ pub struct Config {
 
     /// Maximum token budget for the output. Files are truncated/skipped when exceeded.
     pub max_tokens: Option<usize>,
+
+    /// Extract function/class signatures only (requires tree-sitter feature)
+    pub signatures: Option<bool>,
+
+    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    pub structure: Option<bool>,
+
+    /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
+    pub truncate: Option<String>,
+
+    /// Filter signatures by visibility: "all", "public", or "private"
+    pub visibility: Option<String>,
 }
 
 /// Load configuration from `context-builder.toml` in the current working directory.
@@ -3270,14 +3714,19 @@ invalid_toml [
         assert!(config.diff_context_lines.is_none());
         assert!(config.diff_only.is_none());
         assert!(config.encoding_strategy.is_none());
+        assert!(config.max_tokens.is_none());
+        assert!(config.signatures.is_none());
+        assert!(config.structure.is_none());
+        assert!(config.truncate.is_none());
+        assert!(config.visibility.is_none());
     }
 }
 ```
 
 ### File: `src/config_resolver.rs`
 
-- Size: 14206 bytes
-- Modified: 2026-02-15 06:01:51 UTC
+- Size: 15995 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Configuration resolution module for context-builder.
@@ -3309,6 +3758,10 @@ pub struct ResolvedConfig {
     pub diff_context_lines: usize,
     pub max_tokens: Option<usize>,
     pub init: bool,
+    pub signatures: bool,
+    pub structure: bool,
+    pub truncate: String,
+    pub visibility: String,
 }
 
 /// Result of configuration resolution including the final config and any warnings
@@ -3356,6 +3809,24 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
         diff_context_lines: final_config.diff_context_lines.unwrap_or(3),
         max_tokens: args.max_tokens.or(final_config.max_tokens),
         init: args.init,
+        signatures: args.signatures || final_config.signatures.unwrap_or(false),
+        structure: args.structure || final_config.structure.unwrap_or(false),
+        truncate: if args.truncate != "smart" {
+            args.truncate.clone()
+        } else {
+            final_config
+                .truncate
+                .clone()
+                .unwrap_or_else(|| args.truncate.clone())
+        },
+        visibility: if args.visibility != "all" {
+            args.visibility.clone()
+        } else {
+            final_config
+                .visibility
+                .clone()
+                .unwrap_or_else(|| args.visibility.clone())
+        },
     };
 
     ConfigResolution {
@@ -3501,6 +3972,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -3534,6 +4009,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -3578,6 +4057,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -3608,6 +4091,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -3636,6 +4123,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -3666,6 +4157,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config = Config {
@@ -3696,6 +4191,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let resolution = resolve_final_config(args.clone(), None);
@@ -7487,6 +7986,3820 @@ mod tests {
 }
 ```
 
+### File: `src/tree_sitter/language_support.rs`
+
+- Size: 3375 bytes
+- Modified: 2026-02-15 06:31:31 UTC
+
+```rust
+//! Core types and traits for language support.
+
+use std::fmt;
+
+/// The kind of signature extracted from source code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureKind {
+    Function,
+    Method,
+    Struct,
+    Enum,
+    Trait,
+    Interface,
+    Class,
+    Module,
+    Constant,
+    TypeAlias,
+    Macro,
+}
+
+impl fmt::Display for SignatureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SignatureKind::Function => write!(f, "function"),
+            SignatureKind::Method => write!(f, "method"),
+            SignatureKind::Struct => write!(f, "struct"),
+            SignatureKind::Enum => write!(f, "enum"),
+            SignatureKind::Trait => write!(f, "trait"),
+            SignatureKind::Interface => write!(f, "interface"),
+            SignatureKind::Class => write!(f, "class"),
+            SignatureKind::Module => write!(f, "module"),
+            SignatureKind::Constant => write!(f, "constant"),
+            SignatureKind::TypeAlias => write!(f, "type"),
+            SignatureKind::Macro => write!(f, "macro"),
+        }
+    }
+}
+
+/// Visibility level of a signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Visibility {
+    #[default]
+    All,
+    Public,
+    Private,
+}
+
+impl Visibility {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "public" => Visibility::Public,
+            "private" => Visibility::Private,
+            _ => Visibility::All,
+        }
+    }
+}
+
+/// A signature extracted from source code (function, class, etc.).
+#[derive(Debug, Clone)]
+pub struct Signature {
+    pub kind: SignatureKind,
+    pub name: String,
+    pub params: Option<String>,
+    pub return_type: Option<String>,
+    pub visibility: Visibility,
+    pub line_number: usize,
+    pub full_signature: String,
+}
+
+impl fmt::Display for Signature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.full_signature)
+    }
+}
+
+/// Structure information extracted from a source file.
+#[derive(Debug, Clone, Default)]
+pub struct CodeStructure {
+    pub imports: Vec<String>,
+    pub exports: Vec<String>,
+    pub functions: usize,
+    pub structs: usize,
+    pub enums: usize,
+    pub traits: usize,
+    pub classes: usize,
+    pub interfaces: usize,
+    pub constants: usize,
+    pub type_aliases: usize,
+    pub macros: usize,
+    pub total_lines: usize,
+    pub code_lines: usize,
+}
+
+impl CodeStructure {
+    pub fn total_symbols(&self) -> usize {
+        self.functions
+            + self.structs
+            + self.enums
+            + self.traits
+            + self.classes
+            + self.interfaces
+            + self.constants
+            + self.type_aliases
+            + self.macros
+    }
+}
+
+/// Trait for language-specific parsing support.
+pub trait LanguageSupport: Send + Sync {
+    fn file_extensions(&self) -> &[&'static str];
+
+    fn supports_extension(&self, ext: &str) -> bool {
+        self.file_extensions()
+            .iter()
+            .any(|&e| e.eq_ignore_ascii_case(ext))
+    }
+
+    fn parse(&self, source: &str) -> Option<tree_sitter::Tree>;
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature>;
+
+    fn extract_structure(&self, source: &str) -> CodeStructure;
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize;
+}
+```
+
+### File: `src/tree_sitter/languages/c.rs`
+
+- Size: 10380 bytes
+- Modified: 2026-02-15 06:49:54 UTC
+
+```rust
+//! C language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-c")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-c")]
+use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+pub struct CSupport;
+
+#[cfg(feature = "tree-sitter-c")]
+impl CSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_c::language()
+    }
+
+#[cfg(feature = "tree-sitter-c")]
+impl LanguageSupport for CSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["c", "h"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+
+#[cfg(feature = "tree-sitter-c")]
+impl CSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_definition" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "struct_specifier" => {
+                if let Some(sig) = self.extract_struct_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_specifier" => {
+                if let Some(sig) = self.extract_enum_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "type_definition" => {
+                if let Some(sig) = self.extract_typedef_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "preproc_function_def" => {
+                if let Some(sig) = self.extract_macro_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_definition" => structure.functions += 1,
+            "struct_specifier" => structure.structs += 1,
+            "enum_specifier" => structure.enums += 1,
+            "preproc_include" => {
+                structure.imports.push("include".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_function_name(node, source)?;
+        let return_type = self.find_return_type(node, source);
+
+        let mut full_sig = String::new();
+        if let Some(r) = &return_type {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        full_sig.push_str("()");
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None,
+            return_type,
+            visibility: Visibility::All, // C has no visibility
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_struct_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("struct {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Struct,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("enum {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_typedef_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("typedef {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_macro_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let full_sig = format!("#define {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Macro,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_function_name<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "function_declarator" {
+                let mut inner_cursor = child.walk();
+                for inner in child.children(&mut inner_cursor) {
+                    if inner.kind() == "identifier" {
+                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn find_return_type<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "primitive_type" || child.kind() == "type_identifier" {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_definition"
+                        | "struct_specifier"
+                        | "enum_specifier"
+                        | "type_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+int main() {
+    return 0;
+
+void hello(const char* name) {
+    printf("Hello, %s\n", name);
+}
+}
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(!funcs.is_empty());
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(CSupport.supports_extension("c"));
+        assert!(CSupport.supports_extension("h"));
+        assert!(!CSupport.supports_extension("cpp"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/cpp.rs`
+
+- Size: 12094 bytes
+- Modified: 2026-02-15 06:49:54 UTC
+
+```rust
+//! C++ language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-cpp")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-cpp")]
+use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+pub struct CppSupport;
+
+#[cfg(feature = "tree-sitter-cpp")]
+impl CppSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_cpp::language()
+    }
+}
+}
+
+#[cfg(feature = "tree-sitter-cpp")]
+impl LanguageSupport for CppSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["cpp", "cxx", "cc", "hpp", "hxx", "hh"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+
+#[cfg(feature = "tree-sitter-cpp")]
+impl CppSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_definition" => {
+                if let Some(sig) = self.extract_function_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "class_specifier" => {
+                if let Some(sig) = self.extract_class_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "struct_specifier" => {
+                if let Some(sig) = self.extract_struct_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_specifier" => {
+                if let Some(sig) = self.extract_enum_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "alias_declaration" | "type_definition" => {
+                if let Some(sig) = self.extract_alias_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "preproc_function_def" => {
+                if let Some(sig) = self.extract_macro_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_definition" => structure.functions += 1,
+            "class_specifier" => structure.classes += 1,
+            "struct_specifier" => structure.structs += 1,
+            "enum_specifier" => structure.enums += 1,
+            "preproc_include" => {
+                structure.imports.push("include".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn get_visibility(&self, node: &tree_sitter::Node) -> Visibility {
+        // C++ has access specifiers: public, private, protected
+        // For simplicity, we check sibling nodes for access specifiers
+        // This is a simplified check; full implementation would track class context
+        Visibility::All
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self.find_function_name(node, source)?;
+        let return_type = self.find_return_type(node, source);
+
+        let mut full_sig = String::new();
+        if let Some(r) = &return_type {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        full_sig.push_str("()");
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None,
+            return_type,
+            visibility,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("class {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_struct_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("struct {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Struct,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("enum {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_alias_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("using/typedef {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_macro_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let full_sig = format!("#define {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Macro,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_function_name<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "function_declarator" || child.kind() == "reference_declarator" {
+                let mut inner_cursor = child.walk();
+                for inner in child.children(&mut inner_cursor) {
+                    if inner.kind() == "identifier" || inner.kind() == "qualified_identifier" {
+                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+                    }
+                }
+            }
+            if child.kind() == "identifier" || child.kind() == "qualified_identifier" {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_return_type<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "primitive_type" | "type_identifier" | "sized_type_specifier" => {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_definition"
+                        | "class_specifier"
+                        | "struct_specifier"
+                        | "enum_specifier"
+                        | "alias_declaration"
+                        | "type_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+class HelloWorld {
+public:
+    void greet() {
+        std::cout << "Hello" << std::endl;
+    }
+};
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "HelloWorld");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(CppSupport.supports_extension("cpp"));
+        assert!(CppSupport.supports_extension("hpp"));
+        assert!(CppSupport.supports_extension("cxx"));
+        assert!(!CppSupport.supports_extension("c"));
+    }
+}
+}
+```
+
+### File: `src/tree_sitter/languages/go.rs`
+
+- Size: 13421 bytes
+- Modified: 2026-02-15 06:49:54 UTC
+
+```rust
+//! Go language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-go")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-go")]
+use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+pub struct GoSupport;
+
+#[cfg(feature = "tree-sitter-go")]
+impl GoSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_go::language()
+    }
+
+#[cfg(feature = "tree-sitter-go")]
+impl LanguageSupport for GoSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["go"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+
+#[cfg(feature = "tree-sitter-go")]
+impl GoSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_declaration" => {
+                if let Some(sig) = self.extract_function_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "method_declaration" => {
+                if let Some(sig) = self.extract_method_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "type_declaration" => {
+                self.extract_type_signatures(source, node, visibility, signatures);
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_declaration" | "method_declaration" => structure.functions += 1,
+            "type_spec" => {
+                // Check what type it is
+                if let Some(parent) = node.parent() {
+                    if parent.kind() == "type_declaration" {
+                        // Could be struct, interface, or type alias
+                        let mut cursor = node.walk();
+                        for child in node.children(&mut cursor) {
+                            match child.kind() {
+                                "struct_type" => structure.structs += 1,
+                                "interface_type" => structure.interfaces += 1,
+                                "type_identifier" => structure.type_aliases += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            "import_declaration" => {
+                structure.imports.push("import".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn is_exported(&self, name: &str) -> bool {
+        name.chars().next().map_or(false, |c| c.is_uppercase())
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let is_exported = self.is_exported(&name);
+
+        if visibility == Visibility::Public && !is_exported {
+            return None;
+        }
+        if visibility == Visibility::Private && is_exported {
+            return None;
+        }
+
+        let params = self.find_child_text(node, "parameter_list", source);
+        let result = self
+            .find_child_text(node, "type_identifier", source)
+            .or_else(|| self.find_child_text_for_result(node, source));
+
+        let mut full_sig = String::new();
+        full_sig.push_str("func ");
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+        if let Some(r) = &result {
+            full_sig.push(' ');
+            full_sig.push_str(r);
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type: result,
+            visibility: if is_exported {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            },
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_method_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self
+            .find_child_text(node, "field_identifier", source)
+            .or_else(|| self.find_child_text(node, "identifier", source))?;
+        let is_exported = self.is_exported(&name);
+
+        if visibility == Visibility::Public && !is_exported {
+            return None;
+        }
+        if visibility == Visibility::Private && is_exported {
+            return None;
+        }
+
+        let receiver = self.find_child_text(node, "parameter_list", source);
+        let params = self.find_method_params(node, source);
+        let result = self.find_child_text_for_result(node, source);
+
+        let mut full_sig = String::new();
+        full_sig.push_str("func ");
+        if let Some(r) = &receiver {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+        if let Some(r) = &result {
+            full_sig.push(' ');
+            full_sig.push_str(r);
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Method,
+            name,
+            params,
+            return_type: result,
+            visibility: if is_exported {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            },
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_type_signatures(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "type_spec" {
+                if let Some(name) = self.find_child_text(&child, "type_identifier", source) {
+                    let is_exported = self.is_exported(&name);
+
+                    if visibility == Visibility::Public && !is_exported {
+                        continue;
+                    }
+                    if visibility == Visibility::Private && is_exported {
+                        continue;
+                    }
+
+                    let kind = self.get_type_kind(&child);
+                    let full_sig = format!("type {} {}", name, kind.display_name());
+
+                    signatures.push(Signature {
+                        kind,
+                        name,
+                        params: None,
+                        return_type: None,
+                        visibility: if is_exported {
+                            Visibility::Public
+                        } else {
+                            Visibility::Private
+                        },
+                        line_number: child.start_position().row + 1,
+                        full_signature: full_sig,
+                    });
+                }
+            }
+        }
+    }
+
+    fn get_type_kind(&self, node: &tree_sitter::Node) -> SignatureKind {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "struct_type" => return SignatureKind::Struct,
+                "interface_type" => return SignatureKind::Interface,
+                _ => {}
+            }
+        }
+        SignatureKind::TypeAlias
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_child_text_for_result<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "func_result" {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_method_params<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<String> {
+        let mut cursor = node.walk();
+        let mut found_receiver = false;
+        for child in node.children(&mut cursor) {
+            if child.kind() == "parameter_list" {
+                if found_receiver {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                found_receiver = true;
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_declaration" | "method_declaration" | "type_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+package main
+
+func Hello(name string) string {
+    return "Hello, " + name
+
+func internal() int {
+    return 42
+}
+}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(funcs.len() >= 2);
+    }
+
+    #[test]
+    fn test_public_only_filter() {
+        let source = r#"
+func PublicFunc() {}
+func privateFunc() {}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::Public);
+        assert_eq!(signatures.len(), 1);
+        assert_eq!(signatures[0].name, "PublicFunc");
+    }
+
+    #[test]
+    fn test_extract_struct_signature() {
+        let source = r#"
+type User struct {
+    Name string
+    Age  int
+}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::All);
+        let structs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Struct)
+            .collect();
+        assert!(!structs.is_empty());
+        assert_eq!(structs[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(GoSupport.supports_extension("go"));
+        assert!(!GoSupport.supports_extension("rs"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/java.rs`
+
+- Size: 13000 bytes
+- Modified: 2026-02-15 06:49:54 UTC
+
+```rust
+//! Java language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-java")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-java")]
+use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+pub struct JavaSupport;
+
+#[cfg(feature = "tree-sitter-java")]
+impl JavaSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_java::language()
+    }
+}
+}
+
+#[cfg(feature = "tree-sitter-java")]
+impl LanguageSupport for JavaSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["java"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+
+#[cfg(feature = "tree-sitter-java")]
+impl JavaSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "method_declaration" => {
+                if let Some(sig) = self.extract_method_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "class_declaration" => {
+                if let Some(sig) = self.extract_class_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(sig) = self.extract_interface_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(sig) = self.extract_enum_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "field_declaration" => {
+                if let Some(sig) = self.extract_field_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "method_declaration" => structure.functions += 1,
+            "class_declaration" => structure.classes += 1,
+            "interface_declaration" => structure.interfaces += 1,
+            "enum_declaration" => structure.enums += 1,
+            "import_declaration" => {
+                structure.imports.push("import".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn get_visibility(&self, node: &tree_sitter::Node) -> Visibility {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "modifiers" {
+                let text = child.utf8_text(child.start_position().column.as_bytes().as_slice());
+                if let Ok(mods) = text {
+                    if mods.contains("public") {
+                        return Visibility::Public;
+                    } else if mods.contains("private") || mods.contains("protected") {
+                        return Visibility::Private;
+                    }
+                }
+            }
+        }
+        Visibility::All
+    }
+
+    fn extract_method_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "formal_parameters", source);
+        let return_type = self
+            .find_child_text(node, "type_identifier", source)
+            .or_else(|| self.find_child_text_for_type(node, source));
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        if let Some(r) = &return_type {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Method,
+            name,
+            params,
+            return_type,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        full_sig.push_str("class ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_interface_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        full_sig.push_str("interface ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Interface,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        full_sig.push_str("enum ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_field_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        Some(Signature {
+            kind: SignatureKind::Constant,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: format!("field {}", name),
+        })
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_child_text_for_type<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "void_type"
+                || child.kind() == "integral_type"
+                || child.kind() == "boolean_type"
+            {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "method_declaration"
+                        | "class_declaration"
+                        | "interface_declaration"
+                        | "enum_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+public class HelloWorld {
+    public static void main(String[] args) {
+        System.out.println("Hello");
+    }
+}
+}
+"#;
+
+        let signatures = JavaSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "HelloWorld");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(JavaSupport.supports_extension("java"));
+        assert!(!JavaSupport.supports_extension("rs"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/javascript.rs`
+
+- Size: 10013 bytes
+- Modified: 2026-02-15 06:49:54 UTC
+
+```rust
+//! JavaScript language support for tree-sitter.
+
+use tree_sitter::{Parser, Tree};
+
+use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+pub struct JavaScriptSupport;
+
+impl JavaScriptSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_javascript::language()
+    }
+
+impl LanguageSupport for JavaScriptSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["js", "mjs", "cjs"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+
+impl JavaScriptSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_declaration" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "class_declaration" => {
+                if let Some(sig) = self.extract_class_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "variable_declaration" | "lexical_declaration" => {
+                self.extract_variable_declarations(source, node, signatures);
+            }
+            "export_statement" => {
+                self.extract_export_signatures(source, node, signatures);
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_declaration" | "generator_function_declaration" | "function_expression" => {
+                structure.functions += 1;
+            }
+            "class_declaration" | "class_expression" => {
+                structure.classes += 1;
+            }
+            "import_statement" => {
+                structure.imports.push("import".to_string());
+            }
+            "export_statement" => {
+                structure.exports.push("export".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "formal_parameters", source);
+
+        let full_sig = match params {
+            Some(p) => format!("function {}({})", name, p),
+            None => format!("function {}()", name),
+        };
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type: None, // JS doesn't have explicit return types in syntax
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let full_sig = format!("class {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_variable_declarations(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "variable_declarator" {
+                if let Some(name) = self.find_child_text(&child, "identifier", source) {
+                    signatures.push(Signature {
+                        kind: SignatureKind::Constant,
+                        name,
+                        params: None,
+                        return_type: None,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature: format!("const {}", name),
+                    });
+                }
+            }
+        }
+    }
+
+    fn extract_export_signatures(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "function_declaration" {
+                if let Some(sig) = self.extract_function_signature(source, &child) {
+                    signatures.push(sig);
+                }
+            } else if child.kind() == "class_declaration" {
+                if let Some(sig) = self.extract_class_signature(source, &child) {
+                    signatures.push(sig);
+                }
+            }
+        }
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+            let mut nested_cursor = child.walk();
+            for nested in child.children(&mut nested_cursor) {
+                if nested.kind() == kind {
+                    return Some(source[nested.start_byte()..nested.end_byte()].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_declaration"
+                        | "class_declaration"
+                        | "method_definition"
+                        | "export_statement"
+                        | "variable_declaration"
+                        | "lexical_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+function hello(name) {
+    return `Hello, ${name}!`;
+
+const add = (a, b) => a + b;
+"#;
+
+        let signatures = JavaScriptSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(!funcs.is_empty());
+        assert_eq!(funcs[0].name, "hello");
+    }
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+class User {
+    constructor(name) {
+        this.name = name;
+    }
+}
+}
+"#;
+
+        let signatures = JavaScriptSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(JavaScriptSupport.supports_extension("js"));
+        assert!(JavaScriptSupport.supports_extension("mjs"));
+        assert!(!JavaScriptSupport.supports_extension("ts"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/python.rs`
+
+- Size: 9318 bytes
+- Modified: 2026-02-15 06:49:54 UTC
+
+```rust
+//! Python language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-python")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-python")]
+use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+pub struct PythonSupport;
+
+#[cfg(feature = "tree-sitter-python")]
+impl PythonSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_python::language()
+    }
+
+#[cfg(feature = "tree-sitter-python")]
+impl LanguageSupport for PythonSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["py", "pyw"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+
+#[cfg(feature = "tree-sitter-python")]
+impl PythonSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_definition" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "class_definition" => {
+                if let Some(sig) = self.extract_class_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_definition" => structure.functions += 1,
+            "class_definition" => structure.classes += 1,
+            "import_statement" | "import_from_statement" => {
+                structure.imports.push("import".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "parameters", source);
+
+        // Check for decorators (to detect @property, @staticmethod, etc.)
+        let is_method = node
+            .parent()
+            .map_or(false, |p| p.kind() == "class_definition");
+        let kind = if is_method {
+            SignatureKind::Method
+        } else {
+            SignatureKind::Function
+        };
+
+        let mut full_sig = String::new();
+        if let Some(decorators) = self.find_decorators(source, node) {
+            full_sig.push_str(&decorators);
+            full_sig.push('\n');
+        }
+        full_sig.push_str("def ");
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+
+        Some(Signature {
+            kind,
+            name,
+            params,
+            return_type: None, // Python uses type hints differently
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let bases = self.find_child_text(node, "argument_list", source);
+
+        let mut full_sig = String::new();
+        if let Some(decorators) = self.find_decorators(source, node) {
+            full_sig.push_str(&decorators);
+            full_sig.push('\n');
+        }
+        full_sig.push_str("class ");
+        full_sig.push_str(&name);
+        if let Some(b) = &bases {
+            full_sig.push('(');
+            full_sig.push_str(b);
+            full_sig.push(')');
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: bases,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_decorators(&self, source: &str, node: &tree_sitter::Node) -> Option<String> {
+        let parent = node.parent()?;
+        let mut cursor = parent.walk();
+        let mut decorators = Vec::new();
+
+        for sibling in parent.children(&mut cursor) {
+            if sibling.kind() == "decorator"
+                && sibling.end_position().row == node.start_position().row.saturating_sub(1)
+            {
+                let text = &source[sibling.start_byte()..sibling.end_byte()];
+                decorators.push(text.to_string());
+            }
+        }
+
+        if decorators.is_empty() {
+            None
+        } else {
+            Some(decorators.join("\n"))
+        }
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_definition" | "class_definition" | "decorated_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+def hello(name):
+    return f"Hello, {name}!"
+
+def add(a: int, b: int) -> int:
+    return a + b
+"#;
+
+        let signatures = PythonSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| matches!(s.kind, SignatureKind::Function | SignatureKind::Method))
+            .collect();
+        assert!(funcs.len() >= 2);
+        assert_eq!(funcs[0].name, "hello");
+    }
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+class User:
+    def __init__(self, name):
+        self.name = name
+"#;
+
+        let signatures = PythonSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(PythonSupport.supports_extension("py"));
+        assert!(PythonSupport.supports_extension("pyw"));
+        assert!(!PythonSupport.supports_extension("rs"));
+    }
+```
+
+### File: `src/tree_sitter/languages/rust.rs`
+
+- Size: 19129 bytes
+- Modified: 2026-02-15 06:49:36 UTC
+
+```rust
+//! Rust language support for tree-sitter.
+
+use tree_sitter::{Parser, Tree};
+
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct RustSupport;
+
+impl RustSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_rust::language()
+    }
+}
+
+impl LanguageSupport for RustSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["rs"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+
+        structure.code_lines = source
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                !trimmed.is_empty() && !trimmed.starts_with("//")
+            })
+            .count();
+
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+
+        let mut best_end = 0;
+        let mut cursor = root.walk();
+
+        self.walk_for_boundary(&mut cursor, max_bytes, &mut best_end);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+}
+
+impl RustSupport {
+    fn walk_for_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_item"
+                        | "struct_item"
+                        | "enum_item"
+                        | "trait_item"
+                        | "impl_item"
+                        | "mod_item"
+                        | "const_item"
+                        | "static_item"
+                        | "type_item"
+                        | "macro_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.walk_for_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_item" => {
+                if let Some(sig) = self.extract_function_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "struct_item" => {
+                if let Some(sig) = self.extract_struct_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_item" => {
+                if let Some(sig) = self.extract_enum_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "trait_item" => {
+                if let Some(sig) = self.extract_trait_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "impl_item" => {
+                if let Some(sig) = self.extract_impl_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "mod_item" => {
+                if let Some(sig) = self.extract_mod_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "const_item" => {
+                if let Some(sig) = self.extract_const_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "type_item" => {
+                if let Some(sig) = self.extract_type_alias_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "macro_definition" => {
+                if let Some(sig) = self.extract_macro_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_item" => structure.functions += 1,
+            "struct_item" => structure.structs += 1,
+            "enum_item" => structure.enums += 1,
+            "trait_item" => structure.traits += 1,
+            "const_item" => structure.constants += 1,
+            "type_item" => structure.type_aliases += 1,
+            "macro_definition" => structure.macros += 1,
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn is_public(&self, node: &tree_sitter::Node) -> bool {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "visibility_modifier" {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn get_visibility(&self, node: &tree_sitter::Node) -> Visibility {
+        if self.is_public(node) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        }
+    }
+
+    fn node_text<'a>(&self, source: &'a str, node: &tree_sitter::Node) -> &'a str {
+        &source[node.start_byte()..node.end_byte()]
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "parameters", source);
+        let return_type = self.find_child_text(node, "type", source);
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("fn ");
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        }
+        if let Some(r) = &return_type {
+            full_sig.push_str(" -> ");
+            full_sig.push_str(r);
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_struct_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("struct ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Struct,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("enum ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_trait_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("trait ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Trait,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_impl_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        full_sig.push_str("impl ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Module,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_mod_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("mod ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Module,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_const_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("const ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Constant,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_type_alias_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("type ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_macro_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility_filter == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility_filter == Visibility::Private && vis != Visibility::Private {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("macro_rules! ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Macro,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(self.node_text(source, &child).to_string());
+            }
+            let mut nested_cursor = child.walk();
+            for nested in child.children(&mut nested_cursor) {
+                if nested.kind() == kind {
+                    return Some(self.node_text(source, &nested).to_string());
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+pub fn hello(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+fn private_helper(x: i32) -> i32 {
+    x * 2
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        assert_eq!(signatures.len(), 2);
+
+        assert_eq!(signatures[0].name, "hello");
+        assert_eq!(signatures[0].kind, SignatureKind::Function);
+        assert_eq!(signatures[0].visibility, Visibility::Public);
+
+        assert_eq!(signatures[1].name, "private_helper");
+        assert_eq!(signatures[1].visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_public_only_filter() {
+        let source = r#"
+pub fn public_fn() {}
+fn private_fn() {}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::Public);
+        assert_eq!(signatures.len(), 1);
+        assert_eq!(signatures[0].name, "public_fn");
+    }
+
+    #[test]
+    fn test_extract_struct_signature() {
+        let source = r#"
+pub struct User {
+    name: String,
+    age: u32,
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        assert_eq!(signatures.len(), 1);
+        assert_eq!(signatures[0].name, "User");
+        assert_eq!(signatures[0].kind, SignatureKind::Struct);
+    }
+
+    #[test]
+    fn test_extract_structure() {
+        let source = r#"
+use std::fs;
+
+pub struct Config {
+    path: String,
+}
+
+pub fn load() -> Config {
+    Config { path: ".".into() }
+}
+
+enum Status {
+    Active,
+    Inactive,
+}
+"#;
+
+        let structure = RustSupport.extract_structure(source);
+        assert_eq!(structure.structs, 1);
+        assert_eq!(structure.functions, 1);
+        assert_eq!(structure.enums, 1);
+    }
+
+    #[test]
+    fn test_find_truncation_point() {
+        let source = r#"
+fn first() -> i32 {
+    1
+}
+
+fn second() -> i32 {
+    2
+}
+
+fn third() -> i32 {
+    3
+}
+"#;
+
+        let after_first = source.find("fn second()").unwrap();
+        let point = RustSupport.find_truncation_point(source, after_first);
+
+        assert!(point <= after_first);
+        assert!(source[..point].contains("fn first()"));
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(RustSupport.supports_extension("rs"));
+        assert!(!RustSupport.supports_extension("py"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/typescript.rs`
+
+- Size: 13672 bytes
+- Modified: 2026-02-15 06:49:54 UTC
+
+```rust
+//! TypeScript language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-ts")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-ts")]
+use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+pub struct TypeScriptSupport;
+
+#[cfg(feature = "tree-sitter-ts")]
+impl TypeScriptSupport {
+    fn get_language() -> tree_sitter::Language {
+        // Use TypeScript grammar (not TSX)
+        unsafe { tree_sitter_typescript::language_typescript() }
+    }
+
+#[cfg(feature = "tree-sitter-ts")]
+impl LanguageSupport for TypeScriptSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["ts", "tsx", "mts", "cts"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 {
+            max_bytes
+        } else {
+            best_end
+        }
+    }
+
+#[cfg(feature = "tree-sitter-ts")]
+impl TypeScriptSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_declaration" | "generator_function_declaration" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "class_declaration" => {
+                if let Some(sig) = self.extract_class_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(sig) = self.extract_interface_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "type_alias_declaration" => {
+                if let Some(sig) = self.extract_type_alias_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(sig) = self.extract_enum_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "lexical_declaration" => {
+                self.extract_variable_declarations(source, node, signatures);
+            }
+            "export_statement" => {
+                self.extract_export_signatures(source, node, signatures);
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_declaration" | "function_expression" | "arrow_function" => {
+                structure.functions += 1;
+            }
+            "class_declaration" | "class_expression" => {
+                structure.classes += 1;
+            }
+            "interface_declaration" => {
+                structure.interfaces += 1;
+            }
+            "type_alias_declaration" => {
+                structure.type_aliases += 1;
+            }
+            "enum_declaration" => {
+                structure.enums += 1;
+            }
+            "import_statement" => {
+                structure.imports.push("import".to_string());
+            }
+            "export_statement" => {
+                structure.exports.push("export".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "formal_parameters", source);
+        let return_type = self.find_child_text(node, "type_annotation", source);
+
+        let full_sig = match (params.as_ref(), return_type.as_ref()) {
+            (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
+            (Some(p), None) => format!("function {}{}", name, p),
+            (None, Some(r)) => format!("function {}() {}", name, r),
+            (None, None) => format!("function {}()", name),
+        };
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self
+            .find_child_text(node, "type_identifier", source)
+            .or_else(|| self.find_child_text(node, "identifier", source))?;
+
+        let full_sig = format!("class {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_interface_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("interface {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Interface,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_type_alias_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("type {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self
+            .find_child_text(node, "identifier", source)
+            .or_else(|| self.find_child_text(node, "type_identifier", source))?;
+
+        let full_sig = format!("enum {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_variable_declarations(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "variable_declarator" {
+                if let Some(name) = self.find_child_text(&child, "identifier", source) {
+                    let type_ann = self.find_child_text(&child, "type_annotation", source);
+                    let full_sig = match type_ann {
+                        Some(t) => format!("const {} {}", name, t),
+                        None => format!("const {}", name),
+                    };
+                    signatures.push(Signature {
+                        kind: SignatureKind::Constant,
+                        name,
+                        params: None,
+                        return_type: type_ann,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature: full_sig,
+                    });
+                }
+            }
+        }
+    }
+
+    fn extract_export_signatures(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "function_declaration" => {
+                    if let Some(sig) = self.extract_function_signature(source, &child) {
+                        signatures.push(sig);
+                    }
+                }
+                "class_declaration" => {
+                    if let Some(sig) = self.extract_class_signature(source, &child) {
+                        signatures.push(sig);
+                    }
+                }
+                "interface_declaration" => {
+                    if let Some(sig) = self.extract_interface_signature(source, &child) {
+                        signatures.push(sig);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn find_child_text<'a>(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &'a str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+            let mut nested_cursor = child.walk();
+            for nested in child.children(&mut nested_cursor) {
+                if nested.kind() == kind {
+                    return Some(source[nested.start_byte()..nested.end_byte()].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_declaration"
+                        | "class_declaration"
+                        | "interface_declaration"
+                        | "type_alias_declaration"
+                        | "enum_declaration"
+                        | "export_statement"
+                        | "lexical_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+function hello(name: string): string {
+    return `Hello, ${name}!`;
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+        assert_eq!(signatures[0].name, "hello");
+        assert!(signatures[0].return_type.is_some());
+    }
+
+    #[test]
+    fn test_extract_interface_signature() {
+        let source = r#"
+interface User {
+    name: string;
+    age: number;
+}
+}
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let interfaces: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Interface)
+            .collect();
+        assert!(!interfaces.is_empty());
+        assert_eq!(interfaces[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(TypeScriptSupport.supports_extension("ts"));
+        assert!(TypeScriptSupport.supports_extension("tsx"));
+        assert!(!TypeScriptSupport.supports_extension("js"));
+    }
+}
+```
+
+### File: `src/tree_sitter/signatures.rs`
+
+- Size: 2197 bytes
+- Modified: 2026-02-15 06:32:38 UTC
+
+```rust
+//! Signature extraction utilities.
+
+use super::language_support::{LanguageSupport, Signature, Visibility};
+
+/// Extract all signatures from source code.
+pub fn extract_signatures(
+    source: &str,
+    support: &dyn LanguageSupport,
+    visibility: Visibility,
+) -> Vec<Signature> {
+    support.extract_signatures(source, visibility)
+}
+
+/// Format signatures as markdown.
+pub fn format_signatures_as_markdown(signatures: &[Signature], language: &str) -> String {
+    if signatures.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    output.push_str("```");
+    output.push_str(language);
+    output.push('\n');
+
+    let mut current_kind: Option<&str> = None;
+
+    for sig in signatures {
+        let kind_str = match sig.kind {
+            super::language_support::SignatureKind::Function
+            | super::language_support::SignatureKind::Method => "Functions",
+            super::language_support::SignatureKind::Struct
+            | super::language_support::SignatureKind::Class => "Structs/Classes",
+            super::language_support::SignatureKind::Enum => "Enums",
+            super::language_support::SignatureKind::Trait
+            | super::language_support::SignatureKind::Interface => "Traits/Interfaces",
+            super::language_support::SignatureKind::Module => "Modules",
+            super::language_support::SignatureKind::Constant => "Constants",
+            super::language_support::SignatureKind::TypeAlias => "Type Aliases",
+            super::language_support::SignatureKind::Macro => "Macros",
+        };
+
+        if current_kind != Some(kind_str) {
+            if current_kind.is_some() {
+                output.push('\n');
+            }
+            output.push_str("// ");
+            output.push_str(kind_str);
+            output.push('\n');
+            current_kind = Some(kind_str);
+        }
+
+        output.push_str(&sig.full_signature);
+        output.push('\n');
+    }
+
+    output.push_str("```\n");
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_empty_signatures() {
+        let output = format_signatures_as_markdown(&[], "rust");
+        assert!(output.is_empty());
+    }
+}
+```
+
+### File: `src/tree_sitter/structure.rs`
+
+- Size: 2617 bytes
+- Modified: 2026-02-15 06:32:52 UTC
+
+```rust
+//! Code structure extraction utilities.
+
+use super::language_support::{CodeStructure, LanguageSupport};
+
+/// Extract structure information from source code.
+pub fn extract_structure(source: &str, support: &dyn LanguageSupport) -> CodeStructure {
+    support.extract_structure(source)
+}
+
+/// Format structure as markdown summary.
+pub fn format_structure_as_markdown(structure: &CodeStructure) -> String {
+    if structure.total_symbols() == 0 {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    output.push_str("**Structure:**\n");
+
+    let mut parts = Vec::new();
+
+    if structure.functions > 0 {
+        parts.push(format!("{} functions", structure.functions));
+    }
+    if structure.structs > 0 {
+        parts.push(format!("{} structs", structure.structs));
+    }
+    if structure.classes > 0 {
+        parts.push(format!("{} classes", structure.classes));
+    }
+    if structure.enums > 0 {
+        parts.push(format!("{} enums", structure.enums));
+    }
+    if structure.traits > 0 {
+        parts.push(format!("{} traits", structure.traits));
+    }
+    if structure.interfaces > 0 {
+        parts.push(format!("{} interfaces", structure.interfaces));
+    }
+    if structure.constants > 0 {
+        parts.push(format!("{} constants", structure.constants));
+    }
+    if structure.type_aliases > 0 {
+        parts.push(format!("{} types", structure.type_aliases));
+    }
+    if structure.macros > 0 {
+        parts.push(format!("{} macros", structure.macros));
+    }
+
+    output.push_str("- ");
+    output.push_str(&parts.join(", "));
+    output.push('\n');
+
+    if structure.total_lines > 0 {
+        output.push_str(&format!(
+            "- {} lines ({} code)\n",
+            structure.total_lines, structure.code_lines
+        ));
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_empty_structure() {
+        let structure = CodeStructure::default();
+        let output = format_structure_as_markdown(&structure);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_format_structure_with_symbols() {
+        let structure = CodeStructure {
+            functions: 5,
+            structs: 2,
+            enums: 1,
+            total_lines: 100,
+            code_lines: 80,
+            ..Default::default()
+        };
+
+        let output = format_structure_as_markdown(&structure);
+        assert!(output.contains("5 functions"));
+        assert!(output.contains("2 structs"));
+        assert!(output.contains("1 enums"));
+        assert!(output.contains("100 lines"));
+        assert!(output.contains("80 code"));
+    }
+}
+```
+
+### File: `src/tree_sitter/truncation.rs`
+
+- Size: 1888 bytes
+- Modified: 2026-02-15 06:32:58 UTC
+
+```rust
+//! Smart truncation at AST boundaries.
+
+use super::language_support::LanguageSupport;
+
+/// Find a truncation point that ends at a complete AST node boundary.
+///
+/// Returns the byte position where the source should be truncated.
+/// If no suitable boundary is found within max_bytes, returns max_bytes.
+pub fn find_truncation_point(
+    source: &str,
+    max_bytes: usize,
+    support: &dyn LanguageSupport,
+) -> usize {
+    if source.len() <= max_bytes {
+        return source.len();
+    }
+
+    support.find_truncation_point(source, max_bytes)
+}
+
+/// Check if truncation is needed at a UTF-8 boundary.
+pub fn ensure_utf8_boundary(source: &str, position: usize) -> usize {
+    if position >= source.len() {
+        return source.len();
+    }
+
+    let mut pos = position;
+    while pos > 0 && !source.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+/// Add a truncation notice to the output.
+pub fn add_truncation_notice(output: &mut String, truncated_count: usize) {
+    output.push_str("\n\n---\n\n");
+    if truncated_count > 0 {
+        output.push_str(&format!(
+            "_Output truncated: {} more items omitted._\n",
+            truncated_count
+        ));
+    } else {
+        output.push_str("_Output truncated at code boundary._\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ensure_utf8_boundary_ascii() {
+        let source = "Hello, world!";
+        assert_eq!(ensure_utf8_boundary(source, 5), 5);
+        assert_eq!(ensure_utf8_boundary(source, 100), 13);
+    }
+
+    #[test]
+    fn test_ensure_utf8_boundary_unicode() {
+        let source = "Hello, 世界!"; // 4 bytes per Chinese char
+                                     // Position 8 is inside the first Chinese character (starts at 7)
+        let boundary = ensure_utf8_boundary(source, 8);
+        assert_eq!(boundary, 7); // Should fall back to start of char
+    }
+}
+```
+
 ### File: `tarpaulin.toml`
 
 - Size: 304 bytes
@@ -7514,8 +11827,8 @@ out = ["Html", "Xml"]
 
 ### File: `benches/context_bench.rs`
 
-- Size: 10825 bytes
-- Modified: 2026-02-14 22:42:36 UTC
+- Size: 11135 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 use std::fs;
@@ -7731,6 +12044,10 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = NoPrompt;
@@ -7775,6 +12092,10 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     clear_cache: false,
                     init: false,
                     max_tokens: None,
+                    signatures: false,
+                    structure: false,
+                    truncate: "smart".to_string(),
+                    visibility: "all".to_string(),
                 },
                 Config::default(),
                 &prompter,
@@ -7859,8 +12180,8 @@ criterion_main!(benches);
 
 ### File: `tests/cli_integration.rs`
 
-- Size: 12938 bytes
-- Modified: 2026-02-14 19:55:07 UTC
+- Size: 13986 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 use std::cell::Cell;
@@ -7932,6 +12253,10 @@ fn preview_mode_does_not_create_output_file() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -7973,6 +12298,10 @@ fn preview_mode_skips_overwrite_confirmation() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Use false for overwrite response to verify it's not called
@@ -8019,6 +12348,10 @@ fn token_count_mode_skips_overwrite_confirmation() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Use false for overwrite response to verify it's not called
@@ -8062,6 +12395,10 @@ fn both_preview_and_token_count_modes_work_together() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
@@ -8118,6 +12455,10 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Always proceed without interactive prompts
@@ -8206,6 +12547,10 @@ fn overwrite_prompt_is_respected() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Deny overwrite
@@ -8246,6 +12591,10 @@ fn confirm_processing_receives_large_count() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -8283,6 +12632,10 @@ fn token_count_mode_does_not_create_output_file() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -8372,8 +12725,8 @@ More text here.
 
 ### File: `tests/test_auto_diff.rs`
 
-- Size: 33524 bytes
-- Modified: 2026-02-14 19:56:56 UTC
+- Size: 34489 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Integration tests for auto-diff functionality
@@ -8463,6 +12816,10 @@ fn test_auto_diff_workflow_basic() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
     let prompter = TestPrompter;
 
@@ -8618,6 +12975,10 @@ fn test_auto_diff_added_and_removed_files() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -8778,6 +13139,10 @@ diff_only = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -8922,6 +13287,10 @@ fn test_cache_invalidation_on_config_change() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -9073,6 +13442,10 @@ fn test_concurrent_cache_access() {
                     clear_cache: false,
                     init: false,
                     max_tokens: None,
+                    signatures: false,
+                    structure: false,
+                    truncate: "smart".to_string(),
+                    visibility: "all".to_string(),
                 };
 
                 let prompter = TestPrompter;
@@ -9124,6 +13497,10 @@ fn test_corrupted_cache_recovery() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -9291,6 +13668,10 @@ diff_only = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();
@@ -9389,8 +13770,8 @@ diff_only = true
 
 ### File: `tests/test_binary_file_autodiff.rs`
 
-- Size: 7957 bytes
-- Modified: 2026-02-14 19:55:07 UTC
+- Size: 8350 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Integration tests for binary file handling in auto-diff mode
@@ -9506,6 +13887,10 @@ fn test_binary_files_dont_crash_autodiff() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -9585,6 +13970,10 @@ fn test_mixed_text_and_binary_files_autodiff() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -9648,6 +14037,10 @@ fn test_large_binary_file_autodiff() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -9669,8 +14062,8 @@ fn test_large_binary_file_autodiff() {
 
 ### File: `tests/test_comprehensive_edge_cases.rs`
 
-- Size: 22269 bytes
-- Modified: 2026-02-14 19:56:54 UTC
+- Size: 23611 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Comprehensive edge case testing suite for context-builder v0.5.0
@@ -9794,6 +14187,10 @@ fn test_comprehensive_binary_file_edge_cases() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let prompter = TestPrompter::new(true, true);
@@ -9879,6 +14276,10 @@ fn test_configuration_precedence_edge_cases() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -9915,6 +14316,10 @@ fn test_configuration_precedence_edge_cases() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -9971,6 +14376,10 @@ timestamped_output = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
@@ -10073,6 +14482,10 @@ fn test_error_conditions_and_exit_codes() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -10099,6 +14512,10 @@ fn test_error_conditions_and_exit_codes() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter_deny = TestPrompter::new(false, true); // Deny overwrite
@@ -10122,6 +14539,10 @@ fn test_error_conditions_and_exit_codes() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter_cancel = TestPrompter::new(true, false); // Allow overwrite, deny processing
@@ -10167,6 +14588,10 @@ fn test_memory_usage_under_parallel_processing() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -10254,6 +14679,10 @@ line_numbers = true
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let config =
@@ -10352,6 +14781,10 @@ fn test_edge_case_filenames_and_paths() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -10386,8 +14819,8 @@ fn test_edge_case_filenames_and_paths() {
 
 ### File: `tests/test_config_resolution.rs`
 
-- Size: 14174 bytes
-- Modified: 2026-02-14 19:57:42 UTC
+- Size: 15023 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Integration tests for configuration resolution functionality
@@ -10456,6 +14889,10 @@ fn run_with_resolved_config(
         clear_cache: resolution.config.clear_cache,
         init: resolution.config.init,
         max_tokens: resolution.config.max_tokens,
+        signatures: resolution.config.signatures,
+        structure: resolution.config.structure,
+        truncate: resolution.config.truncate,
+        visibility: resolution.config.visibility,
     };
 
     // Create final Config with resolved values
@@ -10512,6 +14949,10 @@ output = "from_config.md"
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -10590,6 +15031,10 @@ ignore = ["target"]
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -10672,6 +15117,10 @@ timestamped_output = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -10749,6 +15198,10 @@ yes = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -10821,6 +15274,10 @@ timestamped_output = false
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -10840,8 +15297,8 @@ timestamped_output = false
 
 ### File: `tests/test_cwd_independence.rs`
 
-- Size: 13477 bytes
-- Modified: 2026-02-14 19:55:07 UTC
+- Size: 13739 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Integration tests for CWD independence
@@ -10942,6 +15399,10 @@ filter = ["txt"]
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Apply config settings to args (mimicking the run() function logic)
@@ -11030,6 +15491,10 @@ timestamped_output = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Apply timestamping manually since we're bypassing run()
@@ -11271,8 +15736,8 @@ filter = ["txt"]
 
 ### File: `tests/test_determinism.rs`
 
-- Size: 20050 bytes
-- Modified: 2026-02-14 22:43:45 UTC
+- Size: 21261 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Integration tests for determinism and robustness of context-builder
@@ -11369,6 +15834,10 @@ fn test_deterministic_output_multiple_runs() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         },
         Config::default(),
         &prompter,
@@ -11392,6 +15861,10 @@ fn test_deterministic_output_multiple_runs() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         },
         Config::default(),
         &prompter,
@@ -11534,6 +16007,10 @@ fn test_deterministic_file_tree_order() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -11598,6 +16075,10 @@ fn test_cache_collision_prevention() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -11622,6 +16103,10 @@ fn test_cache_collision_prevention() {
 
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -11687,6 +16172,10 @@ fn test_custom_ignores_performance() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -11742,6 +16231,10 @@ fn test_configuration_affects_cache_key() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let args2 = Args {
@@ -11757,6 +16250,10 @@ fn test_configuration_affects_cache_key() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -11822,6 +16319,10 @@ auto_diff = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -11893,8 +16394,8 @@ auto_diff = true
 
 ### File: `tests/test_parallel_memory.rs`
 
-- Size: 8743 bytes
-- Modified: 2026-02-14 19:55:07 UTC
+- Size: 9136 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Integration test for streaming parallel processing with memory efficiency
@@ -11965,6 +16466,10 @@ fn test_streaming_parallel_processing() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = Config::default();
@@ -12079,6 +16584,10 @@ fn test_parallel_error_handling() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = Config::default();
@@ -12137,6 +16646,10 @@ fn test_memory_efficiency_with_large_files() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let config = Config::default();
@@ -12168,8 +16681,8 @@ fn test_memory_efficiency_with_large_files() {
 
 ### File: `tests/test_phase4_integration.rs`
 
-- Size: 11080 bytes
-- Modified: 2026-02-14 19:57:40 UTC
+- Size: 11358 bytes
+- Modified: 2026-02-15 06:55:40 UTC
 
 ```rust
 //! Integration test for all Phase 4 features working together
@@ -12296,6 +16809,10 @@ filter = ["rs", "txt"]
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     // Apply config manually (simulating what happens in the real application)
@@ -12470,6 +16987,10 @@ fn test_encoding_strategy_configuration() {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let result = run_with_args(args, config, &prompter);

@@ -15,6 +15,7 @@ pub mod markdown;
 pub mod state;
 pub mod token_count;
 pub mod tree;
+pub mod tree_sitter;
 
 use std::fs::File;
 
@@ -530,6 +531,30 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     }
 
     // Standard (non auto-diff) generation
+    // Build tree-sitter config from resolved args
+    let ts_config = markdown::TreeSitterConfig {
+        signatures: final_args.signatures,
+        structure: final_args.structure,
+        truncate: final_args.truncate.clone(),
+        visibility: final_args.visibility.clone(),
+    };
+
+    // Graceful degradation: warn if tree-sitter flags are used without the feature
+    if !silent && (ts_config.signatures || ts_config.structure || ts_config.truncate == "smart") {
+        #[cfg(not(feature = "tree-sitter-base"))]
+        {
+            eprintln!(
+                "⚠️  --signatures/--structure/--truncate smart require tree-sitter support."
+            );
+            eprintln!(
+                "   Build with: cargo build --features tree-sitter-all"
+            );
+            eprintln!(
+                "   Falling back to standard output.\n"
+            );
+        }
+    }
+
     generate_markdown(
         &final_args.output,
         &final_args.input,
@@ -541,6 +566,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         final_args.line_numbers,
         config.encoding_strategy.as_deref(),
         final_args.max_tokens,
+        &ts_config,
     )?;
 
     let duration = start_time.elapsed();
@@ -800,6 +826,10 @@ pub fn run() -> io::Result<()> {
         clear_cache: resolution.config.clear_cache,
         max_tokens: resolution.config.max_tokens,
         init: false,
+        signatures: resolution.config.signatures,
+        structure: resolution.config.structure,
+        truncate: resolution.config.truncate,
+        visibility: resolution.config.visibility,
     };
 
     // Create final Config with resolved values
@@ -986,6 +1016,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1018,6 +1052,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1055,6 +1093,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1090,6 +1132,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1128,6 +1174,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, false); // Deny overwrite
@@ -1167,6 +1217,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false, true); // Deny processing
@@ -1205,6 +1259,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1249,6 +1307,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1292,6 +1354,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1334,6 +1400,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1379,6 +1449,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1421,6 +1495,10 @@ mod tests {
             clear_cache: false,
             init: false,
             max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
         };
 
         let diff_config = DiffConfig::default();

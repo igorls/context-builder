@@ -85,6 +85,10 @@ fn test_auto_diff_workflow_basic() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
     let prompter = TestPrompter;
 
@@ -240,6 +244,10 @@ fn test_auto_diff_added_and_removed_files() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -400,6 +408,10 @@ diff_only = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -544,6 +556,10 @@ fn test_cache_invalidation_on_config_change() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -695,6 +711,10 @@ fn test_concurrent_cache_access() {
                     clear_cache: false,
                     init: false,
                     max_tokens: None,
+                    signatures: false,
+                    structure: false,
+                    truncate: "smart".to_string(),
+                    visibility: "all".to_string(),
                 };
 
                 let prompter = TestPrompter;
@@ -746,6 +766,10 @@ fn test_corrupted_cache_recovery() {
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     let prompter = TestPrompter;
@@ -913,6 +937,10 @@ diff_only = true
         clear_cache: false,
         init: false,
         max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
     };
 
     run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();

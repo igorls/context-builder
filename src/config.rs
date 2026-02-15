@@ -72,6 +72,18 @@ pub struct Config {
 
     /// Maximum token budget for the output. Files are truncated/skipped when exceeded.
     pub max_tokens: Option<usize>,
+
+    /// Extract function/class signatures only (requires tree-sitter feature)
+    pub signatures: Option<bool>,
+
+    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    pub structure: Option<bool>,
+
+    /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
+    pub truncate: Option<String>,
+
+    /// Filter signatures by visibility: "all", "public", or "private"
+    pub visibility: Option<String>,
 }
 
 /// Load configuration from `context-builder.toml` in the current working directory.
@@ -250,5 +262,10 @@ invalid_toml [
         assert!(config.diff_context_lines.is_none());
         assert!(config.diff_only.is_none());
         assert!(config.encoding_strategy.is_none());
+        assert!(config.max_tokens.is_none());
+        assert!(config.signatures.is_none());
+        assert!(config.structure.is_none());
+        assert!(config.truncate.is_none());
+        assert!(config.visibility.is_none());
     }
 }
