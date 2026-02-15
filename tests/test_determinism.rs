@@ -225,6 +225,11 @@ fn test_deterministic_output_multiple_runs() {
     // Category 0: Cargo.toml (config), README.md (key project doc)
     // Category 1: src/* (source code) — entry points first (lib.rs, main.rs before utils.rs)
     // Category 2: tests/* (tests)
+    // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
+    let file_lines: Vec<String> = file_lines
+        .iter()
+        .map(|line| line.replace('\\', "/"))
+        .collect();
     let expected_order = vec![
         "### File: `Cargo.toml`",
         "### File: `docs/README.md`",
