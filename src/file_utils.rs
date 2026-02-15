@@ -194,6 +194,38 @@ pub fn collect_files(
         ));
     }
 
+    // Hardcoded auto-ignores for common heavy directories that should NEVER be
+    // included, even when there's no .git directory (so .gitignore isn't read).
+    // Without these, projects missing .git can produce million-line outputs
+    // from dependency trees.
+    let default_ignores = [
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "vendor",  // Go, PHP, Ruby
+        ".bundle", // Ruby
+        "bower_components",
+        ".next",       // Next.js build output
+        ".nuxt",       // Nuxt build output
+        ".svelte-kit", // SvelteKit build output
+        ".angular",    // Angular cache
+        "dist",        // Common build output
+        "build",       // Common build output
+        ".gradle",     // Gradle cache
+        ".cargo",      // Cargo registry cache
+    ];
+    for dir in &default_ignores {
+        let pattern = format!("!{}/**", dir);
+        if let Err(e) = override_builder.add(&pattern) {
+            log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
+        }
+    }
+
     let overrides = override_builder.build().map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
