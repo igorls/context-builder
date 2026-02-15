@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: ec9892ac8132c02f
+Content hash: 49c741843d9cf359
 
 ## File Tree Structure
 
@@ -758,8 +758,8 @@ This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** f
 
 ### File: `src/lib.rs`
 
-- Size: 46860 bytes
-- Modified: 2026-02-14 22:41:02 UTC
+- Size: 48301 bytes
+- Modified: 2026-02-15 00:33:46 UTC
 
 ```rust
 use clap::{CommandFactory, Parser};
@@ -1184,12 +1184,15 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         // Build relevance-sorted path list from the DirEntry list (which is
         // already sorted by file_relevance_category). This preserves ordering
         // instead of using BTreeMap's alphabetical iteration.
+        // IMPORTANT: Path resolution must match state.rs to avoid get() misses.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| base_path.to_path_buf());
         let sorted_paths: Vec<PathBuf> = files
             .iter()
             .map(|entry| {
                 entry
                     .path()
                     .strip_prefix(base_path)
+                    .or_else(|_| entry.path().strip_prefix(&cwd))
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|_| {
                         entry
@@ -1202,7 +1205,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             .collect();
 
         // 4. Generate markdown with diff annotations
-        let final_doc = generate_markdown_with_diff(
+        let mut final_doc = generate_markdown_with_diff(
             &current_state,
             comparison.as_ref(),
             &final_args,
@@ -1210,6 +1213,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             diff_cfg,
             &sorted_paths,
         )?;
+
+        // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
+        if let Some(max_tokens) = final_args.max_tokens {
+            let max_bytes = max_tokens * 4;
+            if final_doc.len() > max_bytes {
+                // Truncate at a valid UTF-8 boundary
+                let mut truncate_at = max_bytes;
+                while truncate_at > 0 && !final_doc.is_char_boundary(truncate_at) {
+                    truncate_at -= 1;
+                }
+                final_doc.truncate(truncate_at);
+                final_doc.push_str("\n\n---\n\n");
+                final_doc.push_str(&format!(
+                    "_Output truncated: exceeded {} token budget (estimated)._\n",
+                    max_tokens
+                ));
+            }
+        }
 
         // 5. Write output
         let output_path = Path::new(&final_args.output);
@@ -1332,7 +1353,12 @@ fn generate_markdown_with_diff(
                     // Reconstruct content from + lines.
                     let mut lines: Vec<String> = Vec::new();
                     for line in added.diff.lines() {
-                        if let Some(rest) = line.strip_prefix('+') {
+                        // Diff output uses "+ " prefix (plus-space), strip both to reconstruct content.
+                        // Previously strip_prefix('+') left a leading space, corrupting indentation.
+                        if let Some(rest) = line.strip_prefix("+ ") {
+                            lines.push(rest.to_string());
+                        } else if let Some(rest) = line.strip_prefix('+') {
+                            // Handle edge case: empty added lines have just "+"
                             lines.push(rest.to_string());
                         }
                     }
@@ -4194,8 +4220,8 @@ mod tests {
 
 ### File: `src/file_utils.rs`
 
-- Size: 21171 bytes
-- Modified: 2026-02-14 22:42:03 UTC
+- Size: 21765 bytes
+- Modified: 2026-02-15 00:32:47 UTC
 
 ```rust
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
@@ -4272,7 +4298,22 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
         .unwrap_or("");
 
     match first_component {
-        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
+        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => {
+            // Check sub-components for test directories within source trees.
+            // e.g., src/tests/auth.rs should be cat 2 (tests), not cat 1 (source).
+            let sub_path = rel_str.as_ref();
+            if sub_path.contains("/tests/")
+                || sub_path.contains("/test/")
+                || sub_path.contains("/spec/")
+                || sub_path.contains("/__tests__/")
+                || sub_path.contains("/benches/")
+                || sub_path.contains("/benchmarks/")
+            {
+                2
+            } else {
+                1
+            }
+        }
         "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
         // Build/CI infrastructure — useful context but not core source
@@ -4783,8 +4824,8 @@ mod tests {
 
 ### File: `src/markdown.rs`
 
-- Size: 39836 bytes
-- Modified: 2026-02-14 22:42:03 UTC
+- Size: 40252 bytes
+- Modified: 2026-02-15 00:33:58 UTC
 
 ```rust
 use chrono::Utc;
@@ -4863,13 +4904,19 @@ pub fn generate_markdown(
     // Previous implementation hashed mtime (broken by git checkout, cp, etc.)
     let mut content_hasher = xxhash_rust::xxh3::Xxh3::new();
     for entry in files {
-        // Hash path for file ordering sensitivity
-        let path_bytes = entry.path().to_string_lossy();
-        content_hasher.update(path_bytes.as_bytes());
+        // Hash relative unix-style path for cross-OS determinism.
+        // Using absolute or OS-native paths would produce different hashes
+        // on different machines or operating systems.
+        let rel_path = entry.path().strip_prefix(base_path).unwrap_or(entry.path());
+        let normalized = rel_path.to_string_lossy().replace('\\', "/");
+        content_hasher.update(normalized.as_bytes());
+        // Null delimiter prevents collision: path="a" content="bc" vs path="ab" content="c"
+        content_hasher.update(b"\0");
         // Hash actual file content (not mtime!) for determinism
         if let Ok(bytes) = std::fs::read(entry.path()) {
             content_hasher.update(&bytes);
         }
+        content_hasher.update(b"\0");
     }
     writeln!(output, "Content hash: {:016x}", content_hasher.digest())?;
     writeln!(output)?;

@@ -74,13 +74,19 @@ pub fn generate_markdown(
     // Previous implementation hashed mtime (broken by git checkout, cp, etc.)
     let mut content_hasher = xxhash_rust::xxh3::Xxh3::new();
     for entry in files {
-        // Hash path for file ordering sensitivity
-        let path_bytes = entry.path().to_string_lossy();
-        content_hasher.update(path_bytes.as_bytes());
+        // Hash relative unix-style path for cross-OS determinism.
+        // Using absolute or OS-native paths would produce different hashes
+        // on different machines or operating systems.
+        let rel_path = entry.path().strip_prefix(base_path).unwrap_or(entry.path());
+        let normalized = rel_path.to_string_lossy().replace('\\', "/");
+        content_hasher.update(normalized.as_bytes());
+        // Null delimiter prevents collision: path="a" content="bc" vs path="ab" content="c"
+        content_hasher.update(b"\0");
         // Hash actual file content (not mtime!) for determinism
         if let Ok(bytes) = std::fs::read(entry.path()) {
             content_hasher.update(&bytes);
         }
+        content_hasher.update(b"\0");
     }
     writeln!(output, "Content hash: {:016x}", content_hasher.digest())?;
     writeln!(output)?;

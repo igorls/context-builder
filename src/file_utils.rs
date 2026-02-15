@@ -72,7 +72,22 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
         .unwrap_or("");
 
     match first_component {
-        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
+        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => {
+            // Check sub-components for test directories within source trees.
+            // e.g., src/tests/auth.rs should be cat 2 (tests), not cat 1 (source).
+            let sub_path = rel_str.as_ref();
+            if sub_path.contains("/tests/")
+                || sub_path.contains("/test/")
+                || sub_path.contains("/spec/")
+                || sub_path.contains("/__tests__/")
+                || sub_path.contains("/benches/")
+                || sub_path.contains("/benchmarks/")
+            {
+                2
+            } else {
+                1
+            }
+        }
         "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
         // Build/CI infrastructure — useful context but not core source

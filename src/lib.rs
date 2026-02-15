@@ -420,12 +420,15 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         // Build relevance-sorted path list from the DirEntry list (which is
         // already sorted by file_relevance_category). This preserves ordering
         // instead of using BTreeMap's alphabetical iteration.
+        // IMPORTANT: Path resolution must match state.rs to avoid get() misses.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| base_path.to_path_buf());
         let sorted_paths: Vec<PathBuf> = files
             .iter()
             .map(|entry| {
                 entry
                     .path()
                     .strip_prefix(base_path)
+                    .or_else(|_| entry.path().strip_prefix(&cwd))
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|_| {
                         entry
@@ -438,7 +441,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             .collect();
 
         // 4. Generate markdown with diff annotations
-        let final_doc = generate_markdown_with_diff(
+        let mut final_doc = generate_markdown_with_diff(
             &current_state,
             comparison.as_ref(),
             &final_args,
@@ -446,6 +449,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             diff_cfg,
             &sorted_paths,
         )?;
+
+        // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
+        if let Some(max_tokens) = final_args.max_tokens {
+            let max_bytes = max_tokens * 4;
+            if final_doc.len() > max_bytes {
+                // Truncate at a valid UTF-8 boundary
+                let mut truncate_at = max_bytes;
+                while truncate_at > 0 && !final_doc.is_char_boundary(truncate_at) {
+                    truncate_at -= 1;
+                }
+                final_doc.truncate(truncate_at);
+                final_doc.push_str("\n\n---\n\n");
+                final_doc.push_str(&format!(
+                    "_Output truncated: exceeded {} token budget (estimated)._\n",
+                    max_tokens
+                ));
+            }
+        }
 
         // 5. Write output
         let output_path = Path::new(&final_args.output);
@@ -568,7 +589,12 @@ fn generate_markdown_with_diff(
                     // Reconstruct content from + lines.
                     let mut lines: Vec<String> = Vec::new();
                     for line in added.diff.lines() {
-                        if let Some(rest) = line.strip_prefix('+') {
+                        // Diff output uses "+ " prefix (plus-space), strip both to reconstruct content.
+                        // Previously strip_prefix('+') left a leading space, corrupting indentation.
+                        if let Some(rest) = line.strip_prefix("+ ") {
+                            lines.push(rest.to_string());
+                        } else if let Some(rest) = line.strip_prefix('+') {
+                            // Handle edge case: empty added lines have just "+"
                             lines.push(rest.to_string());
                         }
                     }
