@@ -69,6 +69,28 @@ jobs:
       - name: Run security audit
         run: cargo audit
 
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Generate coverage
+        run: cargo tarpaulin --all-features --out lcov --output-dir ./coverage -- --test-threads=1
+
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: ./coverage/lcov.info
+
   msrv:
     name: Minimum Supported Rust Version
     runs-on: ubuntu-latest

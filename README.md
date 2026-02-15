@@ -70,6 +70,9 @@ It's a command-line utility that recursively processes directories and creates c
 - ✂️ **Diff-Only Mode:**
   Output only the change summary and modified file diffs—no full file bodies—to minimize token usage.
 
+- 🌲 **Tree-Sitter AST Analysis** *(optional)*:
+  Extract function/class signatures (`--signatures`), structural summaries (`--structure`), and smart AST-boundary truncation (`--truncate smart`). Supports Rust, JavaScript, TypeScript, Python, Go, Java, C, and C++.
+
 - 🧪 **Accurate Token Counting:**
   Get real tokenizer–based estimates with `--token-count` to plan your prompt budgets.
 
@@ -82,6 +85,11 @@ It's a command-line utility that recursively processes directories and creates c
 
 ```bash
 cargo install context-builder
+```
+
+With tree-sitter AST support (signatures, structure analysis):
+```bash
+cargo install context-builder --features tree-sitter-all
 ```
 
 
@@ -273,6 +281,9 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
 - `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
+- `--signatures` - Replace full file content with extracted function/class signatures *(requires tree-sitter)*.
+- `--structure` - Append structural summary (function/class counts) to each file *(requires tree-sitter)*.
+- `--truncate <MODE>` - Truncation strategy: `none` (default) or `smart` (AST-boundary aware) *(requires tree-sitter)*.
 - `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
 ---

@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.0
+
+- **Tree-Sitter AST Integration** (feature-gated)
+  - New `--signatures` flag: Replaces full file content with extracted function/class signatures — dramatically reduces token usage (~4K vs ~15K tokens per file)
+  - New `--structure` flag: Appends a structural summary to each file (e.g., "6 functions, 2 structs, 1 impl block")
+  - New `--truncate smart` mode: Prefers AST-boundary truncation when content needs truncating
+  - Supports 8 languages: Rust, JavaScript, TypeScript, Python, Go, Java, C, C++
+  - Install with: `cargo install context-builder --features tree-sitter-all`
+  - Individual language features available (e.g., `--features tree-sitter-rust`)
+
+- **Dependency Updates**
+  - Updated `tree-sitter` core: 0.22 → 0.24
+  - Updated all grammar crates: 0.21 → 0.23
+  - Migrated from deprecated `language()` functions to `LANGUAGE` constants API
+
+- **Bug Fixes**
+  - Fixed config hash mismatch — cache now includes `auto_diff` and `diff_context_lines` fields, preventing stale cache hits when toggling these options
+  - Fixed silent config parse failure — `context-builder.toml` with invalid TOML syntax now prints a warning instead of silently falling back to defaults
+  - Fixed smart truncation unconditionally cutting 50% of file content — now only activates with explicit token budget
+  - Fixed Windows path separators in determinism test causing CI failure
+
+- **CI & Quality**
+  - Added Coveralls code coverage integration via `cargo-tarpaulin`
+  - All 188+ tests passing across Ubuntu, macOS, and Windows
+
 ## v0.7.1
 
 - **Bug Fixes** (identified by Gemini Deep Think multi-round code review)

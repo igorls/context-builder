@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: c2def09bf3360b73
+Content hash: 2ef2e240de1486a4
 
 ## File Tree Structure
 
@@ -235,13 +235,38 @@ cargo fmt --all
 
 ### File: `CHANGELOG.md`
 
-- Size: 9078 bytes
-- Modified: 2026-02-15 04:21:58 UTC
+- Size: 10624 bytes
+- Modified: 2026-02-15 08:32:55 UTC
 
 ```markdown
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## v0.8.0
+
+- **Tree-Sitter AST Integration** (feature-gated)
+  - New `--signatures` flag: Replaces full file content with extracted function/class signatures — dramatically reduces token usage (~4K vs ~15K tokens per file)
+  - New `--structure` flag: Appends a structural summary to each file (e.g., "6 functions, 2 structs, 1 impl block")
+  - New `--truncate smart` mode: Prefers AST-boundary truncation when content needs truncating
+  - Supports 8 languages: Rust, JavaScript, TypeScript, Python, Go, Java, C, C++
+  - Install with: `cargo install context-builder --features tree-sitter-all`
+  - Individual language features available (e.g., `--features tree-sitter-rust`)
+
+- **Dependency Updates**
+  - Updated `tree-sitter` core: 0.22 → 0.24
+  - Updated all grammar crates: 0.21 → 0.23
+  - Migrated from deprecated `language()` functions to `LANGUAGE` constants API
+
+- **Bug Fixes**
+  - Fixed config hash mismatch — cache now includes `auto_diff` and `diff_context_lines` fields, preventing stale cache hits when toggling these options
+  - Fixed silent config parse failure — `context-builder.toml` with invalid TOML syntax now prints a warning instead of silently falling back to defaults
+  - Fixed smart truncation unconditionally cutting 50% of file content — now only activates with explicit token budget
+  - Fixed Windows path separators in determinism test causing CI failure
+
+- **CI & Quality**
+  - Added Coveralls code coverage integration via `cargo-tarpaulin`
+  - All 188+ tests passing across Ubuntu, macOS, and Windows
 
 ## v0.7.1
 
@@ -425,12 +450,12 @@ All notable changes to this project will be documented in this file.
 ### File: `Cargo.toml`
 
 - Size: 2832 bytes
-- Modified: 2026-02-15 08:08:40 UTC
+- Modified: 2026-02-15 08:32:44 UTC
 
 ```toml
 [package]
 name = "context-builder"
-version = "0.7.1"
+version = "0.8.0"
 default-run = "context-builder"
 edition = "2024"
 authors = ["Igor Lins e Silva"]
@@ -518,8 +543,8 @@ required-features = ["samples-bin"]
 
 ### File: `README.md`
 
-- Size: 10641 bytes
-- Modified: 2026-02-15 04:23:13 UTC
+- Size: 11381 bytes
+- Modified: 2026-02-15 08:32:57 UTC
 
 ```markdown
 <div align="center">
@@ -594,6 +619,9 @@ It's a command-line utility that recursively processes directories and creates c
 - ✂️ **Diff-Only Mode:**
   Output only the change summary and modified file diffs—no full file bodies—to minimize token usage.
 
+- 🌲 **Tree-Sitter AST Analysis** *(optional)*:
+  Extract function/class signatures (`--signatures`), structural summaries (`--structure`), and smart AST-boundary truncation (`--truncate smart`). Supports Rust, JavaScript, TypeScript, Python, Go, Java, C, and C++.
+
 - 🧪 **Accurate Token Counting:**
   Get real tokenizer–based estimates with `--token-count` to plan your prompt budgets.
 
@@ -606,6 +634,11 @@ It's a command-line utility that recursively processes directories and creates c
 
 ```bash
 cargo install context-builder
+```
+
+With tree-sitter AST support (signatures, structure analysis):
+```bash
+cargo install context-builder --features tree-sitter-all
 ```
 
 
@@ -797,6 +830,9 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
 - `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
+- `--signatures` - Replace full file content with extracted function/class signatures *(requires tree-sitter)*.
+- `--structure` - Append structural summary (function/class counts) to each file *(requires tree-sitter)*.
+- `--truncate <MODE>` - Truncation strategy: `none` (default) or `smart` (AST-boundary aware) *(requires tree-sitter)*.
 - `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
 ---
@@ -15910,8 +15946,8 @@ filter = ["txt"]
 
 ### File: `tests/test_determinism.rs`
 
-- Size: 21261 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 21480 bytes
+- Modified: 2026-02-15 08:22:30 UTC
 
 ```rust
 //! Integration tests for determinism and robustness of context-builder
@@ -16141,6 +16177,11 @@ fn test_deterministic_output_multiple_runs() {
     // Category 0: Cargo.toml (config), README.md (key project doc)
     // Category 1: src/* (source code) — entry points first (lib.rs, main.rs before utils.rs)
     // Category 2: tests/* (tests)
+    // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
+    let file_lines: Vec<String> = file_lines
+        .iter()
+        .map(|line| line.replace('\\', "/"))
+        .collect();
     let expected_order = vec![
         "### File: `Cargo.toml`",
         "### File: `docs/README.md`",
