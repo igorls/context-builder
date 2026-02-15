@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn test_ensure_utf8_boundary_unicode() {
         let source = "Hello, 世界!"; // 4 bytes per Chinese char
-                                     // Position 8 is inside the first Chinese character (starts at 7)
+        // Position 8 is inside the first Chinese character (starts at 7)
         let boundary = ensure_utf8_boundary(source, 8);
         assert_eq!(boundary, 7); // Should fall back to start of char
     }

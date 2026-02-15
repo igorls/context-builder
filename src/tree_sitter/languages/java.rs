@@ -4,7 +4,9 @@
 use tree_sitter::{Parser, Tree};
 
 #[cfg(feature = "tree-sitter-java")]
-use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
 
 pub struct JavaSupport;
 
@@ -75,11 +77,7 @@ impl LanguageSupport for JavaSupport {
         self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
         drop(cursor);
 
-        if best_end == 0 {
-            max_bytes
-        } else {
-            best_end
-        }
+        if best_end == 0 { max_bytes } else { best_end }
     }
 }
 
@@ -145,6 +143,7 @@ impl JavaSupport {
         }
     }
 
+    #[allow(dead_code)]
     fn get_visibility(&self, _node: &tree_sitter::Node) -> Visibility {
         // Java visibility is determined by modifiers
         // Simplified: check for public/private/protected keywords in AST modifiers
@@ -332,11 +331,11 @@ impl JavaSupport {
         })
     }
 
-    fn find_child_text<'a>(
+    fn find_child_text(
         &self,
         node: &tree_sitter::Node,
         kind: &str,
-        source: &'a str,
+        source: &str,
     ) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -347,11 +346,7 @@ impl JavaSupport {
         None
     }
 
-    fn find_child_text_for_type<'a>(
-        &self,
-        node: &tree_sitter::Node,
-        source: &'a str,
-    ) -> Option<String> {
+    fn find_child_text_for_type(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "void_type"

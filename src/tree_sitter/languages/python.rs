@@ -4,7 +4,9 @@
 use tree_sitter::{Parser, Tree};
 
 #[cfg(feature = "tree-sitter-python")]
-use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
 
 pub struct PythonSupport;
 
@@ -75,11 +77,7 @@ impl LanguageSupport for PythonSupport {
         self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
         drop(cursor);
 
-        if best_end == 0 {
-            max_bytes
-        } else {
-            best_end
-        }
+        if best_end == 0 { max_bytes } else { best_end }
     }
 }
 
@@ -139,7 +137,7 @@ impl PythonSupport {
         // Check for decorators (to detect @property, @staticmethod, etc.)
         let is_method = node
             .parent()
-            .map_or(false, |p| p.kind() == "class_definition");
+            .is_some_and(|p| p.kind() == "class_definition");
         let kind = if is_method {
             SignatureKind::Method
         } else {
@@ -219,11 +217,11 @@ impl PythonSupport {
         }
     }
 
-    fn find_child_text<'a>(
+    fn find_child_text(
         &self,
         node: &tree_sitter::Node,
         kind: &str,
-        source: &'a str,
+        source: &str,
     ) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {

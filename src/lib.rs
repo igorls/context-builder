@@ -543,15 +543,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent && (ts_config.signatures || ts_config.structure || ts_config.truncate == "smart") {
         #[cfg(not(feature = "tree-sitter-base"))]
         {
-            eprintln!(
-                "⚠️  --signatures/--structure/--truncate smart require tree-sitter support."
-            );
-            eprintln!(
-                "   Build with: cargo build --features tree-sitter-all"
-            );
-            eprintln!(
-                "   Falling back to standard output.\n"
-            );
+            eprintln!("⚠️  --signatures/--structure/--truncate smart require tree-sitter support.");
+            eprintln!("   Build with: cargo build --features tree-sitter-all");
+            eprintln!("   Falling back to standard output.\n");
         }
     }
 

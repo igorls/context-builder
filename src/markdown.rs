@@ -537,40 +537,10 @@ pub fn process_file(
             let signatures_only = ts_config.signatures;
 
             if !signatures_only {
-                // Apply smart truncation if configured
-                let content = if ts_config.truncate == "smart" {
-                    #[cfg(feature = "tree-sitter-base")]
-                    {
-                        if let Some(truncation_point) =
-                            crate::tree_sitter::find_smart_truncation_point(
-                                &content,
-                                content.len() / 2,
-                                extension,
-                            )
-                        {
-                            if truncation_point < content.len() {
-                                info!(
-                                    "Smart truncated {} from {} to {} bytes (AST boundary)",
-                                    relative_path.display(),
-                                    content.len(),
-                                    truncation_point
-                                );
-                                content[..truncation_point].to_string()
-                            } else {
-                                content.clone()
-                            }
-                        } else {
-                            content.clone()
-                        }
-                    }
-                    #[cfg(not(feature = "tree-sitter-base"))]
-                    {
-                        content.clone()
-                    }
-                } else {
-                    content.clone()
-                };
-
+                // Note: Smart truncation (`truncate: "smart"`) indicates AST-boundary
+                // truncation should be preferred when content needs truncating.
+                // Without a per-file max_tokens budget, no truncation is applied.
+                // The flag is stored for future use when per-file token limits are implemented.
                 write_text_content(output, &content, language, line_numbers)?;
             }
 
@@ -613,45 +583,41 @@ fn write_tree_sitter_enrichment(
 
         let vis_filter: Visibility = ts_config.visibility.parse().unwrap_or(Visibility::All);
 
-        if ts_config.structure {
-            if let Some(structure) =
+        if ts_config.structure
+            && let Some(structure) =
                 crate::tree_sitter::extract_structure_for_file(content, extension)
-            {
-                let summary =
-                    crate::tree_sitter::structure::format_structure_as_markdown(&structure);
-                if !summary.is_empty() {
-                    writeln!(output)?;
-                    write!(output, "{}", summary)?;
-                }
+        {
+            let summary = crate::tree_sitter::structure::format_structure_as_markdown(&structure);
+            if !summary.is_empty() {
+                writeln!(output)?;
+                write!(output, "{}", summary)?;
             }
         }
 
-        if ts_config.signatures {
-            if let Some(signatures) =
+        if ts_config.signatures
+            && let Some(signatures) =
                 crate::tree_sitter::extract_signatures_for_file(content, extension, vis_filter)
-            {
-                if !signatures.is_empty() {
-                    let language = match extension {
-                        "rs" => "rust",
-                        "js" | "mjs" | "cjs" => "javascript",
-                        "ts" | "tsx" | "mts" | "cts" => "typescript",
-                        "py" | "pyw" => "python",
-                        "go" => "go",
-                        "java" => "java",
-                        "c" | "h" => "c",
-                        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
-                        _ => extension,
-                    };
-                    writeln!(output)?;
-                    writeln!(output, "**Signatures:**")?;
-                    writeln!(output)?;
-                    let formatted = crate::tree_sitter::signatures::format_signatures_as_markdown(
-                        &signatures,
-                        language,
-                    );
-                    write!(output, "{}", formatted)?;
-                }
-            }
+            && !signatures.is_empty()
+        {
+            let language = match extension {
+                "rs" => "rust",
+                "js" | "mjs" | "cjs" => "javascript",
+                "ts" | "tsx" | "mts" | "cts" => "typescript",
+                "py" | "pyw" => "python",
+                "go" => "go",
+                "java" => "java",
+                "c" | "h" => "c",
+                "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
+                _ => extension,
+            };
+            writeln!(output)?;
+            writeln!(output, "**Signatures:**")?;
+            writeln!(output)?;
+            let formatted = crate::tree_sitter::signatures::format_signatures_as_markdown(
+                &signatures,
+                language,
+            );
+            write!(output, "{}", formatted)?;
         }
     }
 
@@ -772,7 +738,15 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
-        process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
 
         // Read the output
         let content = fs::read_to_string(&output_path).unwrap();
@@ -796,7 +770,15 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // Process the file
-        process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
 
         // Read the output
         let content = fs::read_to_string(&output_path).unwrap();
@@ -835,7 +817,15 @@ mod tests {
                 .unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, true, None, &TreeSitterConfig::default()).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            true,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -880,7 +870,15 @@ mod tests {
         fs::write(&file_path, bytes).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -913,7 +911,15 @@ mod tests {
         fs::write(&file_path, windows1252_content).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, Some("detect"), &TreeSitterConfig::default()).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("detect"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -944,7 +950,15 @@ mod tests {
         fs::write(&file_path, non_utf8_content).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, Some("strict"), &TreeSitterConfig::default()).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("strict"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -973,7 +987,15 @@ mod tests {
         fs::write(&file_path, utf16_content).unwrap();
 
         let mut output = fs::File::create(&output_path).unwrap();
-        process_file(base_path, &file_path, &mut output, false, Some("skip"), &TreeSitterConfig::default()).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("skip"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&output_path).unwrap();
 
@@ -1202,7 +1224,14 @@ mod tests {
         let mut output = fs::File::create(&output_path).unwrap();
 
         // This should handle the metadata error gracefully
-        let result = process_file(base_path, &nonexistent_file, &mut output, false, None, &TreeSitterConfig::default());
+        let result = process_file(
+            base_path,
+            &nonexistent_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        );
         assert!(result.is_ok());
 
         // Output should be minimal since file doesn't exist
@@ -1233,7 +1262,15 @@ mod tests {
             fs::write(&file_path, content).unwrap();
 
             let mut output = fs::File::create(&output_path).unwrap();
-            process_file(base_path, &file_path, &mut output, false, None, &TreeSitterConfig::default()).unwrap();
+            process_file(
+                base_path,
+                &file_path,
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
 
             let result = fs::read_to_string(&output_path).unwrap();
             assert!(result.contains(&format!("```{}", expected_lang)));

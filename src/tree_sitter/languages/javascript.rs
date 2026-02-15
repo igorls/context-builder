@@ -2,7 +2,9 @@
 
 use tree_sitter::{Parser, Tree};
 
-use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
 
 pub struct JavaScriptSupport;
 
@@ -71,11 +73,7 @@ impl LanguageSupport for JavaScriptSupport {
         self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
         drop(cursor);
 
-        if best_end == 0 {
-            max_bytes
-        } else {
-            best_end
-        }
+        if best_end == 0 { max_bytes } else { best_end }
     }
 }
 
@@ -184,19 +182,19 @@ impl JavaScriptSupport {
     ) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "variable_declarator" {
-                if let Some(name) = self.find_child_text(&child, "identifier", source) {
-                    let full_signature = format!("const {}", &name);
-                    signatures.push(Signature {
-                        kind: SignatureKind::Constant,
-                        name,
-                        params: None,
-                        return_type: None,
-                        visibility: Visibility::All,
-                        line_number: child.start_position().row + 1,
-                        full_signature,
-                    });
-                }
+            if child.kind() == "variable_declarator"
+                && let Some(name) = self.find_child_text(&child, "identifier", source)
+            {
+                let full_signature = format!("const {}", &name);
+                signatures.push(Signature {
+                    kind: SignatureKind::Constant,
+                    name,
+                    params: None,
+                    return_type: None,
+                    visibility: Visibility::All,
+                    line_number: child.start_position().row + 1,
+                    full_signature,
+                });
             }
         }
     }
@@ -213,19 +211,19 @@ impl JavaScriptSupport {
                 if let Some(sig) = self.extract_function_signature(source, &child) {
                     signatures.push(sig);
                 }
-            } else if child.kind() == "class_declaration" {
-                if let Some(sig) = self.extract_class_signature(source, &child) {
-                    signatures.push(sig);
-                }
+            } else if child.kind() == "class_declaration"
+                && let Some(sig) = self.extract_class_signature(source, &child)
+            {
+                signatures.push(sig);
             }
         }
     }
 
-    fn find_child_text<'a>(
+    fn find_child_text(
         &self,
         node: &tree_sitter::Node,
         kind: &str,
-        source: &'a str,
+        source: &str,
     ) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {

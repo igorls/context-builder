@@ -127,8 +127,15 @@ mod tests {
 
         // Generate actual markdown content
         let mut actual_content = Vec::new();
-        crate::markdown::process_file(dir.path(), &test_file, &mut actual_content, false, None, &crate::markdown::TreeSitterConfig::default())
-            .unwrap();
+        crate::markdown::process_file(
+            dir.path(),
+            &test_file,
+            &mut actual_content,
+            false,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        )
+        .unwrap();
         let actual_content_str = String::from_utf8(actual_content).unwrap();
 
         // Count actual tokens

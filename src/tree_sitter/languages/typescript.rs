@@ -4,7 +4,9 @@
 use tree_sitter::{Parser, Tree};
 
 #[cfg(feature = "tree-sitter-ts")]
-use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
 
 pub struct TypeScriptSupport;
 
@@ -12,7 +14,7 @@ pub struct TypeScriptSupport;
 impl TypeScriptSupport {
     fn get_language() -> tree_sitter::Language {
         // Use TypeScript grammar (not TSX)
-        unsafe { tree_sitter_typescript::language_typescript() }
+        tree_sitter_typescript::language_typescript()
     }
 }
 
@@ -76,11 +78,7 @@ impl LanguageSupport for TypeScriptSupport {
         self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
         drop(cursor);
 
-        if best_end == 0 {
-            max_bytes
-        } else {
-            best_end
-        }
+        if best_end == 0 { max_bytes } else { best_end }
     }
 }
 
@@ -277,23 +275,23 @@ impl TypeScriptSupport {
     ) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "variable_declarator" {
-                if let Some(name) = self.find_child_text(&child, "identifier", source) {
-                    let type_ann = self.find_child_text(&child, "type_annotation", source);
-                    let full_sig = match &type_ann {
-                        Some(t) => format!("const {} {}", name, t),
-                        None => format!("const {}", name),
-                    };
-                    signatures.push(Signature {
-                        kind: SignatureKind::Constant,
-                        name,
-                        params: None,
-                        return_type: type_ann,
-                        visibility: Visibility::All,
-                        line_number: child.start_position().row + 1,
-                        full_signature: full_sig,
-                    });
-                }
+            if child.kind() == "variable_declarator"
+                && let Some(name) = self.find_child_text(&child, "identifier", source)
+            {
+                let type_ann = self.find_child_text(&child, "type_annotation", source);
+                let full_sig = match &type_ann {
+                    Some(t) => format!("const {} {}", name, t),
+                    None => format!("const {}", name),
+                };
+                signatures.push(Signature {
+                    kind: SignatureKind::Constant,
+                    name,
+                    params: None,
+                    return_type: type_ann,
+                    visibility: Visibility::All,
+                    line_number: child.start_position().row + 1,
+                    full_signature: full_sig,
+                });
             }
         }
     }
@@ -327,11 +325,11 @@ impl TypeScriptSupport {
         }
     }
 
-    fn find_child_text<'a>(
+    fn find_child_text(
         &self,
         node: &tree_sitter::Node,
         kind: &str,
-        source: &'a str,
+        source: &str,
     ) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {

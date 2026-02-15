@@ -82,11 +82,7 @@ impl LanguageSupport for RustSupport {
 
         self.walk_for_boundary(&mut cursor, max_bytes, &mut best_end);
 
-        if best_end == 0 {
-            max_bytes
-        } else {
-            best_end
-        }
+        if best_end == 0 { max_bytes } else { best_end }
     }
 }
 
@@ -208,7 +204,9 @@ impl RustSupport {
             "type_item" => structure.type_aliases += 1,
             "macro_definition" => structure.macros += 1,
             "use_declaration" => {
-                structure.imports.push(self.node_text(source, node).to_string());
+                structure
+                    .imports
+                    .push(self.node_text(source, node).to_string());
             }
             _ => {}
         }
@@ -516,11 +514,11 @@ impl RustSupport {
         })
     }
 
-    fn find_child_text<'a>(
+    fn find_child_text(
         &self,
         node: &tree_sitter::Node,
         kind: &str,
-        source: &'a str,
+        source: &str,
     ) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {

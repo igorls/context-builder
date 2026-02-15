@@ -4,7 +4,9 @@
 use tree_sitter::{Parser, Tree};
 
 #[cfg(feature = "tree-sitter-go")]
-use crate::tree_sitter::language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
 
 pub struct GoSupport;
 
@@ -75,11 +77,7 @@ impl LanguageSupport for GoSupport {
         self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
         drop(cursor);
 
-        if best_end == 0 {
-            max_bytes
-        } else {
-            best_end
-        }
+        if best_end == 0 { max_bytes } else { best_end }
     }
 }
 
@@ -120,17 +118,17 @@ impl GoSupport {
             "function_declaration" | "method_declaration" => structure.functions += 1,
             "type_spec" => {
                 // Check what type it is
-                if let Some(parent) = node.parent() {
-                    if parent.kind() == "type_declaration" {
-                        // Could be struct, interface, or type alias
-                        let mut cursor = node.walk();
-                        for child in node.children(&mut cursor) {
-                            match child.kind() {
-                                "struct_type" => structure.structs += 1,
-                                "interface_type" => structure.interfaces += 1,
-                                "type_identifier" => structure.type_aliases += 1,
-                                _ => {}
-                            }
+                if let Some(parent) = node.parent()
+                    && parent.kind() == "type_declaration"
+                {
+                    // Could be struct, interface, or type alias
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        match child.kind() {
+                            "struct_type" => structure.structs += 1,
+                            "interface_type" => structure.interfaces += 1,
+                            "type_identifier" => structure.type_aliases += 1,
+                            _ => {}
                         }
                     }
                 }
@@ -148,7 +146,7 @@ impl GoSupport {
     }
 
     fn is_exported(&self, name: &str) -> bool {
-        name.chars().next().map_or(false, |c| c.is_uppercase())
+        name.chars().next().is_some_and(|c| c.is_uppercase())
     }
 
     fn extract_function_signature(
@@ -263,34 +261,34 @@ impl GoSupport {
     ) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "type_spec" {
-                if let Some(name) = self.find_child_text(&child, "type_identifier", source) {
-                    let is_exported = self.is_exported(&name);
+            if child.kind() == "type_spec"
+                && let Some(name) = self.find_child_text(&child, "type_identifier", source)
+            {
+                let is_exported = self.is_exported(&name);
 
-                    if visibility == Visibility::Public && !is_exported {
-                        continue;
-                    }
-                    if visibility == Visibility::Private && is_exported {
-                        continue;
-                    }
-
-                    let kind = self.get_type_kind(&child);
-                    let full_sig = format!("type {} {}", name, kind);
-
-                    signatures.push(Signature {
-                        kind,
-                        name,
-                        params: None,
-                        return_type: None,
-                        visibility: if is_exported {
-                            Visibility::Public
-                        } else {
-                            Visibility::Private
-                        },
-                        line_number: child.start_position().row + 1,
-                        full_signature: full_sig,
-                    });
+                if visibility == Visibility::Public && !is_exported {
+                    continue;
                 }
+                if visibility == Visibility::Private && is_exported {
+                    continue;
+                }
+
+                let kind = self.get_type_kind(&child);
+                let full_sig = format!("type {} {}", name, kind);
+
+                signatures.push(Signature {
+                    kind,
+                    name,
+                    params: None,
+                    return_type: None,
+                    visibility: if is_exported {
+                        Visibility::Public
+                    } else {
+                        Visibility::Private
+                    },
+                    line_number: child.start_position().row + 1,
+                    full_signature: full_sig,
+                });
             }
         }
     }
@@ -307,11 +305,11 @@ impl GoSupport {
         SignatureKind::TypeAlias
     }
 
-    fn find_child_text<'a>(
+    fn find_child_text(
         &self,
         node: &tree_sitter::Node,
         kind: &str,
-        source: &'a str,
+        source: &str,
     ) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -322,11 +320,7 @@ impl GoSupport {
         None
     }
 
-    fn find_child_text_for_result<'a>(
-        &self,
-        node: &tree_sitter::Node,
-        source: &'a str,
-    ) -> Option<String> {
+    fn find_child_text_for_result(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "func_result" {
@@ -336,7 +330,7 @@ impl GoSupport {
         None
     }
 
-    fn find_method_params<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<String> {
+    fn find_method_params(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
         let mut cursor = node.walk();
         let mut found_receiver = false;
         for child in node.children(&mut cursor) {
