@@ -29,6 +29,12 @@ A blazing-fast CLI for creating LLM context from your entire codebase.
 
 Tired of manually copy-pasting files into your LLM prompts? Context Builder automates this tedious process, creating a single, clean, and context-rich markdown file from any directory.
 
+<div align="center">
+
+![demo](docs/demo.gif)
+
+</div>
+
 ---
 
 ## Why Context Builder?
