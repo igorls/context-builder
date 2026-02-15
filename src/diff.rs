@@ -52,6 +52,17 @@ pub fn generate_diff(old_content: &str, new_content: &str) -> String {
         if group_index > 0 {
             out.push_str("  ...\n");
         }
+        // Emit standard unified diff hunk header for positional context
+        if let (Some(first), Some(last)) = (group.first(), group.last()) {
+            let old_start = first.old_range().start + 1;
+            let old_len = last.old_range().end - first.old_range().start;
+            let new_start = first.new_range().start + 1;
+            let new_len = last.new_range().end - first.new_range().start;
+            out.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                old_start, old_len, new_start, new_len
+            ));
+        }
         for op in group {
             for change in diff.iter_changes(op) {
                 let tag = change.tag();
@@ -124,6 +135,17 @@ fn unified_no_header(old: &str, new: &str, context_lines: usize) -> String {
     for (group_index, group) in grouped.iter().enumerate() {
         if group_index > 0 {
             out.push_str("  ...\n");
+        }
+        // Emit standard unified diff hunk header for positional context
+        if let (Some(first), Some(last)) = (group.first(), group.last()) {
+            let old_start = first.old_range().start + 1;
+            let old_len = last.old_range().end - first.old_range().start;
+            let new_start = first.new_range().start + 1;
+            let new_len = last.new_range().end - first.new_range().start;
+            out.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                old_start, old_len, new_start, new_len
+            ));
         }
         for op in group {
             for change in diff.iter_changes(op) {

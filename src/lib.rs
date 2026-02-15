@@ -460,7 +460,17 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     truncate_at -= 1;
                 }
                 final_doc.truncate(truncate_at);
-                final_doc.push_str("\n\n---\n\n");
+
+                // Close any open markdown code fence to prevent LLMs from
+                // interpreting the truncation notice as part of a code block.
+                // Count unmatched ``` fences — if odd, we're inside a block.
+                let fence_count = final_doc.matches("\n```").count()
+                    + if final_doc.starts_with("```") { 1 } else { 0 };
+                if fence_count % 2 != 0 {
+                    final_doc.push_str("\n```\n");
+                }
+
+                final_doc.push_str("\n---\n\n");
                 final_doc.push_str(&format!(
                     "_Output truncated: exceeded {} token budget (estimated)._\n",
                     max_tokens

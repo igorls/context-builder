@@ -39,9 +39,8 @@ pub fn generate_markdown(
         let current_dir = std::env::current_dir()?;
         current_dir
             .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
+            .and_then(|n| n.to_str())
+            .unwrap_or_else(|| current_dir.to_str().unwrap_or("project"))
             .to_string()
     } else {
         input_dir.to_string()

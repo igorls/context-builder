@@ -166,6 +166,49 @@ pub fn collect_files(
 
     // Build overrides for custom ignore patterns
     let mut override_builder = OverrideBuilder::new(base_path);
+
+    // Hardcoded auto-ignores for common heavy directories that should NEVER be
+    // included, even when there's no .git directory (so .gitignore isn't read).
+    // Without these, projects missing .git can produce million-line outputs
+    // from dependency trees.
+    //
+    // IMPORTANT: These are added FIRST so that user ignores can override them.
+    // The ignore crate uses "last-match-wins" semantics, so a user can whitelist
+    // a legitimate "vendor" or "build" dir by passing it as a filter pattern.
+    //
+    // IMPORTANT: Patterns must NOT contain a slash — the ignore crate anchors
+    // slash-containing patterns to the root, so `!dir/**` would only match
+    // top-level dirs, missing nested ones like `apps/web/node_modules/`.
+    let default_ignores = [
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "vendor",  // Go, PHP, Ruby
+        ".bundle", // Ruby
+        "bower_components",
+        ".next",       // Next.js build output
+        ".nuxt",       // Nuxt build output
+        ".svelte-kit", // SvelteKit build output
+        ".angular",    // Angular cache
+        "dist",        // Common build output
+        "build",       // Common build output
+        ".gradle",     // Gradle cache
+        ".cargo",      // Cargo registry cache
+    ];
+    for dir in &default_ignores {
+        // No slash in pattern → matches at any depth (not root-anchored)
+        let pattern = format!("!{}", dir);
+        if let Err(e) = override_builder.add(&pattern) {
+            log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
+        }
+    }
+
+    // User-specified ignore patterns (added AFTER defaults so they can override)
     for pattern in ignores {
         // Attention: Confusing pattern ahead!
         // Add the pattern to the override builder with ! prefix to ignore matching files.
@@ -192,38 +235,6 @@ pub fn collect_files(
             io::ErrorKind::InvalidInput,
             format!("Failed to add config ignore: {}", e),
         ));
-    }
-
-    // Hardcoded auto-ignores for common heavy directories that should NEVER be
-    // included, even when there's no .git directory (so .gitignore isn't read).
-    // Without these, projects missing .git can produce million-line outputs
-    // from dependency trees.
-    let default_ignores = [
-        "node_modules",
-        "__pycache__",
-        ".venv",
-        "venv",
-        ".tox",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        "vendor",  // Go, PHP, Ruby
-        ".bundle", // Ruby
-        "bower_components",
-        ".next",       // Next.js build output
-        ".nuxt",       // Nuxt build output
-        ".svelte-kit", // SvelteKit build output
-        ".angular",    // Angular cache
-        "dist",        // Common build output
-        "build",       // Common build output
-        ".gradle",     // Gradle cache
-        ".cargo",      // Cargo registry cache
-    ];
-    for dir in &default_ignores {
-        let pattern = format!("!{}/**", dir);
-        if let Err(e) = override_builder.add(&pattern) {
-            log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
-        }
     }
 
     let overrides = override_builder.build().map_err(|e| {

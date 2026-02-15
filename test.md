@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 40c4383e078079b5
+Content hash: acb17e344419dc21
 
 ## File Tree Structure
 
@@ -469,8 +469,8 @@ required-features = ["samples-bin"]
 
 ### File: `README.md`
 
-- Size: 9822 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 10641 bytes
+- Modified: 2026-02-15 04:23:13 UTC
 
 ```markdown
 <div align="center">
@@ -519,7 +519,13 @@ It's a command-line utility that recursively processes directories and creates c
   Processes thousands of files in seconds by leveraging all available CPU cores.
 
 - 🧠 **Smart & Efficient File Discovery:**
-  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal.
+  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) even without a `.git` directory.
+
+- 📊 **Relevance-Based File Ordering:**
+  Files appear in LLM-optimized order: config & project docs first, then source code (entry points before helpers), tests, documentation, build/CI files, and lockfiles last. This helps LLMs build a mental model faster.
+
+- 💰 **Context Budgeting (`--max-tokens`):**
+  Cap token output to fit your model's context window. Warns when output exceeds 128K tokens with actionable suggestions.
 
 - 💾 **Memory-Efficient Streaming:**
   Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
@@ -530,15 +536,8 @@ It's a command-line utility that recursively processes directories and creates c
 - 🔍 **Powerful Filtering & Preview:**
   Easily include only the file extensions you need and use the instant `--preview` mode to see what will be processed.
 
-
-
  - ⚙️ **Configuration-First:**
-
-
   Use a `context-builder.toml` file to store your preferences for consistent, repeatable outputs. Initialize a new config file with `--init`, which will detect the major file types in your project (respecting `.gitignore` patterns) and suggest appropriate filters.
-
-
-
 
 - 🔁 **Automatic Per-File Diffs:**
   When enabled, automatically generates a clean, noise-reduced diff showing what changed between snapshots.
@@ -632,6 +631,9 @@ context-builder -f rs -f toml
 # Ignore specific folders/files by name
 context-builder -i target -i node_modules -i .git
 
+# Cap output to a token budget (prevents context overflow)
+context-builder --max-tokens 100000
+
 # Preview mode (shows the file tree without generating output)
 context-builder --preview
 
@@ -653,7 +655,7 @@ context-builder --diff-only
 context-builder --clear-cache
 
 # Combine multiple options for a powerful workflow
-context-builder -d ./src -f rs -f toml -i tests --line-numbers -o rust_context.md
+context-builder -d ./src -f rs -f toml -i tests --line-numbers --max-tokens 100000 -o rust_context.md
 ```
 
 ---
@@ -739,14 +741,15 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `-o, --output <FILE>` - Output file path (default: `output.md`).
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
+- `--max-tokens <N>` - Maximum token budget for the output. Files are truncated/skipped when exceeded.
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
 - `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
 - `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
+- `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
-- `-V, --version` - Show version information.
 ---
 
 ## Token Counting
@@ -776,8 +779,8 @@ This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** f
 
 ### File: `src/lib.rs`
 
-- Size: 50042 bytes
-- Modified: 2026-02-15 04:11:45 UTC
+- Size: 50528 bytes
+- Modified: 2026-02-15 04:50:54 UTC
 
 ```rust
 use clap::{CommandFactory, Parser};
@@ -1242,7 +1245,17 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     truncate_at -= 1;
                 }
                 final_doc.truncate(truncate_at);
-                final_doc.push_str("\n\n---\n\n");
+
+                // Close any open markdown code fence to prevent LLMs from
+                // interpreting the truncation notice as part of a code block.
+                // Count unmatched ``` fences — if odd, we're inside a block.
+                let fence_count = final_doc.matches("\n```").count()
+                    + if final_doc.starts_with("```") { 1 } else { 0 };
+                if fence_count % 2 != 0 {
+                    final_doc.push_str("\n```\n");
+                }
+
+                final_doc.push_str("\n---\n\n");
                 final_doc.push_str(&format!(
                     "_Output truncated: exceeded {} token budget (estimated)._\n",
                     max_tokens
@@ -3712,8 +3725,8 @@ mod tests {
 
 ### File: `src/diff.rs`
 
-- Size: 20099 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 21233 bytes
+- Modified: 2026-02-15 04:50:34 UTC
 
 ```rust
 use similar::{ChangeTag, TextDiff};
@@ -3769,6 +3782,17 @@ pub fn generate_diff(old_content: &str, new_content: &str) -> String {
     for (group_index, group) in grouped.iter().enumerate() {
         if group_index > 0 {
             out.push_str("  ...\n");
+        }
+        // Emit standard unified diff hunk header for positional context
+        if let (Some(first), Some(last)) = (group.first(), group.last()) {
+            let old_start = first.old_range().start + 1;
+            let old_len = last.old_range().end - first.old_range().start;
+            let new_start = first.new_range().start + 1;
+            let new_len = last.new_range().end - first.new_range().start;
+            out.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                old_start, old_len, new_start, new_len
+            ));
         }
         for op in group {
             for change in diff.iter_changes(op) {
@@ -3842,6 +3866,17 @@ fn unified_no_header(old: &str, new: &str, context_lines: usize) -> String {
     for (group_index, group) in grouped.iter().enumerate() {
         if group_index > 0 {
             out.push_str("  ...\n");
+        }
+        // Emit standard unified diff hunk header for positional context
+        if let (Some(first), Some(last)) = (group.first(), group.last()) {
+            let old_start = first.old_range().start + 1;
+            let old_len = last.old_range().end - first.old_range().start;
+            let new_start = first.new_range().start + 1;
+            let new_len = last.new_range().end - first.new_range().start;
+            out.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                old_start, old_len, new_start, new_len
+            ));
         }
         for op in group {
             for change in diff.iter_changes(op) {
@@ -4282,8 +4317,8 @@ mod tests {
 
 ### File: `src/file_utils.rs`
 
-- Size: 22914 bytes
-- Modified: 2026-02-15 01:55:14 UTC
+- Size: 23556 bytes
+- Modified: 2026-02-15 04:50:12 UTC
 
 ```rust
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
@@ -4454,6 +4489,49 @@ pub fn collect_files(
 
     // Build overrides for custom ignore patterns
     let mut override_builder = OverrideBuilder::new(base_path);
+
+    // Hardcoded auto-ignores for common heavy directories that should NEVER be
+    // included, even when there's no .git directory (so .gitignore isn't read).
+    // Without these, projects missing .git can produce million-line outputs
+    // from dependency trees.
+    //
+    // IMPORTANT: These are added FIRST so that user ignores can override them.
+    // The ignore crate uses "last-match-wins" semantics, so a user can whitelist
+    // a legitimate "vendor" or "build" dir by passing it as a filter pattern.
+    //
+    // IMPORTANT: Patterns must NOT contain a slash — the ignore crate anchors
+    // slash-containing patterns to the root, so `!dir/**` would only match
+    // top-level dirs, missing nested ones like `apps/web/node_modules/`.
+    let default_ignores = [
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "vendor",  // Go, PHP, Ruby
+        ".bundle", // Ruby
+        "bower_components",
+        ".next",       // Next.js build output
+        ".nuxt",       // Nuxt build output
+        ".svelte-kit", // SvelteKit build output
+        ".angular",    // Angular cache
+        "dist",        // Common build output
+        "build",       // Common build output
+        ".gradle",     // Gradle cache
+        ".cargo",      // Cargo registry cache
+    ];
+    for dir in &default_ignores {
+        // No slash in pattern → matches at any depth (not root-anchored)
+        let pattern = format!("!{}", dir);
+        if let Err(e) = override_builder.add(&pattern) {
+            log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
+        }
+    }
+
+    // User-specified ignore patterns (added AFTER defaults so they can override)
     for pattern in ignores {
         // Attention: Confusing pattern ahead!
         // Add the pattern to the override builder with ! prefix to ignore matching files.
@@ -4480,38 +4558,6 @@ pub fn collect_files(
             io::ErrorKind::InvalidInput,
             format!("Failed to add config ignore: {}", e),
         ));
-    }
-
-    // Hardcoded auto-ignores for common heavy directories that should NEVER be
-    // included, even when there's no .git directory (so .gitignore isn't read).
-    // Without these, projects missing .git can produce million-line outputs
-    // from dependency trees.
-    let default_ignores = [
-        "node_modules",
-        "__pycache__",
-        ".venv",
-        "venv",
-        ".tox",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        "vendor",  // Go, PHP, Ruby
-        ".bundle", // Ruby
-        "bower_components",
-        ".next",       // Next.js build output
-        ".nuxt",       // Nuxt build output
-        ".svelte-kit", // SvelteKit build output
-        ".angular",    // Angular cache
-        "dist",        // Common build output
-        "build",       // Common build output
-        ".gradle",     // Gradle cache
-        ".cargo",      // Cargo registry cache
-    ];
-    for dir in &default_ignores {
-        let pattern = format!("!{}/**", dir);
-        if let Err(e) = override_builder.add(&pattern) {
-            log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
-        }
     }
 
     let overrides = override_builder.build().map_err(|e| {
@@ -4918,8 +4964,8 @@ mod tests {
 
 ### File: `src/markdown.rs`
 
-- Size: 40252 bytes
-- Modified: 2026-02-15 00:33:58 UTC
+- Size: 40298 bytes
+- Modified: 2026-02-15 04:51:07 UTC
 
 ```rust
 use chrono::Utc;
@@ -4963,9 +5009,8 @@ pub fn generate_markdown(
         let current_dir = std::env::current_dir()?;
         current_dir
             .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
+            .and_then(|n| n.to_str())
+            .unwrap_or_else(|| current_dir.to_str().unwrap_or("project"))
             .to_string()
     } else {
         input_dir.to_string()
