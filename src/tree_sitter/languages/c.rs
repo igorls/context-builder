@@ -13,7 +13,7 @@ pub struct CSupport;
 #[cfg(feature = "tree-sitter-c")]
 impl CSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_c::language()
+        tree_sitter_c::LANGUAGE.into()
     }
 }
 

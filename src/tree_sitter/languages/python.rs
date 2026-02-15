@@ -13,7 +13,7 @@ pub struct PythonSupport;
 #[cfg(feature = "tree-sitter-python")]
 impl PythonSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_python::language()
+        tree_sitter_python::LANGUAGE.into()
     }
 }
 

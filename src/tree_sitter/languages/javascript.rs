@@ -10,7 +10,7 @@ pub struct JavaScriptSupport;
 
 impl JavaScriptSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_javascript::language()
+        tree_sitter_javascript::LANGUAGE.into()
     }
 }
 

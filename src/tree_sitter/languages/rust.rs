@@ -10,7 +10,7 @@ pub struct RustSupport;
 
 impl RustSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_rust::language()
+        tree_sitter_rust::LANGUAGE.into()
     }
 }
 

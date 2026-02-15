@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: 64cd11dd3807c04a
+Content hash: c2def09bf3360b73
 
 ## File Tree Structure
 
@@ -424,8 +424,8 @@ All notable changes to this project will be documented in this file.
 
 ### File: `Cargo.toml`
 
-- Size: 2905 bytes
-- Modified: 2026-02-15 06:44:58 UTC
+- Size: 2832 bytes
+- Modified: 2026-02-15 08:08:40 UTC
 
 ```toml
 [package]
@@ -464,16 +464,15 @@ walkdir = "2.5.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Tree-sitter dependencies (feature-gated)
-# Note: tree-sitter 0.22.x requires grammars compiled for ABI version 14
-tree-sitter = { version = "0.22", optional = true }
-tree-sitter-rust = { version = "0.21", optional = true }
-tree-sitter-javascript = { version = "0.21", optional = true }
-tree-sitter-typescript = { version = "0.21", optional = true }
-tree-sitter-python = { version = "0.21", optional = true }
-tree-sitter-go = { version = "0.21", optional = true }
-tree-sitter-java = { version = "0.21", optional = true }
-tree-sitter-c = { version = "0.21", optional = true }
-tree-sitter-cpp = { version = "0.21", optional = true }
+tree-sitter = { version = "0.24", optional = true }
+tree-sitter-rust = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-c = { version = "0.23", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
 
 [features]
 default = ["parallel"]
@@ -5476,8 +5475,8 @@ mod tests {
 
 ### File: `src/markdown.rs`
 
-- Size: 45314 bytes
-- Modified: 2026-02-15 08:05:22 UTC
+- Size: 45110 bytes
+- Modified: 2026-02-15 08:07:07 UTC
 
 ```rust
 use chrono::Utc;
@@ -6068,39 +6067,39 @@ fn write_tree_sitter_enrichment(
         if ts_config.structure
             && let Some(structure) =
                 crate::tree_sitter::extract_structure_for_file(content, extension)
-            {
-                let summary =
-                    crate::tree_sitter::structure::format_structure_as_markdown(&structure);
-                if !summary.is_empty() {
-                    writeln!(output)?;
-                    write!(output, "{}", summary)?;
-                }
+        {
+            let summary = crate::tree_sitter::structure::format_structure_as_markdown(&structure);
+            if !summary.is_empty() {
+                writeln!(output)?;
+                write!(output, "{}", summary)?;
             }
+        }
 
         if ts_config.signatures
             && let Some(signatures) =
                 crate::tree_sitter::extract_signatures_for_file(content, extension, vis_filter)
-                && !signatures.is_empty() {
-                    let language = match extension {
-                        "rs" => "rust",
-                        "js" | "mjs" | "cjs" => "javascript",
-                        "ts" | "tsx" | "mts" | "cts" => "typescript",
-                        "py" | "pyw" => "python",
-                        "go" => "go",
-                        "java" => "java",
-                        "c" | "h" => "c",
-                        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
-                        _ => extension,
-                    };
-                    writeln!(output)?;
-                    writeln!(output, "**Signatures:**")?;
-                    writeln!(output)?;
-                    let formatted = crate::tree_sitter::signatures::format_signatures_as_markdown(
-                        &signatures,
-                        language,
-                    );
-                    write!(output, "{}", formatted)?;
-                }
+            && !signatures.is_empty()
+        {
+            let language = match extension {
+                "rs" => "rust",
+                "js" | "mjs" | "cjs" => "javascript",
+                "ts" | "tsx" | "mts" | "cts" => "typescript",
+                "py" | "pyw" => "python",
+                "go" => "go",
+                "java" => "java",
+                "c" | "h" => "c",
+                "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
+                _ => extension,
+            };
+            writeln!(output)?;
+            writeln!(output, "**Signatures:**")?;
+            writeln!(output)?;
+            let formatted = crate::tree_sitter::signatures::format_signatures_as_markdown(
+                &signatures,
+                language,
+            );
+            write!(output, "{}", formatted)?;
+        }
     }
 
     #[cfg(not(feature = "tree-sitter-base"))]
@@ -8331,8 +8330,8 @@ pub trait LanguageSupport: Send + Sync {
 
 ### File: `src/tree_sitter/languages/c.rs`
 
-- Size: 10332 bytes
-- Modified: 2026-02-15 08:05:22 UTC
+- Size: 10337 bytes
+- Modified: 2026-02-15 08:10:25 UTC
 
 ```rust
 //! C language support for tree-sitter.
@@ -8350,7 +8349,7 @@ pub struct CSupport;
 #[cfg(feature = "tree-sitter-c")]
 impl CSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_c::language()
+        tree_sitter_c::LANGUAGE.into()
     }
 }
 
@@ -8690,8 +8689,8 @@ void hello(const char* name) {
 
 ### File: `src/tree_sitter/languages/cpp.rs`
 
-- Size: 12065 bytes
-- Modified: 2026-02-15 08:05:51 UTC
+- Size: 12070 bytes
+- Modified: 2026-02-15 08:10:27 UTC
 
 ```rust
 //! C++ language support for tree-sitter.
@@ -8709,7 +8708,7 @@ pub struct CppSupport;
 #[cfg(feature = "tree-sitter-cpp")]
 impl CppSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_cpp::language()
+        tree_sitter_cpp::LANGUAGE.into()
     }
 }
 
@@ -9088,8 +9087,8 @@ public:
 
 ### File: `src/tree_sitter/languages/go.rs`
 
-- Size: 13320 bytes
-- Modified: 2026-02-15 08:05:22 UTC
+- Size: 13186 bytes
+- Modified: 2026-02-15 08:10:21 UTC
 
 ```rust
 //! Go language support for tree-sitter.
@@ -9107,7 +9106,7 @@ pub struct GoSupport;
 #[cfg(feature = "tree-sitter-go")]
 impl GoSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_go::language()
+        tree_sitter_go::LANGUAGE.into()
     }
 }
 
@@ -9213,18 +9212,19 @@ impl GoSupport {
             "type_spec" => {
                 // Check what type it is
                 if let Some(parent) = node.parent()
-                    && parent.kind() == "type_declaration" {
-                        // Could be struct, interface, or type alias
-                        let mut cursor = node.walk();
-                        for child in node.children(&mut cursor) {
-                            match child.kind() {
-                                "struct_type" => structure.structs += 1,
-                                "interface_type" => structure.interfaces += 1,
-                                "type_identifier" => structure.type_aliases += 1,
-                                _ => {}
-                            }
+                    && parent.kind() == "type_declaration"
+                {
+                    // Could be struct, interface, or type alias
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        match child.kind() {
+                            "struct_type" => structure.structs += 1,
+                            "interface_type" => structure.interfaces += 1,
+                            "type_identifier" => structure.type_aliases += 1,
+                            _ => {}
                         }
                     }
+                }
             }
             "import_declaration" => {
                 structure.imports.push("import".to_string());
@@ -9355,33 +9355,34 @@ impl GoSupport {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "type_spec"
-                && let Some(name) = self.find_child_text(&child, "type_identifier", source) {
-                    let is_exported = self.is_exported(&name);
+                && let Some(name) = self.find_child_text(&child, "type_identifier", source)
+            {
+                let is_exported = self.is_exported(&name);
 
-                    if visibility == Visibility::Public && !is_exported {
-                        continue;
-                    }
-                    if visibility == Visibility::Private && is_exported {
-                        continue;
-                    }
-
-                    let kind = self.get_type_kind(&child);
-                    let full_sig = format!("type {} {}", name, kind);
-
-                    signatures.push(Signature {
-                        kind,
-                        name,
-                        params: None,
-                        return_type: None,
-                        visibility: if is_exported {
-                            Visibility::Public
-                        } else {
-                            Visibility::Private
-                        },
-                        line_number: child.start_position().row + 1,
-                        full_signature: full_sig,
-                    });
+                if visibility == Visibility::Public && !is_exported {
+                    continue;
                 }
+                if visibility == Visibility::Private && is_exported {
+                    continue;
+                }
+
+                let kind = self.get_type_kind(&child);
+                let full_sig = format!("type {} {}", name, kind);
+
+                signatures.push(Signature {
+                    kind,
+                    name,
+                    params: None,
+                    return_type: None,
+                    visibility: if is_exported {
+                        Visibility::Public
+                    } else {
+                        Visibility::Private
+                    },
+                    line_number: child.start_position().row + 1,
+                    full_signature: full_sig,
+                });
+            }
         }
     }
 
@@ -9412,11 +9413,7 @@ impl GoSupport {
         None
     }
 
-    fn find_child_text_for_result(
-        &self,
-        node: &tree_sitter::Node,
-        source: &str,
-    ) -> Option<String> {
+    fn find_child_text_for_result(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "func_result" {
@@ -9540,8 +9537,8 @@ type User struct {
 
 ### File: `src/tree_sitter/languages/java.rs`
 
-- Size: 12574 bytes
-- Modified: 2026-02-15 08:05:53 UTC
+- Size: 12548 bytes
+- Modified: 2026-02-15 08:10:23 UTC
 
 ```rust
 //! Java language support for tree-sitter.
@@ -9559,7 +9556,7 @@ pub struct JavaSupport;
 #[cfg(feature = "tree-sitter-java")]
 impl JavaSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_java::language()
+        tree_sitter_java::LANGUAGE.into()
     }
 }
 
@@ -9892,11 +9889,7 @@ impl JavaSupport {
         None
     }
 
-    fn find_child_text_for_type(
-        &self,
-        node: &tree_sitter::Node,
-        source: &str,
-    ) -> Option<String> {
+    fn find_child_text_for_type(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "void_type"
@@ -9978,8 +9971,8 @@ public class HelloWorld {
 
 ### File: `src/tree_sitter/languages/javascript.rs`
 
-- Size: 9992 bytes
-- Modified: 2026-02-15 08:05:22 UTC
+- Size: 9969 bytes
+- Modified: 2026-02-15 08:10:03 UTC
 
 ```rust
 //! JavaScript language support for tree-sitter.
@@ -9994,7 +9987,7 @@ pub struct JavaScriptSupport;
 
 impl JavaScriptSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_javascript::language()
+        tree_sitter_javascript::LANGUAGE.into()
     }
 }
 
@@ -10167,18 +10160,19 @@ impl JavaScriptSupport {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "variable_declarator"
-                && let Some(name) = self.find_child_text(&child, "identifier", source) {
-                    let full_signature = format!("const {}", &name);
-                    signatures.push(Signature {
-                        kind: SignatureKind::Constant,
-                        name,
-                        params: None,
-                        return_type: None,
-                        visibility: Visibility::All,
-                        line_number: child.start_position().row + 1,
-                        full_signature,
-                    });
-                }
+                && let Some(name) = self.find_child_text(&child, "identifier", source)
+            {
+                let full_signature = format!("const {}", &name);
+                signatures.push(Signature {
+                    kind: SignatureKind::Constant,
+                    name,
+                    params: None,
+                    return_type: None,
+                    visibility: Visibility::All,
+                    line_number: child.start_position().row + 1,
+                    full_signature,
+                });
+            }
         }
     }
 
@@ -10195,9 +10189,10 @@ impl JavaScriptSupport {
                     signatures.push(sig);
                 }
             } else if child.kind() == "class_declaration"
-                && let Some(sig) = self.extract_class_signature(source, &child) {
-                    signatures.push(sig);
-                }
+                && let Some(sig) = self.extract_class_signature(source, &child)
+            {
+                signatures.push(sig);
+            }
         }
     }
 
@@ -10315,8 +10310,8 @@ class User {
 
 ### File: `src/tree_sitter/languages/python.rs`
 
-- Size: 9284 bytes
-- Modified: 2026-02-15 08:05:22 UTC
+- Size: 9289 bytes
+- Modified: 2026-02-15 08:10:19 UTC
 
 ```rust
 //! Python language support for tree-sitter.
@@ -10334,7 +10329,7 @@ pub struct PythonSupport;
 #[cfg(feature = "tree-sitter-python")]
 impl PythonSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_python::language()
+        tree_sitter_python::LANGUAGE.into()
     }
 }
 
@@ -10638,8 +10633,8 @@ class User:
 
 ### File: `src/tree_sitter/languages/rust.rs`
 
-- Size: 18122 bytes
-- Modified: 2026-02-15 08:05:22 UTC
+- Size: 18127 bytes
+- Modified: 2026-02-15 08:10:01 UTC
 
 ```rust
 //! Rust language support for tree-sitter.
@@ -10654,7 +10649,7 @@ pub struct RustSupport;
 
 impl RustSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_rust::language()
+        tree_sitter_rust::LANGUAGE.into()
     }
 }
 
@@ -11292,8 +11287,8 @@ fn third() -> i32 {
 
 ### File: `src/tree_sitter/languages/typescript.rs`
 
-- Size: 13625 bytes
-- Modified: 2026-02-15 08:05:22 UTC
+- Size: 13571 bytes
+- Modified: 2026-02-15 08:10:06 UTC
 
 ```rust
 //! TypeScript language support for tree-sitter.
@@ -11312,7 +11307,7 @@ pub struct TypeScriptSupport;
 impl TypeScriptSupport {
     fn get_language() -> tree_sitter::Language {
         // Use TypeScript grammar (not TSX)
-        unsafe { tree_sitter_typescript::language_typescript() }
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
     }
 }
 
@@ -11574,22 +11569,23 @@ impl TypeScriptSupport {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "variable_declarator"
-                && let Some(name) = self.find_child_text(&child, "identifier", source) {
-                    let type_ann = self.find_child_text(&child, "type_annotation", source);
-                    let full_sig = match &type_ann {
-                        Some(t) => format!("const {} {}", name, t),
-                        None => format!("const {}", name),
-                    };
-                    signatures.push(Signature {
-                        kind: SignatureKind::Constant,
-                        name,
-                        params: None,
-                        return_type: type_ann,
-                        visibility: Visibility::All,
-                        line_number: child.start_position().row + 1,
-                        full_signature: full_sig,
-                    });
-                }
+                && let Some(name) = self.find_child_text(&child, "identifier", source)
+            {
+                let type_ann = self.find_child_text(&child, "type_annotation", source);
+                let full_sig = match &type_ann {
+                    Some(t) => format!("const {} {}", name, t),
+                    None => format!("const {}", name),
+                };
+                signatures.push(Signature {
+                    kind: SignatureKind::Constant,
+                    name,
+                    params: None,
+                    return_type: type_ann,
+                    visibility: Visibility::All,
+                    line_number: child.start_position().row + 1,
+                    full_signature: full_sig,
+                });
+            }
         }
     }
 

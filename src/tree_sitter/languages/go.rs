@@ -13,7 +13,7 @@ pub struct GoSupport;
 #[cfg(feature = "tree-sitter-go")]
 impl GoSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_go::language()
+        tree_sitter_go::LANGUAGE.into()
     }
 }
 

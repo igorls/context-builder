@@ -13,7 +13,7 @@ pub struct CppSupport;
 #[cfg(feature = "tree-sitter-cpp")]
 impl CppSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_cpp::language()
+        tree_sitter_cpp::LANGUAGE.into()
     }
 }
 

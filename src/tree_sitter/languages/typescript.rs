@@ -14,7 +14,7 @@ pub struct TypeScriptSupport;
 impl TypeScriptSupport {
     fn get_language() -> tree_sitter::Language {
         // Use TypeScript grammar (not TSX)
-        tree_sitter_typescript::language_typescript()
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
     }
 }
 

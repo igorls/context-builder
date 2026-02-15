@@ -13,7 +13,7 @@ pub struct JavaSupport;
 #[cfg(feature = "tree-sitter-java")]
 impl JavaSupport {
     fn get_language() -> tree_sitter::Language {
-        tree_sitter_java::language()
+        tree_sitter_java::LANGUAGE.into()
     }
 }
 
