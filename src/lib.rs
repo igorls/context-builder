@@ -511,6 +511,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 );
             }
             println!("Processing time: {:.2?}", duration);
+
+            // Warn about context window overflow
+            let output_bytes = final_doc.len();
+            print_context_window_warning(output_bytes, final_args.max_tokens);
         }
         return Ok(());
     }
@@ -533,9 +537,49 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent {
         println!("Documentation created successfully: {}", final_args.output);
         println!("Processing time: {:.2?}", duration);
+
+        // Warn about context window overflow
+        let output_bytes = fs::metadata(&final_args.output)
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        print_context_window_warning(output_bytes, final_args.max_tokens);
     }
 
     Ok(())
+}
+
+/// Print context window overflow warnings with actionable recommendations.
+/// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
+/// exceeds 128K tokens — beyond this size, context quality degrades
+/// significantly for most LLM use cases.
+fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) {
+    let estimated_tokens = output_bytes / 4;
+
+    println!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+
+    // If the user already set --max-tokens, they're managing their budget
+    if max_tokens.is_some() {
+        return;
+    }
+
+    const RECOMMENDED_LIMIT: usize = 128_000;
+
+    if estimated_tokens <= RECOMMENDED_LIMIT {
+        return;
+    }
+
+    eprintln!();
+    eprintln!(
+        "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
+        estimated_tokens / 1000
+    );
+    eprintln!("   Large contexts degrade response quality. Consider narrowing the scope:");
+    eprintln!();
+    eprintln!("   • --max-tokens 100000    Cap output to a token budget");
+    eprintln!("   • --filter rs,toml       Include only specific file types");
+    eprintln!("   • --ignore docs,assets   Exclude directories by name");
+    eprintln!("   • --token-count          Preview size without generating");
+    eprintln!();
 }
 
 /// Generate markdown document with diff annotations
