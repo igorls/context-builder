@@ -137,13 +137,9 @@ cargo install --path .
 
 ### Basic Usage
 
-
-
- # Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
-
- context-builder --init
-
-
+```bash
+# Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
+context-builder --init
 
 # Process current directory and create output.md
 context-builder
