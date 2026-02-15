@@ -87,46 +87,33 @@ It's a command-line utility that recursively processes directories and creates c
 
 ## Installation
 
-### From crates.io (Recommended)
+### Quick Install (Linux/macOS)
+
+Pre-built binaries include full Tree-Sitter AST support (`tree-sitter-all`).
 
 ```bash
-cargo install context-builder
+curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-unknown-linux-gnu.tar.gz | sudo tar xz -C /usr/local/bin
 ```
 
-With tree-sitter AST support (signatures, structure analysis):
+<details>
+<summary>macOS / Windows / other platforms</summary>
+
+```bash
+# macOS (Apple Silicon)
+curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-aarch64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
+
+# macOS (Intel)
+curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
+```
+
+Windows: download `context-builder-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
+
+</details>
+
+### From crates.io
+
 ```bash
 cargo install context-builder --features tree-sitter-all
-```
-
-
-### If you don't have Rust installed
-
-Context Builder is distributed via crates.io. We do not ship pre-built binaries yet, so you need a Rust toolchain.
-
-
-#### Quick install (Linux/macOS):
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-Follow the prompt, then restart your shell
-
-#### Windows: https://www.rust-lang.org/tools/install
-
-After installation, ensure Cargo is on your PATH:
-
-```bash
-cargo --version
-```
-
-Then install Context Builder:
-```bash
-cargo install context-builder
-```
-
-Update later with:
-```bash
-cargo install context-builder --force
 ```
 
 ### From source
