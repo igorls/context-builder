@@ -92,7 +92,8 @@ impl CacheManager {
 
     /// Generate a hash from the configuration
     fn hash_config(config: &Config) -> String {
-        // Build a stable string representation of config for hashing
+        // Build a stable string representation of config for hashing.
+        // IMPORTANT: Must stay in sync with state.rs::compute_config_hash
         let mut config_str = String::new();
         if let Some(ref filters) = config.filter {
             config_str.push_str(&filters.join(","));
@@ -102,7 +103,10 @@ impl CacheManager {
             config_str.push_str(&ignores.join(","));
         }
         config_str.push('|');
-        config_str.push_str(&format!("{:?}", config.line_numbers));
+        config_str.push_str(&format!(
+            "{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines
+        ));
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
         format!("{:x}", hash)
     }

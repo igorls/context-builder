@@ -200,37 +200,6 @@ fn resolve_output_path(args: &mut Args, config: &Config, warnings: &mut Vec<Stri
     }
 }
 
-/// Check if CLI arguments have been explicitly set vs using defaults.
-/// This is a best-effort detection since clap doesn't provide this information directly.
-#[allow(dead_code)]
-fn detect_explicit_args() -> ExplicitArgs {
-    let args: Vec<String> = std::env::args().collect();
-
-    ExplicitArgs {
-        output: args.iter().any(|arg| arg == "-o" || arg == "--output"),
-        filter: args.iter().any(|arg| arg == "-f" || arg == "--filter"),
-        ignore: args.iter().any(|arg| arg == "-i" || arg == "--ignore"),
-        line_numbers: args.iter().any(|arg| arg == "--line-numbers"),
-        preview: args.iter().any(|arg| arg == "--preview"),
-        token_count: args.iter().any(|arg| arg == "--token-count"),
-        yes: args.iter().any(|arg| arg == "-y" || arg == "--yes"),
-        diff_only: args.iter().any(|arg| arg == "--diff-only"),
-    }
-}
-
-/// Tracks which CLI arguments were explicitly provided vs using defaults
-#[allow(dead_code)]
-struct ExplicitArgs {
-    output: bool,
-    filter: bool,
-    ignore: bool,
-    line_numbers: bool,
-    preview: bool,
-    token_count: bool,
-    yes: bool,
-    diff_only: bool,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

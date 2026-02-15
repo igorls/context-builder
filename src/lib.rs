@@ -452,7 +452,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
         if let Some(max_tokens) = final_args.max_tokens {
-            let max_bytes = max_tokens * 4;
+            let max_bytes = max_tokens.saturating_mul(4);
             if final_doc.len() > max_bytes {
                 // Truncate at a valid UTF-8 boundary
                 let mut truncate_at = max_bytes;

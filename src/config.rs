@@ -80,7 +80,16 @@ pub fn load_config() -> Option<Config> {
     let config_path = Path::new("context-builder.toml");
     if config_path.exists() {
         let content = fs::read_to_string(config_path).ok()?;
-        toml::from_str(&content).ok()
+        match toml::from_str(&content) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Failed to parse context-builder.toml: {}. Config will be ignored.",
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     }
@@ -91,8 +100,18 @@ pub fn load_config() -> Option<Config> {
 pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
     let config_path = project_root.join("context-builder.toml");
     if config_path.exists() {
-        let content = fs::read_to_string(config_path).ok()?;
-        toml::from_str(&content).ok()
+        let content = fs::read_to_string(&config_path).ok()?;
+        match toml::from_str(&content) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Failed to parse {}: {}. Config will be ignored.",
+                    config_path.display(),
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     }

@@ -1,7 +1,7 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: acb17e344419dc21
+Content hash: 96161218ff9a7fe4
 
 ## File Tree Structure
 
@@ -12,6 +12,7 @@ Content hash: acb17e344419dc21
 - 📄 DEVELOPMENT.md
 - 📄 LICENSE
 - 📄 README.md
+- 📄 SKILL.md
 - 📁 benches
   - 📄 context_bench.rs
 - 📁 docs
@@ -779,8 +780,8 @@ This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** f
 
 ### File: `src/lib.rs`
 
-- Size: 50528 bytes
-- Modified: 2026-02-15 04:50:54 UTC
+- Size: 50542 bytes
+- Modified: 2026-02-15 06:01:31 UTC
 
 ```rust
 use clap::{CommandFactory, Parser};
@@ -1237,7 +1238,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
         if let Some(max_tokens) = final_args.max_tokens {
-            let max_bytes = max_tokens * 4;
+            let max_bytes = max_tokens.saturating_mul(4);
             if final_doc.len() > max_bytes {
                 // Truncate at a valid UTF-8 boundary
                 let mut truncate_at = max_bytes;
@@ -2252,8 +2253,8 @@ fn main() -> io::Result<()> {
 
 ### File: `src/cache.rs`
 
-- Size: 19309 bytes
-- Modified: 2026-02-14 22:08:51 UTC
+- Size: 19474 bytes
+- Modified: 2026-02-15 06:01:16 UTC
 
 ```rust
 //! Cache management for context-builder.
@@ -2350,7 +2351,8 @@ impl CacheManager {
 
     /// Generate a hash from the configuration
     fn hash_config(config: &Config) -> String {
-        // Build a stable string representation of config for hashing
+        // Build a stable string representation of config for hashing.
+        // IMPORTANT: Must stay in sync with state.rs::compute_config_hash
         let mut config_str = String::new();
         if let Some(ref filters) = config.filter {
             config_str.push_str(&filters.join(","));
@@ -2360,7 +2362,10 @@ impl CacheManager {
             config_str.push_str(&ignores.join(","));
         }
         config_str.push('|');
-        config_str.push_str(&format!("{:?}", config.line_numbers));
+        config_str.push_str(&format!(
+            "{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines
+        ));
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
         format!("{:x}", hash)
     }
@@ -3009,8 +3014,8 @@ mod tests {
 
 ### File: `src/config.rs`
 
-- Size: 7686 bytes
-- Modified: 2026-02-14 19:48:35 UTC
+- Size: 8266 bytes
+- Modified: 2026-02-15 06:01:24 UTC
 
 ```rust
 use serde::Deserialize;
@@ -3095,7 +3100,16 @@ pub fn load_config() -> Option<Config> {
     let config_path = Path::new("context-builder.toml");
     if config_path.exists() {
         let content = fs::read_to_string(config_path).ok()?;
-        toml::from_str(&content).ok()
+        match toml::from_str(&content) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Failed to parse context-builder.toml: {}. Config will be ignored.",
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     }
@@ -3106,8 +3120,18 @@ pub fn load_config() -> Option<Config> {
 pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
     let config_path = project_root.join("context-builder.toml");
     if config_path.exists() {
-        let content = fs::read_to_string(config_path).ok()?;
-        toml::from_str(&content).ok()
+        let content = fs::read_to_string(&config_path).ok()?;
+        match toml::from_str(&content) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Failed to parse {}: {}. Config will be ignored.",
+                    config_path.display(),
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     }
@@ -3252,8 +3276,8 @@ invalid_toml [
 
 ### File: `src/config_resolver.rs`
 
-- Size: 15339 bytes
-- Modified: 2026-02-14 19:56:05 UTC
+- Size: 14206 bytes
+- Modified: 2026-02-15 06:01:51 UTC
 
 ```rust
 //! Configuration resolution module for context-builder.
@@ -3456,37 +3480,6 @@ fn resolve_output_path(args: &mut Args, config: &Config, warnings: &mut Vec<Stri
             ));
         }
     }
-}
-
-/// Check if CLI arguments have been explicitly set vs using defaults.
-/// This is a best-effort detection since clap doesn't provide this information directly.
-#[allow(dead_code)]
-fn detect_explicit_args() -> ExplicitArgs {
-    let args: Vec<String> = std::env::args().collect();
-
-    ExplicitArgs {
-        output: args.iter().any(|arg| arg == "-o" || arg == "--output"),
-        filter: args.iter().any(|arg| arg == "-f" || arg == "--filter"),
-        ignore: args.iter().any(|arg| arg == "-i" || arg == "--ignore"),
-        line_numbers: args.iter().any(|arg| arg == "--line-numbers"),
-        preview: args.iter().any(|arg| arg == "--preview"),
-        token_count: args.iter().any(|arg| arg == "--token-count"),
-        yes: args.iter().any(|arg| arg == "-y" || arg == "--yes"),
-        diff_only: args.iter().any(|arg| arg == "--diff-only"),
-    }
-}
-
-/// Tracks which CLI arguments were explicitly provided vs using defaults
-#[allow(dead_code)]
-struct ExplicitArgs {
-    output: bool,
-    filter: bool,
-    ignore: bool,
-    line_numbers: bool,
-    preview: bool,
-    token_count: bool,
-    yes: bool,
-    diff_only: bool,
 }
 
 #[cfg(test)]
@@ -12975,6 +12968,219 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+### File: `SKILL.md`
+
+- Size: 6238 bytes
+- Modified: 2026-02-15 05:22:34 UTC
+
+```markdown
+---
+name: context-builder
+description: Generate LLM-optimized codebase context from any directory using context-builder CLI
+homepage: https://github.com/igorls/context-builder
+version: 0.7.1
+requires:
+  - cargo
+  - context-builder
+---
+
+# Context Builder — Agentic Skill
+
+Generate a single, structured markdown file from any codebase directory. The output is optimized for LLM consumption with relevance-based file ordering, automatic token budgeting, and smart defaults.
+
+## Installation
+
+```bash
+cargo install context-builder
+```
+
+Verify: `context-builder --version`
+
+## When to Use
+
+- **Deep code review** — Feed an entire codebase to an LLM for architecture analysis or bug hunting
+- **Onboarding** — Generate a project snapshot for understanding unfamiliar codebases
+- **Diff-based updates** — After code changes, generate only the diffs to update an LLM's understanding
+- **Cross-project research** — Quickly package a dependency's source for analysis
+
+## Core Workflow
+
+### 1. Quick Context (whole project)
+
+```bash
+context-builder -d /path/to/project -y -o context.md
+```
+
+- `-y` skips confirmation prompts (essential for non-interactive agent use)
+- Output includes: header → file tree → files sorted by relevance (config → source → tests → docs)
+
+### 2. Scoped Context (specific file types)
+
+```bash
+context-builder -d /path/to/project -f rs,toml -i docs,assets -y -o context.md
+```
+
+- `-f rs,toml` includes only Rust and TOML files
+- `-i docs,assets` excludes directories by name
+
+### 3. Budget-Constrained Context
+
+```bash
+context-builder -d /path/to/project --max-tokens 100000 -y -o context.md
+```
+
+- Caps output to ~100K tokens (estimated)
+- Files are included in relevance order until budget is exhausted
+- Automatically warns if output exceeds 128K tokens
+
+### 4. Token Count Preview
+
+```bash
+context-builder -d /path/to/project --token-count
+```
+
+- Prints estimated token count without generating output
+- Use this first to decide if filtering is needed
+
+### 5. Incremental Diffs
+
+First, ensure `context-builder.toml` exists with:
+
+```toml
+timestamped_output = true
+auto_diff = true
+```
+
+Then run twice:
+
+```bash
+# First run: baseline snapshot
+context-builder -d /path/to/project -y
+
+# After code changes: generates diff annotations
+context-builder -d /path/to/project -y
+```
+
+For minimal output (diffs only, no full file bodies):
+
+```bash
+context-builder -d /path/to/project -y --diff-only
+```
+
+## Smart Defaults
+
+These behaviors require no configuration:
+
+| Feature | Behavior |
+|---------|----------|
+| **Auto-ignore** | `node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, and 12 more heavy dirs are excluded at any depth |
+| **Self-exclusion** | Output file, cache dir, and `context-builder.toml` are auto-excluded |
+| **.gitignore** | Respected automatically when `.git` directory exists |
+| **Binary detection** | Binary files are skipped via UTF-8 sniffing |
+| **File ordering** | Config/docs first → source (entry points before helpers) → tests → build/CI → lockfiles |
+
+## CLI Reference (Agent-Relevant Flags)
+
+| Flag | Purpose | Agent Guidance |
+|------|---------|----------------|
+| `-d <PATH>` | Input directory | Always use absolute paths for reliability |
+| `-o <FILE>` | Output path | Write to a temp or docs directory |
+| `-f <EXT>` | Filter by extension | Comma-separated: `-f rs,toml,md` |
+| `-i <NAME>` | Ignore dirs/files | Comma-separated: `-i tests,docs,assets` |
+| `--max-tokens <N>` | Token budget cap | Use `100000` for most models, `200000` for Gemini |
+| `--token-count` | Dry-run token estimate | Run first to check if filtering is needed |
+| `-y` | Skip all prompts | **Always use in agent workflows** |
+| `--preview` | Show file tree only | Quick exploration without generating output |
+| `--diff-only` | Output only diffs | Minimizes tokens for incremental updates |
+| `--init` | Create config file | Auto-detects project file types |
+
+## Recipes
+
+### Recipe: Deep Think Code Review
+
+Generate a scoped context file, then prompt an LLM for deep analysis:
+
+```bash
+# Step 1: Generate focused context
+context-builder -d /path/to/project -f rs,toml --max-tokens 120000 -y -o docs/deep_think_context.md
+
+# Step 2: Feed to LLM with a review prompt
+# Attach docs/deep_think_context.md and ask for:
+# - Architecture review
+# - Bug hunting
+# - Performance analysis
+```
+
+### Recipe: Compare Two Versions
+
+```bash
+# Generate context for both versions
+context-builder -d ./v1 -f py -y -o /tmp/v1_context.md
+context-builder -d ./v2 -f py -y -o /tmp/v2_context.md
+
+# Feed both to an LLM for comparative analysis
+```
+
+### Recipe: Monorepo Slice
+
+```bash
+# Focus on a specific package within a monorepo
+context-builder -d /path/to/monorepo/packages/core -f ts,tsx -i __tests__,__mocks__ -y -o core_context.md
+```
+
+### Recipe: Quick Size Check Before Deciding Strategy
+
+```bash
+# Check if the project fits in context
+context-builder -d /path/to/project --token-count
+
+# If > 128K tokens, scope it down:
+context-builder -d /path/to/project -f rs,toml --max-tokens 100000 --token-count
+```
+
+## Configuration File (Optional)
+
+Create `context-builder.toml` in the project root for persistent settings:
+
+```toml
+output = "docs/context.md"
+output_folder = "docs"
+filter = ["rs", "toml"]
+ignore = ["target", "benches"]
+timestamped_output = true
+auto_diff = true
+max_tokens = 120000
+```
+
+Initialize one automatically with `context-builder --init`.
+
+## Output Format
+
+The generated markdown follows this structure:
+
+    # Directory Structure Report
+    [metadata: project name, filters, content hash]
+
+    ## File Tree
+    [visual tree of included files]
+
+    ## Files
+    ### File: src/main.rs
+    [code block with file contents, syntax-highlighted by extension]
+
+    ### File: src/lib.rs
+    ...
+
+Files appear in **relevance order** (not alphabetical), prioritizing config and entry points so LLMs build understanding faster.
+
+## Error Handling
+
+- If `context-builder` is not installed, install with `cargo install context-builder`
+- If output exceeds token limits, add `--max-tokens` or narrow with `-f` / `-i`
+- If the project has no `.git` directory, auto-ignores still protect against dependency flooding
+- Use `--clear-cache` if diff output seems stale or incorrect
 ```
 
 ### File: `docs/research/multi-model-code-review-analysis.md`
