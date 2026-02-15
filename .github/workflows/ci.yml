@@ -84,7 +84,7 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage
-        run: cargo tarpaulin --all-features --out lcov --output-dir ./coverage -- --test-threads=1
+        run: cargo tarpaulin --all-features --out lcov --output-dir ./coverage --exclude-files "benches/*" -- --test-threads=1
 
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@v2
