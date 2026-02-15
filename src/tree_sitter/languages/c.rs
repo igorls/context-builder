@@ -382,10 +382,10 @@ mod tests {
         let source = r#"
 int main() {
     return 0;
+}
 
 void hello(const char* name) {
     printf("Hello, %s\n", name);
-}
 }
 "#;
 
@@ -396,7 +396,130 @@ void hello(const char* name) {
             .iter()
             .filter(|s| s.kind == SignatureKind::Function)
             .collect();
-        assert!(!funcs.is_empty());
+        assert!(funcs.len() >= 2);
+    }
+
+    #[test]
+    fn test_extract_struct_signature() {
+        let source = r#"
+struct Point {
+    int x;
+    int y;
+};
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        let structs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Struct)
+            .collect();
+        assert!(!structs.is_empty());
+        assert_eq!(structs[0].name, "Point");
+    }
+
+    #[test]
+    fn test_extract_enum_signature() {
+        let source = r#"
+enum Color {
+    RED,
+    GREEN,
+    BLUE
+};
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        let enums: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Enum)
+            .collect();
+        assert!(!enums.is_empty());
+        assert_eq!(enums[0].name, "Color");
+    }
+
+    #[test]
+    fn test_extract_header_prototype() {
+        let source = r#"
+int add(int a, int b);
+void greet(const char* name);
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(funcs.len() >= 2);
+        // Declarations should not end with semicolons
+        for f in &funcs {
+            assert!(!f.full_signature.ends_with(';'));
+        }
+    }
+
+    #[test]
+    fn test_extract_typedef() {
+        let source = r#"
+typedef unsigned int uint;
+typedef struct { int x; int y; } Point;
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        let aliases: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::TypeAlias)
+            .collect();
+        assert!(!aliases.is_empty());
+    }
+
+    #[test]
+    fn test_extract_macro_definition() {
+        let source = r#"
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        let macros: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Macro)
+            .collect();
+        assert!(!macros.is_empty());
+        assert_eq!(macros[0].name, "MAX");
+    }
+
+    #[test]
+    fn test_extract_structure() {
+        let source = r#"
+#include <stdio.h>
+#include <stdlib.h>
+
+struct Point { int x; int y; };
+enum Color { RED, GREEN };
+
+int main() {
+    return 0;
+}
+
+void helper() {}
+"#;
+
+        let structure = CSupport.extract_structure(source);
+        assert!(structure.functions >= 2);
+        assert!(structure.structs >= 1);
+        assert!(structure.enums >= 1);
+        assert!(structure.imports.len() >= 2);
+    }
+
+    #[test]
+    fn test_parse_valid_c() {
+        let source = "int main() { return 0; }";
+        let tree = CSupport.parse(source);
+        assert!(tree.is_some());
+    }
+
+    #[test]
+    fn test_find_truncation_point_within_limit() {
+        let source = "int main() { return 0; }";
+        let point = CSupport.find_truncation_point(source, 1000);
+        assert_eq!(point, source.len());
     }
 
     #[test]
@@ -406,3 +529,4 @@ void hello(const char* name) {
         assert!(!CSupport.supports_extension("cpp"));
     }
 }
+

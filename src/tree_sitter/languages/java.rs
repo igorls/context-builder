@@ -425,8 +425,123 @@ public class HelloWorld {
     }
 
     #[test]
+    fn test_extract_method_signature() {
+        let source = r#"
+public class Calculator {
+    public int add(int a, int b) {
+        return a + b;
+    }
+
+    private double multiply(double x, double y) {
+        return x * y;
+    }
+}
+"#;
+
+        let signatures = JavaSupport.extract_signatures(source, Visibility::All);
+        let methods: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Method || s.kind == SignatureKind::Function)
+            .collect();
+        assert!(methods.len() >= 2);
+    }
+
+    #[test]
+    fn test_extract_interface_signature() {
+        let source = r#"
+public interface Printable {
+    void print();
+    String format(String template);
+}
+"#;
+
+        let signatures = JavaSupport.extract_signatures(source, Visibility::All);
+        let interfaces: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Interface)
+            .collect();
+        assert!(!interfaces.is_empty());
+        assert_eq!(interfaces[0].name, "Printable");
+    }
+
+    #[test]
+    fn test_extract_enum_signature() {
+        let source = r#"
+public enum Color {
+    RED, GREEN, BLUE;
+}
+"#;
+
+        let signatures = JavaSupport.extract_signatures(source, Visibility::All);
+        let enums: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Enum)
+            .collect();
+        assert!(!enums.is_empty());
+        assert_eq!(enums[0].name, "Color");
+    }
+
+    #[test]
+    fn test_extract_class_with_inheritance() {
+        let source = r#"
+public class Dog extends Animal implements Runnable {
+    public void run() {}
+}
+"#;
+
+        let signatures = JavaSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "Dog");
+    }
+
+    #[test]
+    fn test_extract_structure() {
+        let source = r#"
+import java.util.List;
+import java.util.Map;
+
+public class App {
+    public void doStuff() {}
+    private void helper() {}
+}
+
+interface Printable {
+    void print();
+}
+
+enum Status { ACTIVE, INACTIVE }
+"#;
+
+        let structure = JavaSupport.extract_structure(source);
+        assert!(structure.functions >= 2);
+        assert!(structure.classes >= 1);
+        assert!(structure.interfaces >= 1);
+        assert!(structure.enums >= 1);
+        assert!(structure.imports.len() >= 2);
+    }
+
+    #[test]
+    fn test_parse_valid_java() {
+        let source = "public class Main { public static void main(String[] args) {} }";
+        let tree = JavaSupport.parse(source);
+        assert!(tree.is_some());
+    }
+
+    #[test]
+    fn test_find_truncation_point() {
+        let source = "public class Main { public static void main(String[] args) {} }";
+        let point = JavaSupport.find_truncation_point(source, 1000);
+        assert_eq!(point, source.len());
+    }
+
+    #[test]
     fn test_file_extensions() {
         assert!(JavaSupport.supports_extension("java"));
         assert!(!JavaSupport.supports_extension("rs"));
     }
 }
+

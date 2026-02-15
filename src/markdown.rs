@@ -720,6 +720,7 @@ fn write_text_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::tempdir;
 
@@ -1008,6 +1009,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_generate_markdown_with_current_directory() {
         let dir = tempdir().unwrap();
         let base_path = dir.path();

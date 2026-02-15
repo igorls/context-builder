@@ -455,6 +455,51 @@ function hello(name: string): string {
     }
 
     #[test]
+    fn test_extract_arrow_function() {
+        let source = r#"
+const add = (a: number, b: number): number => {
+    return a + b;
+};
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| matches!(s.kind, SignatureKind::Function | SignatureKind::Method))
+            .collect();
+        assert!(!funcs.is_empty());
+        // Arrow function should not leak body
+        for f in &funcs {
+            assert!(!f.full_signature.contains("return"));
+        }
+    }
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+class UserService {
+    private users: string[] = [];
+
+    addUser(name: string): void {
+        this.users.push(name);
+    }
+
+    getCount(): number {
+        return this.users.length;
+    }
+}
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "UserService");
+    }
+
+    #[test]
     fn test_extract_interface_signature() {
         let source = r#"
 interface User {
@@ -474,9 +519,94 @@ interface User {
     }
 
     #[test]
+    fn test_extract_enum_signature() {
+        let source = r#"
+enum Direction {
+    Up = "UP",
+    Down = "DOWN",
+    Left = "LEFT",
+    Right = "RIGHT",
+}
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let enums: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Enum)
+            .collect();
+        assert!(!enums.is_empty());
+        assert_eq!(enums[0].name, "Direction");
+    }
+
+    #[test]
+    fn test_extract_type_alias() {
+        let source = r#"
+type StringOrNumber = string | number;
+type Callback = (value: string) => void;
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let aliases: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::TypeAlias)
+            .collect();
+        assert!(!aliases.is_empty());
+    }
+
+    #[test]
+    fn test_extract_export_signatures() {
+        let source = r#"
+export function publicFunc(): void {}
+export const arrowFunc = (x: number): number => { return x; };
+export class ExportedClass {}
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        assert!(signatures.len() >= 3);
+    }
+
+    #[test]
+    fn test_extract_structure() {
+        let source = r#"
+import { foo } from './foo';
+import * as bar from 'bar';
+
+export function doStuff(): void {}
+export class MyClass {}
+export enum Color { R, G, B }
+export interface IFoo { x: number; }
+
+const helper = (): void => {};
+"#;
+
+        let structure = TypeScriptSupport.extract_structure(source);
+        assert!(structure.functions >= 1);
+        assert!(structure.classes >= 1);
+        assert!(structure.enums >= 1);
+        assert!(structure.interfaces >= 1);
+        assert!(structure.imports.len() >= 2);
+        assert!(!structure.exports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_valid_typescript() {
+        let source = "function foo(): void { }";
+        let tree = TypeScriptSupport.parse(source);
+        assert!(tree.is_some());
+    }
+
+    #[test]
+    fn test_find_truncation_point() {
+        let source = "function foo(): void { }\nfunction bar(): void { }";
+        let point = TypeScriptSupport.find_truncation_point(source, 1000);
+        assert_eq!(point, source.len());
+    }
+
+    #[test]
     fn test_file_extensions() {
         assert!(TypeScriptSupport.supports_extension("ts"));
         assert!(TypeScriptSupport.supports_extension("tsx"));
         assert!(!TypeScriptSupport.supports_extension("js"));
     }
 }
+

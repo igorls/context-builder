@@ -134,4 +134,98 @@ mod tests {
         assert!(!is_supported_extension("rs"));
         assert!(!is_supported_extension("py"));
     }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_get_extension() {
+        assert_eq!(get_extension(Path::new("foo.rs")), Some("rs".to_string()));
+        assert_eq!(get_extension(Path::new("foo.RS")), Some("rs".to_string()));
+        assert_eq!(get_extension(Path::new("foo.PY")), Some("py".to_string()));
+        assert_eq!(get_extension(Path::new("foo")), None);
+        assert_eq!(get_extension(Path::new(".gitignore")), None);
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-rust")]
+    fn test_extract_signatures_for_file_rust() {
+        let source = "pub fn hello() { }\nfn world() { }";
+        let sigs = extract_signatures_for_file(source, "rs", Visibility::All);
+        assert!(sigs.is_some());
+        let sigs = sigs.unwrap();
+        assert!(sigs.len() >= 2);
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_extract_signatures_for_file_unsupported() {
+        let sigs = extract_signatures_for_file("anything", "xyz", Visibility::All);
+        assert!(sigs.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-rust")]
+    fn test_extract_structure_for_file_rust() {
+        let source = "use std::io;\nfn foo() { }\nstruct Bar { }\nenum Baz { A, B }";
+        let structure = extract_structure_for_file(source, "rs");
+        assert!(structure.is_some());
+        let s = structure.unwrap();
+        assert!(s.functions >= 1);
+        assert!(s.structs >= 1);
+        assert!(s.enums >= 1);
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_extract_structure_for_file_unsupported() {
+        let structure = extract_structure_for_file("anything", "xyz");
+        assert!(structure.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-rust")]
+    fn test_find_smart_truncation_point_within_bounds() {
+        let source = "fn foo() { }\nfn bar() { }\nfn baz() { }";
+        // Max bytes larger than source — should return source length
+        let point = find_smart_truncation_point(source, 1000, "rs");
+        assert!(point.is_some());
+        assert_eq!(point.unwrap(), source.len());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-rust")]
+    fn test_find_smart_truncation_point_truncated() {
+        let source = "fn foo() {\n    let x = 1;\n}\nfn bar() {\n    let y = 2;\n}";
+        let point = find_smart_truncation_point(source, 15, "rs");
+        assert!(point.is_some());
+        // Should truncate at an AST boundary, not mid-token
+        assert!(point.unwrap() <= source.len());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_find_smart_truncation_point_unsupported() {
+        let point = find_smart_truncation_point("anything", 100, "xyz");
+        assert!(point.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-rust")]
+    fn test_get_language_for_path_known() {
+        let support = get_language_for_path(Path::new("src/main.rs"));
+        assert!(support.is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_get_language_for_path_unknown() {
+        let support = get_language_for_path(Path::new("README.md"));
+        assert!(support.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_get_language_for_path_no_extension() {
+        let support = get_language_for_path(Path::new("Makefile"));
+        assert!(support.is_none());
+    }
 }

@@ -132,10 +132,12 @@ pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::tempdir;
 
     #[test]
+    #[serial]
     fn load_config_nonexistent_file() {
         // Test loading config when file doesn't exist by temporarily changing directory
         let temp_dir = tempdir().unwrap();
@@ -270,6 +272,7 @@ invalid_toml [
     }
 
     #[test]
+    #[serial]
     fn load_config_invalid_toml_in_cwd() {
         let temp_dir = tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -291,6 +294,7 @@ invalid_toml [
     }
 
     #[test]
+    #[serial]
     fn load_config_valid_in_cwd() {
         let temp_dir = tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();

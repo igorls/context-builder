@@ -435,6 +435,172 @@ public:
     }
 
     #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+int add(int a, int b) {
+    return a + b;
+}
+
+void greet(const std::string& name) {
+    std::cout << name << std::endl;
+}
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(funcs.len() >= 2);
+    }
+
+    #[test]
+    fn test_extract_struct_signature() {
+        let source = r#"
+struct Vec3 {
+    float x, y, z;
+};
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let structs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Struct)
+            .collect();
+        assert!(!structs.is_empty());
+        assert_eq!(structs[0].name, "Vec3");
+    }
+
+    #[test]
+    fn test_extract_enum_signature() {
+        let source = r#"
+enum class Direction {
+    Up,
+    Down,
+    Left,
+    Right
+};
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let enums: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Enum)
+            .collect();
+        assert!(!enums.is_empty());
+        assert_eq!(enums[0].name, "Direction");
+    }
+
+    #[test]
+    fn test_extract_header_prototype() {
+        let source = r#"
+int add(int a, int b);
+void greet(const std::string& name);
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(funcs.len() >= 2);
+        for f in &funcs {
+            assert!(!f.full_signature.ends_with(';'));
+        }
+    }
+
+    #[test]
+    fn test_extract_template_class_with_inheritance() {
+        let source = r#"
+template<typename T>
+class Container : public Base {
+    T value;
+public:
+    T get() { return value; }
+};
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        // Byte-slicing fix should preserve template<> and : public Base
+        let sig = &classes[0].full_signature;
+        assert!(sig.contains("Container"));
+    }
+
+    #[test]
+    fn test_extract_type_alias() {
+        let source = r#"
+using StringVec = std::vector<std::string>;
+typedef unsigned int uint;
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let aliases: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::TypeAlias)
+            .collect();
+        assert!(!aliases.is_empty());
+    }
+
+    #[test]
+    fn test_extract_macro() {
+        let source = r#"
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let macros: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Macro)
+            .collect();
+        assert!(!macros.is_empty());
+        assert_eq!(macros[0].name, "MIN");
+    }
+
+    #[test]
+    fn test_extract_structure() {
+        let source = r#"
+#include <iostream>
+#include <vector>
+
+class Foo {
+public:
+    void bar() {}
+};
+
+struct Point { int x; int y; };
+enum Color { R, G, B };
+
+void helper() {}
+"#;
+
+        let structure = CppSupport.extract_structure(source);
+        assert!(structure.functions >= 1);
+        assert!(structure.classes >= 1);
+        assert!(structure.structs >= 1);
+        assert!(structure.enums >= 1);
+        assert!(structure.imports.len() >= 2);
+    }
+
+    #[test]
+    fn test_parse_valid_cpp() {
+        let source = "int main() { return 0; }";
+        let tree = CppSupport.parse(source);
+        assert!(tree.is_some());
+    }
+
+    #[test]
+    fn test_find_truncation_point() {
+        let source = "int main() { return 0; }";
+        let point = CppSupport.find_truncation_point(source, 1000);
+        assert_eq!(point, source.len());
+    }
+
+    #[test]
     fn test_file_extensions() {
         assert!(CppSupport.supports_extension("cpp"));
         assert!(CppSupport.supports_extension("hpp"));
@@ -442,3 +608,4 @@ public:
         assert!(!CppSupport.supports_extension("c"));
     }
 }
+

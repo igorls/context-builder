@@ -206,6 +206,7 @@ impl CacheManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -518,6 +519,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_normalize_project_path_relative() {
         let temp_dir = tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();

@@ -17,7 +17,7 @@ auto_diff = true
 diff_only = false
 
 # File extensions to include (no leading dot, e.g. "rs", "toml")
-filter = ["rs", "md", "toml"]
+filter = ["rs", "toml"]
 
 # File / directory names to ignore (exact name matches)
 ignore = ["docs", "target", ".git", "node_modules"]

@@ -620,6 +620,188 @@ pub struct User {
     }
 
     #[test]
+    fn test_extract_tuple_struct_signature() {
+        let source = r#"
+pub struct Color(u8, u8, u8);
+struct Wrapper(String);
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let structs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Struct)
+            .collect();
+        assert!(structs.len() >= 2);
+        // Tuple struct should preserve fields
+        let color = &structs[0];
+        assert_eq!(color.name, "Color");
+    }
+
+    #[test]
+    fn test_extract_enum_signature() {
+        let source = r#"
+pub enum Status {
+    Active,
+    Inactive,
+    Suspended(String),
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let enums: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Enum)
+            .collect();
+        assert!(!enums.is_empty());
+        assert_eq!(enums[0].name, "Status");
+    }
+
+    #[test]
+    fn test_extract_trait_signature() {
+        let source = r#"
+pub trait Drawable {
+    fn draw(&self);
+    fn area(&self) -> f64;
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let traits: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Trait)
+            .collect();
+        assert!(!traits.is_empty());
+        assert_eq!(traits[0].name, "Drawable");
+    }
+
+    #[test]
+    fn test_extract_impl_signature() {
+        let source = r#"
+struct Foo;
+
+impl Foo {
+    fn new() -> Self { Foo }
+    pub fn bar(&self) -> i32 { 0 }
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let impls: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Impl)
+            .collect();
+        assert!(!impls.is_empty());
+    }
+
+    #[test]
+    fn test_extract_trait_impl_signature() {
+        let source = r#"
+struct Circle;
+
+impl std::fmt::Display for Circle {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "circle")
+    }
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let impls: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Impl)
+            .collect();
+        assert!(!impls.is_empty());
+        // Should capture the trait impl with "for"
+        assert!(impls[0].full_signature.contains("for"));
+    }
+
+    #[test]
+    fn test_extract_module_signature() {
+        let source = r#"
+pub mod parser {
+    pub fn parse() {}
+}
+
+mod internal {
+    fn helper() {}
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let mods: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Module)
+            .collect();
+        assert!(mods.len() >= 2);
+    }
+
+    #[test]
+    fn test_extract_const_signature() {
+        let source = r#"
+pub const MAX_SIZE: usize = 1024;
+const INTERNAL_LIMIT: u32 = 100;
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let consts: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Constant)
+            .collect();
+        assert!(consts.len() >= 2);
+        assert!(consts.iter().any(|c| c.name == "MAX_SIZE"));
+    }
+
+    #[test]
+    fn test_extract_const_public_filter() {
+        let source = r#"
+pub const PUBLIC_CONST: i32 = 1;
+const PRIVATE_CONST: i32 = 2;
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::Public);
+        let consts: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Constant)
+            .collect();
+        assert_eq!(consts.len(), 1);
+        assert_eq!(consts[0].name, "PUBLIC_CONST");
+    }
+
+    #[test]
+    fn test_extract_type_alias_signature() {
+        let source = r#"
+pub type Result<T> = std::result::Result<T, MyError>;
+type InternalId = u64;
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let aliases: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::TypeAlias)
+            .collect();
+        assert!(!aliases.is_empty());
+    }
+
+    #[test]
+    fn test_extract_macro_signature() {
+        let source = r#"
+macro_rules! my_vec {
+    ($($x:expr),*) => {
+        vec![$($x),*]
+    };
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        let macros: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Macro)
+            .collect();
+        assert!(!macros.is_empty());
+        assert_eq!(macros[0].name, "my_vec");
+    }
+
+    #[test]
     fn test_extract_structure() {
         let source = r#"
 use std::fs;
@@ -642,6 +824,30 @@ enum Status {
         assert_eq!(structure.structs, 1);
         assert_eq!(structure.functions, 1);
         assert_eq!(structure.enums, 1);
+    }
+
+    #[test]
+    fn test_extract_structure_comprehensive() {
+        let source = r#"
+use std::io;
+
+pub trait Runnable { fn run(&self); }
+impl Runnable for Config { fn run(&self) {} }
+pub mod utils {}
+pub const VERSION: &str = "1.0";
+pub type Id = u64;
+macro_rules! log { ($x:expr) => { println!("{}", $x); } }
+struct Config {}
+fn helper() {}
+"#;
+
+        let structure = RustSupport.extract_structure(source);
+        assert!(structure.traits >= 1);
+        assert!(structure.constants >= 1);
+        assert!(structure.type_aliases >= 1);
+        assert!(structure.macros >= 1);
+        assert!(structure.structs >= 1);
+        assert!(structure.functions >= 1);
     }
 
     #[test]
@@ -668,8 +874,16 @@ fn third() -> i32 {
     }
 
     #[test]
+    fn test_parse_valid_rust() {
+        let source = "fn main() { println!(\"hello\"); }";
+        let tree = RustSupport.parse(source);
+        assert!(tree.is_some());
+    }
+
+    #[test]
     fn test_file_extensions() {
         assert!(RustSupport.supports_extension("rs"));
         assert!(!RustSupport.supports_extension("py"));
     }
 }
+

@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.2
+
+- **Documentation**
+  - Updated SKILL.md for v0.8.1+ with Security & Path Scoping section
+  - Documented Tree-Sitter CLI flags (`--signatures`, `--structure`, `--visibility`, `--truncate`)
+  - Added AST signatures and API surface review recipes
+
+- **Test Coverage**
+  - Extended unit test coverage across `config.rs`, `file_utils.rs`, `state.rs`, `markdown.rs`, and `lib.rs`
+  - Added tests for file relevance categories, lock files, various source extensions, encoding handling, auto-diff workflows, and config hash consistency
+
 ## v0.8.1
 
 - **Bug Fixes** (identified by Gemini Deep Think v6 code review — 11 confirmed bugs, 0 false positives)

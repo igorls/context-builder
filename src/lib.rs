@@ -967,6 +967,7 @@ line_numbers = false
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::io::Result;
     use tempfile::tempdir;
 
@@ -2051,16 +2052,18 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_detect_major_file_types() {
         let temp_dir = tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();
 
-        std::env::set_current_dir(&temp_dir).unwrap();
-
+        // Write files BEFORE changing cwd to avoid race conditions
         fs::write(temp_dir.path().join("main.rs"), "fn main() {}").unwrap();
         fs::write(temp_dir.path().join("lib.rs"), "pub fn lib() {}").unwrap();
         fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
         fs::write(temp_dir.path().join("README.md"), "# Readme").unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
 
         let result = detect_major_file_types();
 
@@ -2072,6 +2075,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_init_config_already_exists() {
         let temp_dir = tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -2097,6 +2101,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_init_config_creates_new_file() {
         let temp_dir = tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -2124,11 +2129,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_detect_major_file_types_empty_dir() {
         let temp_dir = tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();
 
-        std::env::set_current_dir(&temp_dir).unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = detect_major_file_types();
 

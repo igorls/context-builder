@@ -441,8 +441,102 @@ type User struct {
     }
 
     #[test]
+    fn test_extract_interface_signature() {
+        let source = r#"
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::All);
+        let interfaces: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Interface)
+            .collect();
+        assert!(!interfaces.is_empty());
+        assert_eq!(interfaces[0].name, "Reader");
+    }
+
+    #[test]
+    fn test_extract_method_with_receiver() {
+        let source = r#"
+type Point struct {
+    X, Y float64
+}
+
+func (p Point) Distance() float64 {
+    return 0
+}
+
+func (p *Point) Scale(factor float64) {
+    p.X *= factor
+    p.Y *= factor
+}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::All);
+        let methods: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Method)
+            .collect();
+        assert!(methods.len() >= 2);
+    }
+
+    #[test]
+    fn test_extract_type_alias() {
+        let source = r#"
+type ID = int64
+type Handler func(w http.ResponseWriter, r *http.Request)
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::All);
+        let aliases: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::TypeAlias)
+            .collect();
+        assert!(!aliases.is_empty());
+    }
+
+    #[test]
+    fn test_extract_structure() {
+        let source = r#"
+package main
+
+import "fmt"
+import "os"
+
+type Config struct {
+    Path string
+}
+
+func main() {}
+func helper() {}
+"#;
+
+        let structure = GoSupport.extract_structure(source);
+        assert!(structure.functions >= 2);
+        assert!(structure.structs >= 1);
+        assert!(structure.imports.len() >= 2);
+    }
+
+    #[test]
+    fn test_parse_valid_go() {
+        let source = "package main\nfunc main() {}";
+        let tree = GoSupport.parse(source);
+        assert!(tree.is_some());
+    }
+
+    #[test]
+    fn test_find_truncation_point() {
+        let source = "package main\n\nfunc main() {}\nfunc helper() {}";
+        let point = GoSupport.find_truncation_point(source, 1000);
+        assert_eq!(point, source.len());
+    }
+
+    #[test]
     fn test_file_extensions() {
         assert!(GoSupport.supports_extension("go"));
         assert!(!GoSupport.supports_extension("rs"));
     }
 }
+
