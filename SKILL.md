@@ -4,7 +4,6 @@ description: Generate LLM-optimized codebase context from any directory using co
 homepage: https://github.com/igorls/context-builder
 version: 0.8.2
 requires:
-  - cargo
   - context-builder
 ---
 
@@ -14,15 +13,32 @@ Generate a single, structured markdown file from any codebase directory. The out
 
 ## Installation
 
-```bash
-# Basic install (no AST support)
-cargo install context-builder
+### Pre-built Binary (recommended)
 
-# Full install with Tree-Sitter AST signatures (recommended)
+Download the latest release binary for your platform:
+
+```bash
+# Linux (x86_64)
+curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /usr/local/bin
+
+# macOS (Apple Silicon)
+curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-aarch64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
+
+# macOS (Intel)
+curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
+```
+
+Windows: download `context-builder-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
+
+### From Source (fallback)
+
+```bash
+# Requires Rust toolchain (cargo)
 cargo install context-builder --features tree-sitter-all
 ```
 
 Verify: `context-builder --version` (expected: `0.8.2`)
+
 
 ## Security & Path Scoping
 
