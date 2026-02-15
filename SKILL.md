@@ -1,6 +1,11 @@
 ---
 name: context-builder
 description: Generate LLM-optimized codebase context from any directory using context-builder CLI
+homepage: https://github.com/igorls/context-builder
+version: 0.7.1
+requires:
+  - cargo
+  - context-builder
 ---
 
 # Context Builder — Agentic Skill
@@ -177,22 +182,18 @@ Initialize one automatically with `context-builder --init`.
 
 The generated markdown follows this structure:
 
-```
-# Directory Structure Report
-[metadata: project name, filters, content hash]
+    # Directory Structure Report
+    [metadata: project name, filters, content hash]
 
-## File Tree
-[visual tree of included files]
+    ## File Tree
+    [visual tree of included files]
 
-## Files
-### File: src/main.rs
-```rs
-[file contents]
-```
+    ## Files
+    ### File: src/main.rs
+    [code block with file contents, syntax-highlighted by extension]
 
-### File: src/lib.rs
-...
-```
+    ### File: src/lib.rs
+    ...
 
 Files appear in **relevance order** (not alphabetical), prioritizing config and entry points so LLMs build understanding faster.
 
