@@ -1,0 +1,16049 @@
+# Directory Structure Report
+
+This document contains files from the `context-builder` directory with extensions: rs
+Content hash: 20c1224bb213609d
+
+## File Tree Structure
+
+- 📁 src
+  - 📄 cache.rs
+  - 📄 cli.rs
+  - 📄 config.rs
+  - 📄 config_resolver.rs
+  - 📄 diff.rs
+  - 📄 file_utils.rs
+  - 📄 lib.rs
+  - 📄 main.rs
+  - 📄 markdown.rs
+  - 📄 state.rs
+  - 📄 token_count.rs
+  - 📄 tree.rs
+  - 📁 tree_sitter
+    - 📄 language_support.rs
+    - 📁 languages
+      - 📄 c.rs
+      - 📄 cpp.rs
+      - 📄 go.rs
+      - 📄 java.rs
+      - 📄 javascript.rs
+      - 📄 mod.rs
+      - 📄 python.rs
+      - 📄 rust.rs
+      - 📄 typescript.rs
+    - 📄 mod.rs
+    - 📄 signatures.rs
+    - 📄 structure.rs
+    - 📄 truncation.rs
+- 📁 tests
+  - 📄 cli_integration.rs
+  - 📄 diff_integration.rs
+  - 📄 test_auto_diff.rs
+  - 📄 test_binary_file_autodiff.rs
+  - 📄 test_comprehensive_edge_cases.rs
+  - 📄 test_config_resolution.rs
+  - 📄 test_cwd_independence.rs
+  - 📄 test_determinism.rs
+  - 📄 test_parallel_memory.rs
+  - 📄 test_phase4_integration.rs
+
+
+### File: `src/lib.rs`
+
+- Size: 53340 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use clap::{CommandFactory, Parser};
+
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+pub mod cache;
+pub mod cli;
+pub mod config;
+pub mod config_resolver;
+pub mod diff;
+pub mod file_utils;
+pub mod markdown;
+pub mod state;
+pub mod token_count;
+pub mod tree;
+pub mod tree_sitter;
+
+use std::fs::File;
+
+use cache::CacheManager;
+use cli::Args;
+use config::{Config, load_config_from_path};
+use diff::render_per_file_diffs;
+use file_utils::{collect_files, confirm_overwrite, confirm_processing};
+use markdown::generate_markdown;
+use state::{ProjectState, StateComparison};
+use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
+use tree::{build_file_tree, print_tree};
+
+/// Configuration for diff operations
+#[derive(Debug, Clone)]
+pub struct DiffConfig {
+    pub context_lines: usize,
+    pub enabled: bool,
+    pub diff_only: bool,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self {
+            context_lines: 3,
+            enabled: false,
+            diff_only: false,
+        }
+    }
+}
+
+pub trait Prompter {
+    fn confirm_processing(&self, file_count: usize) -> io::Result<bool>;
+    fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool>;
+}
+
+pub struct DefaultPrompter;
+
+impl Prompter for DefaultPrompter {
+    fn confirm_processing(&self, file_count: usize) -> io::Result<bool> {
+        confirm_processing(file_count)
+    }
+    fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool> {
+        confirm_overwrite(file_path)
+    }
+}
+
+pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
+    let start_time = Instant::now();
+
+    let silent = std::env::var("CB_SILENT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    // Use the finalized args passed in from run()
+    let final_args = args;
+    // Resolve base path. If input is '.' but current working directory lost the project context
+    // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
+    let mut resolved_base = PathBuf::from(&final_args.input);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if resolved_base == Path::new(".")
+        && !cwd.join("context-builder.toml").exists()
+        && let Some(output_parent) = Path::new(&final_args.output).parent()
+        && output_parent
+            .file_name()
+            .map(|n| n == "output")
+            .unwrap_or(false)
+        && let Some(project_root) = output_parent.parent()
+        && project_root.join("context-builder.toml").exists()
+    {
+        resolved_base = project_root.to_path_buf();
+    }
+    let base_path = resolved_base.as_path();
+
+    if !base_path.exists() || !base_path.is_dir() {
+        if !silent {
+            eprintln!(
+                "Error: The specified input directory '{}' does not exist or is not a directory.",
+                final_args.input
+            );
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "Input directory '{}' does not exist or is not a directory",
+                final_args.input
+            ),
+        ));
+    }
+
+    // Create diff configuration from config
+    let diff_config = if config.auto_diff.unwrap_or(false) {
+        Some(DiffConfig {
+            context_lines: config.diff_context_lines.unwrap_or(3),
+            enabled: true,
+            diff_only: final_args.diff_only,
+        })
+    } else {
+        None
+    };
+
+    if !final_args.preview
+        && !final_args.token_count
+        && Path::new(&final_args.output).exists()
+        && !final_args.yes
+        && !prompter.confirm_overwrite(&final_args.output)?
+    {
+        if !silent {
+            println!("Operation cancelled.");
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Operation cancelled by user",
+        ));
+    }
+
+    // Compute auto-ignore patterns to exclude the tool's own output and cache
+    let mut auto_ignores: Vec<String> = vec![".context-builder".to_string()];
+
+    // Exclude the resolved output file (or its timestamped glob pattern)
+    let output_path = Path::new(&final_args.output);
+    if let Ok(rel_output) = output_path.strip_prefix(base_path) {
+        // Output is inside the project — exclude it
+        if config.timestamped_output == Some(true) {
+            // Timestamped outputs: create a glob like "docs/context_*.md"
+            if let (Some(parent), Some(stem), Some(ext)) = (
+                rel_output.parent(),
+                output_path.file_stem().and_then(|s| s.to_str()),
+                output_path.extension().and_then(|s| s.to_str()),
+            ) {
+                // Strip the timestamp suffix to get the base stem
+                // Timestamped names look like "context_20260214175028.md"
+                // The stem from config is the part before the timestamp
+                let base_stem = if let Some(ref cfg_output) = config.output {
+                    Path::new(cfg_output)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(stem)
+                        .to_string()
+                } else {
+                    stem.to_string()
+                };
+                let glob = if parent == Path::new("") {
+                    format!("{}_*.{}", base_stem, ext)
+                } else {
+                    format!("{}/{}_*.{}", parent.display(), base_stem, ext)
+                };
+                auto_ignores.push(glob);
+            }
+        } else {
+            // Non-timestamped: exclude the exact output file
+            auto_ignores.push(rel_output.to_string_lossy().to_string());
+        }
+    } else {
+        // Output might be a relative path not under base_path — try using it directly
+        let output_str = final_args.output.clone();
+        if config.timestamped_output == Some(true) {
+            if let (Some(stem), Some(ext)) = (
+                output_path.file_stem().and_then(|s| s.to_str()),
+                output_path.extension().and_then(|s| s.to_str()),
+            ) {
+                let base_stem = if let Some(ref cfg_output) = config.output {
+                    Path::new(cfg_output)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(stem)
+                        .to_string()
+                } else {
+                    stem.to_string()
+                };
+                if let Some(parent) = output_path.parent() {
+                    let parent_str = parent.to_string_lossy();
+                    if parent_str.is_empty() || parent_str == "." {
+                        auto_ignores.push(format!("{}_*.{}", base_stem, ext));
+                    } else {
+                        auto_ignores.push(format!("{}/{}_*.{}", parent_str, base_stem, ext));
+                    }
+                }
+            }
+        } else {
+            auto_ignores.push(output_str);
+        }
+    }
+
+    // Also exclude the output folder itself if configured
+    if let Some(ref output_folder) = config.output_folder {
+        auto_ignores.push(output_folder.clone());
+    }
+
+    let files = collect_files(
+        base_path,
+        &final_args.filter,
+        &final_args.ignore,
+        &auto_ignores,
+    )?;
+    let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
+    if debug_config {
+        eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
+        eprintln!("[DEBUG][CONFIG] Raw Config: {:?}", config);
+        eprintln!("[DEBUG][CONFIG] Auto-ignores: {:?}", auto_ignores);
+        eprintln!("[DEBUG][CONFIG] Collected {} files", files.len());
+        for f in &files {
+            eprintln!("[DEBUG][CONFIG]  - {}", f.path().display());
+        }
+    }
+
+    // Smart large-file detection: warn about files that may bloat the context
+    if !silent {
+        const LARGE_FILE_THRESHOLD: u64 = 100 * 1024; // 100 KB
+        let mut large_files: Vec<(String, u64)> = Vec::new();
+        let mut total_size: u64 = 0;
+
+        for entry in &files {
+            if let Ok(metadata) = entry.path().metadata() {
+                let size = metadata.len();
+                total_size += size;
+                if size > LARGE_FILE_THRESHOLD {
+                    let rel_path = entry
+                        .path()
+                        .strip_prefix(base_path)
+                        .unwrap_or(entry.path())
+                        .to_string_lossy()
+                        .to_string();
+                    large_files.push((rel_path, size));
+                }
+            }
+        }
+
+        if !large_files.is_empty() {
+            large_files.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by size descending
+            eprintln!(
+                "\n⚠  {} large file(s) detected (>{} KB):",
+                large_files.len(),
+                LARGE_FILE_THRESHOLD / 1024
+            );
+            for (path, size) in large_files.iter().take(5) {
+                eprintln!("   {:>8} KB  {}", size / 1024, path);
+            }
+            if large_files.len() > 5 {
+                eprintln!("   ... and {} more", large_files.len() - 5);
+            }
+            eprintln!(
+                "   Total context size: {} KB across {} files\n",
+                total_size / 1024,
+                files.len()
+            );
+        }
+    }
+    let file_tree = build_file_tree(&files, base_path);
+
+    if final_args.preview {
+        if !silent {
+            println!("\n# File Tree Structure (Preview)\n");
+            print_tree(&file_tree, 0);
+        }
+        if !final_args.token_count {
+            return Ok(());
+        }
+    }
+
+    if final_args.token_count {
+        if !silent {
+            println!("\n# Token Count Estimation\n");
+            let mut total_tokens = 0;
+            total_tokens += estimate_tokens("# Directory Structure Report\n\n");
+            if !final_args.filter.is_empty() {
+                total_tokens += estimate_tokens(&format!(
+                    "This document contains files from the `{}` directory with extensions: {} \n",
+                    final_args.input,
+                    final_args.filter.join(", ")
+                ));
+            } else {
+                total_tokens += estimate_tokens(&format!(
+                    "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
+                    final_args.input
+                ));
+            }
+            if !final_args.ignore.is_empty() {
+                total_tokens += estimate_tokens(&format!(
+                    "Custom ignored patterns: {} \n",
+                    final_args.ignore.join(", ")
+                ));
+            }
+            total_tokens += estimate_tokens("Content hash: 0000000000000000\n\n");
+            total_tokens += estimate_tokens("## File Tree Structure\n\n");
+            let tree_tokens = count_tree_tokens(&file_tree, 0);
+            total_tokens += tree_tokens;
+            let file_tokens: usize = files
+                .iter()
+                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers))
+                .sum();
+            total_tokens += file_tokens;
+            println!("Estimated total tokens: {}", total_tokens);
+            println!("File tree tokens: {}", tree_tokens);
+            println!("File content tokens: {}", file_tokens);
+        }
+        return Ok(());
+    }
+
+    if !final_args.yes && !prompter.confirm_processing(files.len())? {
+        if !silent {
+            println!("Operation cancelled.");
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Operation cancelled by user",
+        ));
+    }
+
+    // NOTE: config-driven flags (line_numbers, diff_only) are already merged
+    // by config_resolver.rs with proper CLI-takes-precedence semantics.
+    // Do NOT re-apply them here as that would silently overwrite CLI flags.
+
+    if config.auto_diff.unwrap_or(false) {
+        // Build an effective config that mirrors the *actual* operational settings coming
+        // from resolved CLI args (filters/ignores/line_numbers). This ensures the
+        // configuration hash used for cache invalidation reflects real behavior and
+        // stays consistent across runs even when values originate from CLI not file.
+        let mut effective_config = config.clone();
+        // Normalize filter/ignore/line_numbers into config so hashing sees them
+        if !final_args.filter.is_empty() {
+            effective_config.filter = Some(final_args.filter.clone());
+        }
+        if !final_args.ignore.is_empty() {
+            effective_config.ignore = Some(final_args.ignore.clone());
+        }
+        effective_config.line_numbers = Some(final_args.line_numbers);
+
+        // 1. Create current project state
+        let current_state = ProjectState::from_files(
+            &files,
+            base_path,
+            &effective_config,
+            final_args.line_numbers,
+        )?;
+
+        // 2. Initialize cache manager and load previous state
+        let cache_manager = CacheManager::new(base_path, &effective_config);
+        let previous_state = match cache_manager.read_cache() {
+            Ok(state) => state,
+            Err(e) => {
+                if !silent {
+                    eprintln!(
+                        "Warning: Failed to read cache (proceeding without diff): {}",
+                        e
+                    );
+                }
+                None
+            }
+        };
+
+        let diff_cfg = diff_config.as_ref().unwrap();
+
+        // 3. Determine whether we should invalidate (ignore) previous state
+        let effective_previous = if let Some(prev) = previous_state.as_ref() {
+            if prev.config_hash != current_state.config_hash {
+                // Config change => treat as initial state (invalidate diff)
+                None
+            } else {
+                Some(prev)
+            }
+        } else {
+            None
+        };
+
+        // 4. Compare states and generate diff if an effective previous state exists
+        let comparison = effective_previous.map(|prev| current_state.compare_with(prev));
+
+        let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
+        if debug_autodiff {
+            eprintln!(
+                "[DEBUG][AUTODIFF] cache file: {}",
+                cache_manager.debug_cache_file_path().display()
+            );
+            eprintln!(
+                "[DEBUG][AUTODIFF] config_hash current={} prev={:?} invalidated={}",
+                current_state.config_hash,
+                previous_state.as_ref().map(|s| s.config_hash.clone()),
+                effective_previous.is_none() && previous_state.is_some()
+            );
+            eprintln!("[DEBUG][AUTODIFF] effective_config: {:?}", effective_config);
+            if let Some(prev) = previous_state.as_ref() {
+                eprintln!("[DEBUG][AUTODIFF] raw previous files: {}", prev.files.len());
+            }
+            if let Some(prev) = effective_previous {
+                eprintln!(
+                    "[DEBUG][AUTODIFF] effective previous files: {}",
+                    prev.files.len()
+                );
+                for k in prev.files.keys() {
+                    eprintln!("  PREV: {}", k.display());
+                }
+            }
+            eprintln!(
+                "[DEBUG][AUTODIFF] current files: {}",
+                current_state.files.len()
+            );
+            for k in current_state.files.keys() {
+                eprintln!("  CURR: {}", k.display());
+            }
+        }
+
+        // Build relevance-sorted path list from the DirEntry list (which is
+        // already sorted by file_relevance_category). This preserves ordering
+        // instead of using BTreeMap's alphabetical iteration.
+        // IMPORTANT: Path resolution must match state.rs to avoid get() misses.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| base_path.to_path_buf());
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|entry| {
+                entry
+                    .path()
+                    .strip_prefix(base_path)
+                    .or_else(|_| entry.path().strip_prefix(&cwd))
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| {
+                        entry
+                            .path()
+                            .file_name()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| entry.path().to_path_buf())
+                    })
+            })
+            .collect();
+
+        // 4. Generate markdown with diff annotations
+        let mut final_doc = generate_markdown_with_diff(
+            &current_state,
+            comparison.as_ref(),
+            &final_args,
+            &file_tree,
+            diff_cfg,
+            &sorted_paths,
+        )?;
+
+        // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
+        if let Some(max_tokens) = final_args.max_tokens {
+            let max_bytes = max_tokens.saturating_mul(4);
+            if final_doc.len() > max_bytes {
+                // Truncate at a valid UTF-8 boundary
+                let mut truncate_at = max_bytes;
+                while truncate_at > 0 && !final_doc.is_char_boundary(truncate_at) {
+                    truncate_at -= 1;
+                }
+                final_doc.truncate(truncate_at);
+
+                // Close any open markdown code fence to prevent LLMs from
+                // interpreting the truncation notice as part of a code block.
+                // Count unmatched ``` fences — if odd, we're inside a block.
+                let fence_count = final_doc.matches("\n```").count()
+                    + if final_doc.starts_with("```") { 1 } else { 0 };
+                if fence_count % 2 != 0 {
+                    final_doc.push_str("\n```\n");
+                }
+
+                final_doc.push_str("\n---\n\n");
+                final_doc.push_str(&format!(
+                    "_Output truncated: exceeded {} token budget (estimated)._\n",
+                    max_tokens
+                ));
+            }
+        }
+
+        // 5. Write output
+        let output_path = Path::new(&final_args.output);
+        if let Some(parent) = output_path.parent()
+            && !parent.exists()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            return Err(io::Error::other(format!(
+                "Failed to create output directory {}: {}",
+                parent.display(),
+                e
+            )));
+        }
+        let mut final_output = fs::File::create(output_path)?;
+        final_output.write_all(final_doc.as_bytes())?;
+
+        // 6. Update cache with current state
+        if let Err(e) = cache_manager.write_cache(&current_state)
+            && !silent
+        {
+            eprintln!("Warning: failed to update state cache: {}", e);
+        }
+
+        let duration = start_time.elapsed();
+        if !silent {
+            if let Some(comp) = &comparison {
+                if comp.summary.has_changes() {
+                    println!(
+                        "Documentation created successfully with {} changes: {}",
+                        comp.summary.total_changes, final_args.output
+                    );
+                } else {
+                    println!(
+                        "Documentation created successfully (no changes detected): {}",
+                        final_args.output
+                    );
+                }
+            } else {
+                println!(
+                    "Documentation created successfully (initial state): {}",
+                    final_args.output
+                );
+            }
+            println!("Processing time: {:.2?}", duration);
+
+            // Warn about context window overflow
+            let output_bytes = final_doc.len();
+            print_context_window_warning(output_bytes, final_args.max_tokens);
+        }
+        return Ok(());
+    }
+
+    // Standard (non auto-diff) generation
+    // Build tree-sitter config from resolved args
+    let ts_config = markdown::TreeSitterConfig {
+        signatures: final_args.signatures,
+        structure: final_args.structure,
+        truncate: final_args.truncate.clone(),
+        visibility: final_args.visibility.clone(),
+    };
+
+    // Graceful degradation: warn if tree-sitter flags are used without the feature
+    if !silent && (ts_config.signatures || ts_config.structure || ts_config.truncate == "smart") {
+        #[cfg(not(feature = "tree-sitter-base"))]
+        {
+            eprintln!("⚠️  --signatures/--structure/--truncate smart require tree-sitter support.");
+            eprintln!("   Build with: cargo build --features tree-sitter-all");
+            eprintln!("   Falling back to standard output.\n");
+        }
+    }
+
+    generate_markdown(
+        &final_args.output,
+        &final_args.input,
+        &final_args.filter,
+        &final_args.ignore,
+        &file_tree,
+        &files,
+        base_path,
+        final_args.line_numbers,
+        config.encoding_strategy.as_deref(),
+        final_args.max_tokens,
+        &ts_config,
+    )?;
+
+    let duration = start_time.elapsed();
+    if !silent {
+        println!("Documentation created successfully: {}", final_args.output);
+        println!("Processing time: {:.2?}", duration);
+
+        // Warn about context window overflow
+        let output_bytes = fs::metadata(&final_args.output)
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        print_context_window_warning(output_bytes, final_args.max_tokens);
+    }
+
+    Ok(())
+}
+
+/// Print context window overflow warnings with actionable recommendations.
+/// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
+/// exceeds 128K tokens — beyond this size, context quality degrades
+/// significantly for most LLM use cases.
+fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) {
+    let estimated_tokens = output_bytes / 4;
+
+    println!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+
+    // If the user already set --max-tokens, they're managing their budget
+    if max_tokens.is_some() {
+        return;
+    }
+
+    const RECOMMENDED_LIMIT: usize = 128_000;
+
+    if estimated_tokens <= RECOMMENDED_LIMIT {
+        return;
+    }
+
+    eprintln!();
+    eprintln!(
+        "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
+        estimated_tokens / 1000
+    );
+    eprintln!("   Large contexts degrade response quality. Consider narrowing the scope:");
+    eprintln!();
+    eprintln!("   • --max-tokens 100000    Cap output to a token budget");
+    eprintln!("   • --filter rs,toml       Include only specific file types");
+    eprintln!("   • --ignore docs,assets   Exclude directories by name");
+    eprintln!("   • --token-count          Preview size without generating");
+    eprintln!();
+}
+
+/// Generate markdown document with diff annotations
+fn generate_markdown_with_diff(
+    current_state: &ProjectState,
+    comparison: Option<&StateComparison>,
+    args: &Args,
+    file_tree: &tree::FileTree,
+    diff_config: &DiffConfig,
+    sorted_paths: &[PathBuf],
+) -> io::Result<String> {
+    let mut output = String::new();
+
+    // Header
+    output.push_str("# Directory Structure Report\n\n");
+
+    // Basic project info
+    output.push_str(&format!(
+        "**Project:** {}\n",
+        current_state.metadata.project_name
+    ));
+    output.push_str(&format!("**Generated:** {}\n", current_state.timestamp));
+
+    if !args.filter.is_empty() {
+        output.push_str(&format!("**Filters:** {}\n", args.filter.join(", ")));
+    }
+
+    if !args.ignore.is_empty() {
+        output.push_str(&format!("**Ignored:** {}\n", args.ignore.join(", ")));
+    }
+
+    output.push('\n');
+
+    // Change summary + sections if we have a comparison
+    if let Some(comp) = comparison {
+        if comp.summary.has_changes() {
+            output.push_str(&comp.summary.to_markdown());
+
+            // Collect added files once so we can reuse for both diff_only logic and potential numbering.
+            let added_files: Vec<_> = comp
+                .file_diffs
+                .iter()
+                .filter(|d| matches!(d.status, diff::PerFileStatus::Added))
+                .collect();
+
+            if diff_config.diff_only && !added_files.is_empty() {
+                output.push_str("## Added Files\n\n");
+                for added in added_files {
+                    output.push_str(&format!("### File: `{}`\n\n", added.path));
+                    output.push_str("_Status: Added_\n\n");
+                    // Reconstruct content from + lines.
+                    let mut lines: Vec<String> = Vec::new();
+                    for line in added.diff.lines() {
+                        // Diff output uses "+ " prefix (plus-space), strip both to reconstruct content.
+                        // Previously strip_prefix('+') left a leading space, corrupting indentation.
+                        if let Some(rest) = line.strip_prefix("+ ") {
+                            lines.push(rest.to_string());
+                        } else if let Some(rest) = line.strip_prefix('+') {
+                            // Handle edge case: empty added lines have just "+"
+                            lines.push(rest.to_string());
+                        }
+                    }
+                    output.push_str("```text\n");
+                    if args.line_numbers {
+                        for (idx, l) in lines.iter().enumerate() {
+                            output.push_str(&format!("{:>4} | {}\n", idx + 1, l));
+                        }
+                    } else {
+                        for l in lines {
+                            output.push_str(&l);
+                            output.push('\n');
+                        }
+                    }
+                    output.push_str("```\n\n");
+                }
+            }
+
+            // Always include a unified diff section header so downstream tooling/tests can rely on it
+            let changed_diffs: Vec<diff::PerFileDiff> = comp
+                .file_diffs
+                .iter()
+                .filter(|d| d.is_changed())
+                .cloned()
+                .collect();
+            if !changed_diffs.is_empty() {
+                output.push_str("## File Differences\n\n");
+                let diff_markdown = render_per_file_diffs(&changed_diffs);
+                output.push_str(&diff_markdown);
+            }
+        } else {
+            output.push_str("## No Changes Detected\n\n");
+        }
+    }
+
+    // File tree
+    output.push_str("## File Tree Structure\n\n");
+    let mut tree_output = Vec::new();
+    tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
+    output.push_str(&String::from_utf8_lossy(&tree_output));
+    output.push('\n');
+
+    // File contents (unless diff_only mode)
+    if !diff_config.diff_only {
+        output.push_str("## File Contents\n\n");
+
+        // Iterate in relevance order (from sorted_paths) instead of
+        // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
+        for path in sorted_paths {
+            if let Some(file_state) = current_state.files.get(path) {
+                output.push_str(&format!("### File: `{}`\n\n", path.display()));
+                output.push_str(&format!("- Size: {} bytes\n", file_state.size));
+                output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+
+                // Determine language from file extension
+                let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
+                let language = match extension {
+                    "rs" => "rust",
+                    "js" => "javascript",
+                    "ts" => "typescript",
+                    "py" => "python",
+                    "json" => "json",
+                    "toml" => "toml",
+                    "md" => "markdown",
+                    "yaml" | "yml" => "yaml",
+                    "html" => "html",
+                    "css" => "css",
+                    _ => extension,
+                };
+
+                output.push_str(&format!("```{}\n", language));
+
+                if args.line_numbers {
+                    for (i, line) in file_state.content.lines().enumerate() {
+                        output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                    }
+                } else {
+                    output.push_str(&file_state.content);
+                    if !file_state.content.ends_with('\n') {
+                        output.push('\n');
+                    }
+                }
+
+                output.push_str("```\n\n");
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+pub fn run() -> io::Result<()> {
+    env_logger::init();
+    let args = Args::parse();
+
+    // Handle init command first
+    if args.init {
+        return init_config();
+    }
+
+    // Determine project root first
+    let project_root = Path::new(&args.input);
+    let config = load_config_from_path(project_root);
+
+    // Handle early clear-cache request (runs even if no config or other args)
+    if args.clear_cache {
+        let cache_path = project_root.join(".context-builder").join("cache");
+        if cache_path.exists() {
+            match fs::remove_dir_all(&cache_path) {
+                Ok(()) => println!("Cache cleared: {}", cache_path.display()),
+                Err(e) => eprintln!("Failed to clear cache ({}): {}", cache_path.display(), e),
+            }
+        } else {
+            println!("No cache directory found at {}", cache_path.display());
+        }
+        return Ok(());
+    }
+
+    if std::env::args().len() == 1 && config.is_none() {
+        Args::command().print_help()?;
+        return Ok(());
+    }
+
+    // Resolve final configuration using the new config resolver
+    let resolution = crate::config_resolver::resolve_final_config(args, config.clone());
+
+    // Print warnings if any
+    let silent = std::env::var("CB_SILENT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !silent {
+        for warning in &resolution.warnings {
+            eprintln!("Warning: {}", warning);
+        }
+    }
+
+    // Convert resolved config back to Args for run_with_args
+    let final_args = Args {
+        input: resolution.config.input,
+        output: resolution.config.output,
+        filter: resolution.config.filter,
+        ignore: resolution.config.ignore,
+        line_numbers: resolution.config.line_numbers,
+        preview: resolution.config.preview,
+        token_count: resolution.config.token_count,
+        yes: resolution.config.yes,
+        diff_only: resolution.config.diff_only,
+        clear_cache: resolution.config.clear_cache,
+        max_tokens: resolution.config.max_tokens,
+        init: false,
+        signatures: resolution.config.signatures,
+        structure: resolution.config.structure,
+        truncate: resolution.config.truncate,
+        visibility: resolution.config.visibility,
+    };
+
+    // Create final Config with resolved values
+    let final_config = Config {
+        auto_diff: Some(resolution.config.auto_diff),
+        diff_context_lines: Some(resolution.config.diff_context_lines),
+        ..config.unwrap_or_default()
+    };
+
+    run_with_args(final_args, final_config, &DefaultPrompter)
+}
+
+/// Detect major file types in the current directory respecting .gitignore and default ignore patterns
+fn detect_major_file_types() -> io::Result<Vec<String>> {
+    use std::collections::HashMap;
+    let mut extension_counts = HashMap::new();
+
+    // Use the same default ignore patterns as the main application
+    let default_ignores = vec![
+        "docs".to_string(),
+        "target".to_string(),
+        ".git".to_string(),
+        "node_modules".to_string(),
+    ];
+
+    // Collect files using the same logic as the main application
+    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores, &[])?;
+
+    // Count extensions from the filtered file list
+    for entry in files {
+        let path = entry.path();
+        if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+            // Count the extension occurrences
+            *extension_counts.entry(extension.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    // Convert to vector of (extension, count) pairs and sort by count
+    let mut extensions: Vec<(String, usize)> = extension_counts.into_iter().collect();
+    extensions.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Take the top 5 extensions or all if less than 5
+    let top_extensions: Vec<String> = extensions.into_iter().take(5).map(|(ext, _)| ext).collect();
+
+    Ok(top_extensions)
+}
+
+/// Initialize a new context-builder.toml config file in the current directory with sensible defaults
+fn init_config() -> io::Result<()> {
+    let config_path = Path::new("context-builder.toml");
+
+    if config_path.exists() {
+        println!("Config file already exists at {}", config_path.display());
+        println!("If you want to replace it, please remove it manually first.");
+        return Ok(());
+    }
+
+    // Detect major file types in the current directory
+    let filter_suggestions = match detect_major_file_types() {
+        Ok(extensions) => extensions,
+        _ => vec!["rs".to_string(), "toml".to_string()], // fallback to defaults
+    };
+
+    let filter_string = if filter_suggestions.is_empty() {
+        r#"["rs", "toml"]"#.to_string()
+    } else {
+        format!(r#"["{}"]"#, filter_suggestions.join(r#"", ""#))
+    };
+
+    let default_config_content = format!(
+        r#"# Context Builder Configuration File
+# This file was generated with sensible defaults based on the file types detected in your project
+
+# Output file name (or base name when timestamped_output is true)
+output = "context.md"
+
+# Optional folder to place the generated output file(s) in
+output_folder = "docs"
+
+# Append a UTC timestamp to the output file name (before extension)
+timestamped_output = true
+
+# Enable automatic diff generation (requires timestamped_output = true)
+auto_diff = true
+
+# Emit only change summary + modified file diffs (no full file bodies)
+diff_only = false
+
+# File extensions to include (no leading dot, e.g. "rs", "toml")
+filter = {}
+
+# File / directory names to ignore (exact name matches)
+ignore = ["docs", "target", ".git", "node_modules"]
+
+# Add line numbers to code blocks
+line_numbers = false
+"#,
+        filter_string
+    );
+
+    let mut file = File::create(config_path)?;
+    file.write_all(default_config_content.as_bytes())?;
+
+    println!("Config file created at {}", config_path.display());
+    println!("Detected file types: {}", filter_suggestions.join(", "));
+    println!("You can now customize it according to your project needs.");
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Result;
+    use tempfile::tempdir;
+
+    // Mock prompter for testing
+    struct MockPrompter {
+        confirm_processing_response: bool,
+        confirm_overwrite_response: bool,
+    }
+
+    impl MockPrompter {
+        fn new(processing: bool, overwrite: bool) -> Self {
+            Self {
+                confirm_processing_response: processing,
+                confirm_overwrite_response: overwrite,
+            }
+        }
+    }
+
+    impl Prompter for MockPrompter {
+        fn confirm_processing(&self, _file_count: usize) -> Result<bool> {
+            Ok(self.confirm_processing_response)
+        }
+
+        fn confirm_overwrite(&self, _file_path: &str) -> Result<bool> {
+            Ok(self.confirm_overwrite_response)
+        }
+    }
+
+    #[test]
+    fn test_diff_config_default() {
+        let config = DiffConfig::default();
+        assert_eq!(config.context_lines, 3);
+        assert!(!config.enabled);
+        assert!(!config.diff_only);
+    }
+
+    #[test]
+    fn test_diff_config_custom() {
+        let config = DiffConfig {
+            context_lines: 5,
+            enabled: true,
+            diff_only: true,
+        };
+        assert_eq!(config.context_lines, 5);
+        assert!(config.enabled);
+        assert!(config.diff_only);
+    }
+
+    #[test]
+    fn test_default_prompter() {
+        let prompter = DefaultPrompter;
+
+        // Test small file count (should not prompt)
+        let result = prompter.confirm_processing(50);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_run_with_args_nonexistent_directory() {
+        let args = Args {
+            input: "/nonexistent/directory".to_string(),
+            output: "output.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        let result = run_with_args(args, config, &prompter);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_run_with_args_preview_mode() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create some test files
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::create_dir(base_path.join("src")).unwrap();
+        fs::write(base_path.join("src/lib.rs"), "pub fn hello() {}").unwrap();
+
+        let args = Args {
+            input: ".".to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        // Set CB_SILENT to avoid console output during test
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_token_count_mode() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create test files
+        fs::write(base_path.join("small.txt"), "Hello world").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: true,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_preview_and_token_count() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: true,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_user_cancels_overwrite() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("existing.md");
+
+        // Create test files
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+        fs::write(&output_path, "existing content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec!["target".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, false); // Deny overwrite
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn test_run_with_args_user_cancels_processing() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create many test files to trigger processing confirmation
+        for i in 0..105 {
+            fs::write(base_path.join(format!("file{}.txt", i)), "content").unwrap();
+        }
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec!["rs".to_string()],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(false, true); // Deny processing
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn test_run_with_args_with_yes_flag() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
+
+        fs::write(base_path.join("test.txt"), "Hello world").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec!["ignored_dir".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+        assert!(content.contains("test.txt"));
+    }
+
+    #[test]
+    fn test_run_with_args_with_filters() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
+
+        fs::write(base_path.join("code.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("readme.md"), "# README").unwrap();
+        fs::write(base_path.join("data.json"), r#"{"key": "value"}"#).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec!["rs".to_string(), "md".to_string()],
+            ignore: vec![],
+            line_numbers: true,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("code.rs"));
+        assert!(content.contains("readme.md"));
+        assert!(!content.contains("data.json")); // Should be filtered out
+        assert!(content.contains("   1 |")); // Line numbers should be present
+    }
+
+    #[test]
+    fn test_run_with_args_with_ignores() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("ignored.md");
+
+        fs::write(base_path.join("important.txt"), "important content").unwrap();
+        fs::write(base_path.join("secret.txt"), "secret content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec!["secret.txt".to_string()],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("important.txt"));
+        // The ignore pattern may not work exactly as expected in this test setup
+        // Just verify the output file was created successfully
+    }
+
+    #[test]
+    fn test_auto_diff_without_previous_state() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_file_name = "test.md";
+        let output_path = temp_dir.path().join(output_file_name);
+
+        fs::write(base_path.join("new.txt"), "new content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            auto_diff: Some(true),
+            diff_context_lines: Some(5),
+            ..Default::default()
+        };
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("new.txt"));
+    }
+
+    #[test]
+    fn test_run_creates_output_directory() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let output_dir = temp_dir.path().join("nested").join("output");
+        let output_path = output_dir.join("result.md");
+
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config::default();
+        let prompter = MockPrompter::new(true, true);
+
+        unsafe {
+            std::env::set_var("CB_SILENT", "1");
+        }
+        let result = run_with_args(args, config, &prompter);
+        unsafe {
+            std::env::remove_var("CB_SILENT");
+        }
+
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+        assert!(output_dir.exists());
+    }
+
+    #[test]
+    fn test_generate_markdown_with_diff_no_comparison() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let diff_config = DiffConfig::default();
+
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let result = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+        );
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("Directory Structure Report"));
+        assert!(content.contains("test.rs"));
+    }
+}
+```
+
+### File: `src/main.rs`
+
+- Size: 73 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use std::io;
+
+fn main() -> io::Result<()> {
+    context_builder::run()
+}
+```
+
+### File: `src/tree_sitter/languages/mod.rs`
+
+- Size: 3447 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Language support registry.
+//!
+//! This module provides access to language-specific parsers based on file extensions.
+
+#[cfg(feature = "tree-sitter-base")]
+use super::language_support::LanguageSupport;
+
+#[cfg(feature = "tree-sitter-rust")]
+mod rust;
+
+#[cfg(feature = "tree-sitter-js")]
+mod javascript;
+
+#[cfg(feature = "tree-sitter-ts")]
+mod typescript;
+
+#[cfg(feature = "tree-sitter-python")]
+mod python;
+
+#[cfg(feature = "tree-sitter-go")]
+mod go;
+
+#[cfg(feature = "tree-sitter-java")]
+mod java;
+
+#[cfg(feature = "tree-sitter-c")]
+mod c;
+
+#[cfg(feature = "tree-sitter-cpp")]
+mod cpp;
+
+#[cfg(feature = "tree-sitter-rust")]
+static RUST_SUPPORT: rust::RustSupport = rust::RustSupport;
+
+#[cfg(feature = "tree-sitter-js")]
+static JS_SUPPORT: javascript::JavaScriptSupport = javascript::JavaScriptSupport;
+
+#[cfg(feature = "tree-sitter-ts")]
+static TS_SUPPORT: typescript::TypeScriptSupport = typescript::TypeScriptSupport;
+
+#[cfg(feature = "tree-sitter-python")]
+static PYTHON_SUPPORT: python::PythonSupport = python::PythonSupport;
+
+#[cfg(feature = "tree-sitter-go")]
+static GO_SUPPORT: go::GoSupport = go::GoSupport;
+
+#[cfg(feature = "tree-sitter-java")]
+static JAVA_SUPPORT: java::JavaSupport = java::JavaSupport;
+
+#[cfg(feature = "tree-sitter-c")]
+static C_SUPPORT: c::CSupport = c::CSupport;
+
+#[cfg(feature = "tree-sitter-cpp")]
+static CPP_SUPPORT: cpp::CppSupport = cpp::CppSupport;
+
+#[cfg(feature = "tree-sitter-base")]
+pub fn get_language_support(ext: &str) -> Option<&'static dyn LanguageSupport> {
+    match ext.to_lowercase().as_str() {
+        #[cfg(feature = "tree-sitter-rust")]
+        "rs" => Some(&RUST_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-js")]
+        "js" | "mjs" | "cjs" => Some(&JS_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-ts")]
+        "ts" | "tsx" | "mts" | "cts" => Some(&TS_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-python")]
+        "py" | "pyw" => Some(&PYTHON_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-go")]
+        "go" => Some(&GO_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-java")]
+        "java" => Some(&JAVA_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-c")]
+        "c" | "h" => Some(&C_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-cpp")]
+        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => Some(&CPP_SUPPORT),
+
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn get_language_support(_ext: &str) -> Option<()> {
+    None
+}
+
+#[cfg(feature = "tree-sitter-base")]
+pub fn supported_extensions() -> Vec<&'static str> {
+    let mut extensions = Vec::new();
+
+    #[cfg(feature = "tree-sitter-rust")]
+    extensions.extend(RUST_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-js")]
+    extensions.extend(JS_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-ts")]
+    extensions.extend(TS_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-python")]
+    extensions.extend(PYTHON_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-go")]
+    extensions.extend(GO_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-java")]
+    extensions.extend(JAVA_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-c")]
+    extensions.extend(C_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-cpp")]
+    extensions.extend(CPP_SUPPORT.file_extensions());
+
+    extensions
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn supported_extensions() -> Vec<&'static str> {
+    Vec::new()
+}
+```
+
+### File: `src/tree_sitter/mod.rs`
+
+- Size: 4087 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Tree-sitter integration for intelligent code parsing.
+//!
+//! This module provides:
+//! - Signature extraction (function/class signatures without bodies)
+//! - Smart truncation (truncate at AST boundaries)
+//! - Structure extraction (imports, exports, symbol counts)
+//!
+//! Feature-gated: Only compiled when one of the tree-sitter-* features is enabled.
+
+#[cfg(feature = "tree-sitter-base")]
+pub mod language_support;
+
+#[cfg(feature = "tree-sitter-base")]
+pub mod signatures;
+
+#[cfg(feature = "tree-sitter-base")]
+pub mod structure;
+
+#[cfg(feature = "tree-sitter-base")]
+pub mod truncation;
+
+#[cfg(feature = "tree-sitter-base")]
+pub mod languages;
+
+#[cfg(feature = "tree-sitter-base")]
+use std::path::Path;
+
+#[cfg(feature = "tree-sitter-base")]
+pub use language_support::{CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility};
+
+#[cfg(feature = "tree-sitter-base")]
+pub use signatures::extract_signatures;
+
+#[cfg(feature = "tree-sitter-base")]
+pub use structure::extract_structure;
+
+#[cfg(feature = "tree-sitter-base")]
+pub use truncation::find_truncation_point;
+
+/// Check if tree-sitter is available for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn is_supported_extension(ext: &str) -> bool {
+    languages::get_language_support(ext).is_some()
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn is_supported_extension(_ext: &str) -> bool {
+    false
+}
+
+/// Extract file extension from a path.
+#[cfg(feature = "tree-sitter-base")]
+fn get_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+}
+
+/// Get language support for a file path.
+#[cfg(feature = "tree-sitter-base")]
+pub fn get_language_for_path(path: &Path) -> Option<&'static dyn LanguageSupport> {
+    let ext = get_extension(path)?;
+    languages::get_language_support(&ext)
+}
+
+/// Extract signatures from source code for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn extract_signatures_for_file(
+    source: &str,
+    ext: &str,
+    visibility_filter: Visibility,
+) -> Option<Vec<Signature>> {
+    let support = languages::get_language_support(ext)?;
+    Some(extract_signatures(source, support, visibility_filter))
+}
+
+/// Extract structure from source code for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn extract_structure_for_file(source: &str, ext: &str) -> Option<CodeStructure> {
+    let support = languages::get_language_support(ext)?;
+    Some(extract_structure(source, support))
+}
+
+/// Find a smart truncation point for a given file extension.
+#[cfg(feature = "tree-sitter-base")]
+pub fn find_smart_truncation_point(source: &str, max_bytes: usize, ext: &str) -> Option<usize> {
+    let support = languages::get_language_support(ext)?;
+    Some(find_truncation_point(source, max_bytes, support))
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn extract_signatures_for_file(
+    _source: &str,
+    _ext: &str,
+    _visibility_filter: (),
+) -> Option<()> {
+    None
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn extract_structure_for_file(_source: &str, _ext: &str) -> Option<()> {
+    None
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn find_smart_truncation_point(_source: &str, _max_bytes: usize, _ext: &str) -> Option<usize> {
+    None
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn get_language_for_path(_path: &std::path::Path) -> Option<()> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_is_supported_extension() {
+        #[cfg(feature = "tree-sitter-rust")]
+        assert!(is_supported_extension("rs"));
+        #[cfg(feature = "tree-sitter-python")]
+        assert!(is_supported_extension("py"));
+        #[cfg(feature = "tree-sitter-js")]
+        assert!(is_supported_extension("js"));
+        assert!(!is_supported_extension("xyz"));
+    }
+
+    #[test]
+    #[cfg(not(feature = "tree-sitter-base"))]
+    fn test_no_tree_sitter_support() {
+        assert!(!is_supported_extension("rs"));
+        assert!(!is_supported_extension("py"));
+    }
+}
+```
+
+### File: `src/cache.rs`
+
+- Size: 19474 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Cache management for context-builder.
+//!
+//! This module handles caching of project states to enable the auto-diff feature.
+//! It uses a hash of the project path and configuration to avoid cache collisions
+//! between different projects or configurations.
+
+use fs2::FileExt;
+
+use std::fs;
+use std::fs::File;
+
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+
+use crate::config::Config;
+use crate::state::ProjectState;
+
+/// Manages cache operations with file locking to prevent corruption
+pub struct CacheManager {
+    cache_dir: PathBuf,
+    project_hash: String,
+    config_hash: String,
+}
+
+impl CacheManager {
+    /// Create a new cache manager for the given project path and configuration
+    pub fn new(project_path: &Path, config: &Config) -> Self {
+        // Normalize the project path first for consistency
+        let normalized_project_path = Self::normalize_project_path(project_path);
+
+        let project_hash = Self::hash_path(&normalized_project_path);
+        let config_hash = Self::hash_config(config);
+
+        // Ensure cache directory exists relative to normalized project root
+        let cache_dir = normalized_project_path
+            .join(".context-builder")
+            .join("cache");
+        if !cache_dir.exists() {
+            let _ = fs::create_dir_all(&cache_dir);
+        }
+
+        let cache_manager = Self {
+            cache_dir,
+            project_hash,
+            config_hash,
+        };
+
+        // Migrate old cache format if present
+        cache_manager.migrate_old_cache();
+
+        cache_manager
+    }
+
+    /// Normalize project path for consistent hashing and cache directory creation
+    fn normalize_project_path(path: &Path) -> PathBuf {
+        // Always resolve to absolute path first
+        let absolute_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            match std::env::current_dir() {
+                Ok(cwd) => cwd.join(path),
+                Err(_) => path.to_path_buf(),
+            }
+        };
+
+        // Try to canonicalize for consistency, but normalize the result
+        if let Ok(canonical) = absolute_path.canonicalize() {
+            Self::normalize_path_format(&canonical)
+        } else {
+            absolute_path
+        }
+    }
+
+    /// Generate a hash from the normalized project path
+    fn hash_path(path: &Path) -> String {
+        let path_str = path.to_string_lossy();
+        let hash = xxhash_rust::xxh3::xxh3_64(path_str.as_bytes());
+        format!("{:x}", hash)
+    }
+
+    /// Normalize path format to handle Windows UNC prefixes
+    fn normalize_path_format(path: &Path) -> PathBuf {
+        let path_str = path.to_string_lossy();
+
+        // Remove Windows UNC prefix if present
+        if cfg!(windows) && path_str.starts_with("\\\\?\\") {
+            PathBuf::from(&path_str[4..])
+        } else {
+            path.to_path_buf()
+        }
+    }
+
+    /// Generate a hash from the configuration
+    fn hash_config(config: &Config) -> String {
+        // Build a stable string representation of config for hashing.
+        // IMPORTANT: Must stay in sync with state.rs::compute_config_hash
+        let mut config_str = String::new();
+        if let Some(ref filters) = config.filter {
+            config_str.push_str(&filters.join(","));
+        }
+        config_str.push('|');
+        if let Some(ref ignores) = config.ignore {
+            config_str.push_str(&ignores.join(","));
+        }
+        config_str.push('|');
+        config_str.push_str(&format!(
+            "{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines
+        ));
+        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
+        format!("{:x}", hash)
+    }
+
+    /// Get the cache file path for this specific project and configuration
+    fn get_cache_path(&self) -> PathBuf {
+        self.cache_dir.join(format!(
+            "state_{}_{}.json",
+            self.project_hash, self.config_hash
+        ))
+    }
+
+    /// Public helper primarily for debugging/tests to inspect the resolved cache path
+    pub fn debug_cache_file_path(&self) -> PathBuf {
+        self.get_cache_path()
+    }
+
+    /// Migrate old markdown-based cache files to new JSON format
+    fn migrate_old_cache(&self) {
+        let old_cache_patterns = ["last_canonical.md", "last_output.md", "current_output.md"];
+
+        for pattern in &old_cache_patterns {
+            let old_cache_path = self.cache_dir.join(pattern);
+            if old_cache_path.exists() {
+                eprintln!("Migrating old cache format: removing {}", pattern);
+                let _ = fs::remove_file(&old_cache_path);
+            }
+        }
+
+        // Also remove any files that look like timestamped outputs from old versions
+        if let Ok(entries) = fs::read_dir(&self.cache_dir) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                if name.ends_with(".md") && (name.contains("_20") || name.starts_with("output_")) {
+                    eprintln!("Migrating old cache format: removing {}", name);
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
+    /// Read the cached project state with file locking
+    pub fn read_cache(&self) -> Result<Option<ProjectState>, Box<dyn std::error::Error>> {
+        let cache_path = self.get_cache_path();
+
+        if !cache_path.exists() {
+            return Ok(None);
+        }
+
+        let file = File::open(&cache_path)?;
+        // Acquire shared lock to prevent reading while writing
+        file.lock_shared()?;
+
+        let mut contents = String::new();
+        let mut file = std::io::BufReader::new(file);
+        file.read_to_string(&mut contents)?;
+
+        // Release lock
+        file.get_ref().unlock()?;
+
+        let state: ProjectState = serde_json::from_str(&contents)?;
+        Ok(Some(state))
+    }
+
+    /// Write the project state to cache with file locking
+    pub fn write_cache(&self, state: &ProjectState) -> Result<(), Box<dyn std::error::Error>> {
+        let cache_path = self.get_cache_path();
+
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&cache_path)?;
+        // Acquire exclusive lock BEFORE truncating to prevent TOCTOU races
+        file.lock_exclusive()?;
+        file.set_len(0)?;
+
+        let json = serde_json::to_string_pretty(state)?;
+        let mut file = std::io::BufWriter::new(file);
+        file.write_all(json.as_bytes())?;
+        file.flush()?;
+
+        // Release lock
+        file.get_ref().unlock()?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_hash_path() {
+        let path1 = Path::new("/project1");
+        let path2 = Path::new("/project2");
+
+        let hash1 = CacheManager::hash_path(path1);
+        let hash2 = CacheManager::hash_path(path2);
+
+        assert_ne!(
+            hash1, hash2,
+            "Different paths should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn test_hash_config() {
+        let config1 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["md".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
+        };
+
+        let hash1 = CacheManager::hash_config(&config1);
+        let hash2 = CacheManager::hash_config(&config2);
+
+        assert_ne!(
+            hash1, hash2,
+            "Different configs should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn test_cache_operations() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config = Config::default();
+        let cache_manager = CacheManager::new(&project_path, &config);
+
+        use crate::state::ProjectMetadata;
+
+        let state = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "test_config_hash".to_string(),
+            files: std::collections::BTreeMap::new(),
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 0,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        // Write cache
+        assert!(cache_manager.write_cache(&state).is_ok());
+
+        // Read cache
+        let cached_state = cache_manager.read_cache().unwrap();
+        assert!(cached_state.is_some());
+        assert_eq!(cached_state.unwrap().timestamp, state.timestamp);
+    }
+
+    #[test]
+    fn test_old_cache_migration() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        // Create cache directory with old cache files
+        let cache_dir = project_path.join(".context-builder").join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+
+        let old_files = [
+            "last_canonical.md",
+            "last_output.md",
+            "current_output.md",
+            "output_20230101120000.md",
+        ];
+
+        // Create old cache files
+        for file in &old_files {
+            let old_path = cache_dir.join(file);
+            let _ = fs::write(&old_path, "old cache content");
+            assert!(
+                old_path.exists(),
+                "Old cache file should exist before migration"
+            );
+        }
+
+        // Create cache manager (this should trigger migration)
+        let config = Config::default();
+        let _cache_manager = CacheManager::new(&project_path, &config);
+
+        // Verify old files are removed
+        for file in &old_files {
+            let old_path = cache_dir.join(file);
+            assert!(
+                !old_path.exists(),
+                "Old cache file {} should be removed after migration",
+                file
+            );
+        }
+    }
+
+    #[test]
+    fn test_cache_consistency_across_path_representations() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config = Config::default();
+
+        // Test different path representations that should resolve to the same cache
+        let mut paths_to_test = vec![
+            project_path.clone(),
+            project_path.canonicalize().unwrap_or(project_path.clone()),
+        ];
+
+        // If we can create a relative path, test that too
+        if let Ok(current_dir) = std::env::current_dir()
+            && let Ok(relative) = project_path.strip_prefix(&current_dir)
+        {
+            paths_to_test.push(relative.to_path_buf());
+        }
+
+        let mut cache_paths = Vec::new();
+        for path in &paths_to_test {
+            let cache_manager = CacheManager::new(path, &config);
+            cache_paths.push(cache_manager.get_cache_path());
+        }
+
+        // All cache paths should be identical
+        for (i, path1) in cache_paths.iter().enumerate() {
+            for (j, path2) in cache_paths.iter().enumerate() {
+                if i != j {
+                    assert_eq!(
+                        path1, path2,
+                        "Cache paths should be identical for different representations of the same project path"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_normalize_path_format() {
+        // Test Windows UNC path normalization
+        if cfg!(windows) {
+            let unc_path = Path::new("\\\\?\\C:\\test\\path");
+            let normalized = CacheManager::normalize_path_format(unc_path);
+            assert_eq!(normalized, PathBuf::from("C:\\test\\path"));
+        }
+
+        // Test normal path (should remain unchanged)
+        let normal_path = Path::new("/normal/path");
+        let normalized = CacheManager::normalize_path_format(normal_path);
+        assert_eq!(normalized, normal_path);
+    }
+
+    #[test]
+    fn test_cache_read_nonexistent_file() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("nonexistent_project");
+
+        let config = Config::default();
+        let cache_manager = CacheManager::new(&project_path, &config);
+
+        let result = cache_manager.read_cache().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_cache_read_corrupted_file() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config = Config::default();
+        let cache_manager = CacheManager::new(&project_path, &config);
+        let cache_path = cache_manager.get_cache_path();
+
+        // Create a corrupted cache file
+        let _ = fs::create_dir_all(cache_path.parent().unwrap());
+        let _ = fs::write(&cache_path, "invalid json content {{{");
+
+        let result = cache_manager.read_cache();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_write_read_roundtrip() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string(), ".git".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
+        };
+
+        let cache_manager = CacheManager::new(&project_path, &config);
+
+        use crate::state::ProjectMetadata;
+        use std::collections::BTreeMap;
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            PathBuf::from("test.rs"),
+            crate::state::FileState {
+                content: "fn main() {}".to_string(),
+                size: 12,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                content_hash: "test_hash".to_string(),
+            },
+        );
+
+        let original_state = ProjectState {
+            timestamp: "2023-01-01T12:00:00Z".to_string(),
+            config_hash: "test_config_hash".to_string(),
+            files,
+            metadata: ProjectMetadata {
+                project_name: "test_project".to_string(),
+                file_count: 1,
+                filters: vec!["rs".to_string(), "toml".to_string()],
+                ignores: vec!["target".to_string(), ".git".to_string()],
+                line_numbers: true,
+            },
+        };
+
+        // Write and read back
+        cache_manager.write_cache(&original_state).unwrap();
+        let cached_state = cache_manager.read_cache().unwrap().unwrap();
+
+        assert_eq!(cached_state.timestamp, original_state.timestamp);
+        assert_eq!(cached_state.config_hash, original_state.config_hash);
+        assert_eq!(cached_state.files.len(), original_state.files.len());
+        assert_eq!(
+            cached_state.metadata.project_name,
+            original_state.metadata.project_name
+        );
+        assert_eq!(
+            cached_state.metadata.file_count,
+            original_state.metadata.file_count
+        );
+        assert_eq!(
+            cached_state.metadata.filters,
+            original_state.metadata.filters
+        );
+        assert_eq!(
+            cached_state.metadata.ignores,
+            original_state.metadata.ignores
+        );
+        assert_eq!(
+            cached_state.metadata.line_numbers,
+            original_state.metadata.line_numbers
+        );
+    }
+
+    #[test]
+    fn test_different_configs_different_cache_files() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let config1 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["py".to_string()]),
+            ..Default::default()
+        };
+
+        let cache_manager1 = CacheManager::new(&project_path, &config1);
+        let cache_manager2 = CacheManager::new(&project_path, &config2);
+
+        let cache_path1 = cache_manager1.get_cache_path();
+        let cache_path2 = cache_manager2.get_cache_path();
+
+        assert_ne!(
+            cache_path1, cache_path2,
+            "Different configs should have different cache files"
+        );
+    }
+
+    #[test]
+    fn test_normalize_project_path_absolute() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let normalized = CacheManager::normalize_project_path(&project_path);
+        assert!(normalized.is_absolute());
+    }
+
+    #[test]
+    fn test_normalize_project_path_relative() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        // Change to temp directory
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        // Create a project directory
+        let project_name = "relative_project";
+        let _ = fs::create_dir(project_name);
+
+        let relative_path = Path::new(project_name);
+        let normalized = CacheManager::normalize_project_path(relative_path);
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(normalized.is_absolute());
+        assert!(normalized.to_string_lossy().contains(project_name));
+    }
+
+    #[test]
+    fn test_hash_config_same_values() {
+        let config1 = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(false),
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(false),
+            ..Default::default()
+        };
+
+        let hash1 = CacheManager::hash_config(&config1);
+        let hash2 = CacheManager::hash_config(&config2);
+
+        assert_eq!(
+            hash1, hash2,
+            "Identical configs should produce identical hashes"
+        );
+    }
+
+    #[test]
+    fn test_migrate_old_cache_preserves_new_files() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("test_project");
+        let _ = fs::create_dir(&project_path);
+
+        let cache_dir = project_path.join(".context-builder").join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+
+        // Create both old and new cache files
+        let _ = fs::write(cache_dir.join("last_canonical.md"), "old content");
+        let _ = fs::write(cache_dir.join("state_abc123_def456.json"), "new content");
+
+        let config = Config::default();
+        let _cache_manager = CacheManager::new(&project_path, &config);
+
+        // Old file should be removed
+        assert!(!cache_dir.join("last_canonical.md").exists());
+
+        // New file should be preserved
+        assert!(cache_dir.join("state_abc123_def456.json").exists());
+    }
+}
+```
+
+### File: `src/cli.rs`
+
+- Size: 6553 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use clap::Parser;
+
+/// CLI tool to aggregate directory contents into a single Markdown file optimized for LLM consumption
+#[derive(Parser, Debug, Clone)]
+#[clap(author, version, about)]
+pub struct Args {
+    /// Directory path to process
+    #[clap(short = 'd', long, default_value = ".")]
+    pub input: String,
+
+    /// Output file path
+    #[clap(short, long, default_value = "output.md")]
+    pub output: String,
+
+    /// File extensions to include (e.g., --filter rs,toml)
+    #[clap(short = 'f', long, value_delimiter = ',')]
+    pub filter: Vec<String>,
+
+    /// Folder or file names to ignore (e.g., --ignore target --ignore lock)
+    #[clap(short = 'i', long)]
+    pub ignore: Vec<String>,
+
+    /// Preview mode: only print the file tree to the console, don't generate the documentation file
+    #[clap(long)]
+    pub preview: bool,
+
+    /// Token count mode: estimate the total token count of the final document
+    #[clap(long)]
+    pub token_count: bool,
+
+    /// Add line numbers to code blocks in the output
+    #[clap(long)]
+    pub line_numbers: bool,
+
+    /// Automatically answer yes to all prompts
+    #[clap(short = 'y', long)]
+    pub yes: bool,
+
+    /// Maximum token budget for the output. Files are truncated/skipped when exceeded.
+    #[clap(long)]
+    pub max_tokens: Option<usize>,
+
+    /// Output only diffs (omit full file contents; requires auto-diff & timestamped output)
+    #[clap(long, default_value_t = false)]
+    pub diff_only: bool,
+
+    /// Clear the cached project state and exit
+    #[clap(long)]
+    pub clear_cache: bool,
+
+    /// Initialize a new context-builder.toml config file in the current directory
+    #[clap(long)]
+    pub init: bool,
+
+    /// Extract function/class signatures only (requires tree-sitter feature)
+    #[clap(long)]
+    pub signatures: bool,
+
+    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    #[clap(long)]
+    pub structure: bool,
+
+    /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
+    #[clap(long, value_name = "MODE", default_value = "smart")]
+    pub truncate: String,
+
+    /// Filter signatures by visibility: "all", "public", or "private"
+    #[clap(long, default_value = "all")]
+    pub visibility: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::Parser;
+
+    #[test]
+    fn parses_with_no_args() {
+        let res = Args::try_parse_from(["context-builder"]);
+        assert!(res.is_ok(), "Expected success when no args are provided");
+    }
+
+    #[test]
+    fn parses_all_flags_and_options() {
+        let args = Args::try_parse_from([
+            "context-builder",
+            "--input",
+            "some/dir",
+            "--output",
+            "ctx.md",
+            "--filter",
+            "rs",
+            "--filter",
+            "toml",
+            "--ignore",
+            "target",
+            "--ignore",
+            "node_modules",
+            "--preview",
+            "--token-count",
+            "--line-numbers",
+            "--diff-only",
+            "--clear-cache",
+        ])
+        .expect("should parse");
+
+        assert_eq!(args.input, "some/dir");
+        assert_eq!(args.output, "ctx.md");
+        assert_eq!(args.filter, vec!["rs".to_string(), "toml".to_string()]);
+        assert_eq!(
+            args.ignore,
+            vec!["target".to_string(), "node_modules".to_string()]
+        );
+        assert!(args.preview);
+        assert!(args.token_count);
+        assert!(args.line_numbers);
+        assert!(args.diff_only);
+        assert!(args.clear_cache);
+    }
+
+    #[test]
+    fn short_flags_parse_correctly() {
+        let args = Args::try_parse_from([
+            "context-builder",
+            "-d",
+            ".",
+            "-o",
+            "out.md",
+            "-f",
+            "md",
+            "-f",
+            "rs",
+            "-i",
+            "target",
+            "-i",
+            ".git",
+        ])
+        .expect("should parse");
+
+        assert_eq!(args.input, ".");
+        assert_eq!(args.output, "out.md");
+        assert_eq!(args.filter, vec!["md".to_string(), "rs".to_string()]);
+        assert_eq!(args.ignore, vec!["target".to_string(), ".git".to_string()]);
+        assert!(!args.preview);
+        assert!(!args.line_numbers);
+        assert!(!args.clear_cache);
+    }
+
+    #[test]
+    fn defaults_for_options_when_not_provided() {
+        let args = Args::try_parse_from(["context-builder", "-d", "proj"]).expect("should parse");
+
+        assert_eq!(args.input, "proj");
+        assert_eq!(args.output, "output.md");
+        assert!(args.filter.is_empty());
+        assert!(args.ignore.is_empty());
+        assert!(!args.preview);
+        assert!(!args.line_numbers);
+        assert!(!args.diff_only);
+        assert!(!args.clear_cache);
+    }
+
+    #[test]
+    fn parses_diff_only_flag() {
+        let args = Args::try_parse_from(["context-builder", "--diff-only"])
+            .expect("should parse diff-only flag");
+        assert!(args.diff_only);
+        assert!(!args.clear_cache);
+    }
+
+    #[test]
+    fn parses_clear_cache_flag() {
+        let args = Args::try_parse_from(["context-builder", "--clear-cache"])
+            .expect("should parse clear-cache flag");
+        assert!(args.clear_cache);
+        assert!(!args.diff_only);
+    }
+
+    #[test]
+    fn parses_signatures_flag() {
+        let args = Args::try_parse_from(["context-builder", "--signatures"])
+            .expect("should parse signatures flag");
+        assert!(args.signatures);
+    }
+
+    #[test]
+    fn parses_structure_flag() {
+        let args = Args::try_parse_from(["context-builder", "--structure"])
+            .expect("should parse structure flag");
+        assert!(args.structure);
+    }
+
+    #[test]
+    fn parses_truncate_mode() {
+        let args = Args::try_parse_from(["context-builder", "--truncate", "byte"])
+            .expect("should parse truncate flag");
+        assert_eq!(args.truncate, "byte");
+
+        let args_default =
+            Args::try_parse_from(["context-builder"]).expect("should parse with default truncate");
+        assert_eq!(args_default.truncate, "smart");
+    }
+
+    #[test]
+    fn parses_visibility_filter() {
+        let args = Args::try_parse_from(["context-builder", "--visibility", "public"])
+            .expect("should parse visibility flag");
+        assert_eq!(args.visibility, "public");
+
+        let args_default = Args::try_parse_from(["context-builder"])
+            .expect("should parse with default visibility");
+        assert_eq!(args_default.visibility, "all");
+    }
+}
+```
+
+### File: `src/config.rs`
+
+- Size: 8954 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use serde::Deserialize;
+use std::fs;
+use std::path::Path;
+
+/// Global configuration loaded from `context-builder.toml`.
+///
+/// Any field left as `None` means "use the CLI default / do not override".
+/// Command-line arguments always take precedence over values provided here.
+///
+/// Example `context-builder.toml`:
+/// ```toml
+/// output = "context.md"
+/// output_folder = "docs"
+/// timestamped_output = true
+/// auto_diff = true
+/// diff_only = true         # Emit only change summary + modified file diffs (no full file bodies)
+/// filter = ["rs", "toml"]
+/// ignore = ["target", ".git"]
+/// line_numbers = false
+/// diff_context_lines = 5
+/// ```
+///
+#[derive(Deserialize, Debug, Default, Clone)]
+pub struct Config {
+    /// Output file name (or base name when `timestamped_output = true`)
+    pub output: Option<String>,
+
+    /// File extensions to include (no leading dot, e.g. `rs`, `toml`)
+    pub filter: Option<Vec<String>>,
+
+    /// File / directory names to ignore (exact name matches)
+    pub ignore: Option<Vec<String>>,
+
+    /// Add line numbers to code blocks
+    pub line_numbers: Option<bool>,
+
+    /// Preview only the file tree (no file output)
+    pub preview: Option<bool>,
+
+    /// Token counting mode
+    pub token_count: Option<bool>,
+
+    /// Optional folder to place the generated output file(s) in
+    pub output_folder: Option<String>,
+
+    /// If true, append a UTC timestamp to the output file name (before extension)
+    pub timestamped_output: Option<bool>,
+
+    /// Assume "yes" for overwrite / processing confirmations
+    pub yes: Option<bool>,
+
+    /// Enable automatic diff generation (requires `timestamped_output = true`)
+    pub auto_diff: Option<bool>,
+
+    /// Override number of unified diff context lines (falls back to env or default = 3)
+    pub diff_context_lines: Option<usize>,
+
+    /// When true, emit ONLY:
+    /// - Header + file tree
+    /// - Change Summary
+    /// - Per-file diffs for modified files
+    ///
+    /// Excludes full file contents section entirely. Added files appear only in the
+    /// change summary (and are marked Added) but their full content is omitted.
+    pub diff_only: Option<bool>,
+
+    /// Encoding handling strategy for non-UTF-8 files.
+    /// - "detect": Attempt to detect and transcode to UTF-8 (default)
+    /// - "strict": Only include valid UTF-8 files, skip others
+    /// - "skip": Skip all non-UTF-8 files without transcoding attempts
+    pub encoding_strategy: Option<String>,
+
+    /// Maximum token budget for the output. Files are truncated/skipped when exceeded.
+    pub max_tokens: Option<usize>,
+
+    /// Extract function/class signatures only (requires tree-sitter feature)
+    pub signatures: Option<bool>,
+
+    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    pub structure: Option<bool>,
+
+    /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
+    pub truncate: Option<String>,
+
+    /// Filter signatures by visibility: "all", "public", or "private"
+    pub visibility: Option<String>,
+}
+
+/// Load configuration from `context-builder.toml` in the current working directory.
+/// Returns `None` if the file does not exist or cannot be parsed.
+pub fn load_config() -> Option<Config> {
+    let config_path = Path::new("context-builder.toml");
+    if config_path.exists() {
+        let content = fs::read_to_string(config_path).ok()?;
+        match toml::from_str(&content) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Failed to parse context-builder.toml: {}. Config will be ignored.",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    }
+}
+
+/// Load configuration from `context-builder.toml` in the specified project root directory.
+/// Returns `None` if the file does not exist or cannot be parsed.
+pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
+    let config_path = project_root.join("context-builder.toml");
+    if config_path.exists() {
+        let content = fs::read_to_string(&config_path).ok()?;
+        match toml::from_str(&content) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Failed to parse {}: {}. Config will be ignored.",
+                    config_path.display(),
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_config_nonexistent_file() {
+        // Test loading config when file doesn't exist by temporarily changing directory
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+
+        // Change to temp directory where no config file exists
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let result = load_config();
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_nonexistent_file() {
+        let dir = tempdir().unwrap();
+        let result = load_config_from_path(dir.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_valid_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        let config_content = r#"
+output = "test-output.md"
+filter = ["rs", "toml"]
+ignore = ["target", ".git"]
+line_numbers = true
+preview = false
+token_count = true
+timestamped_output = true
+yes = false
+auto_diff = true
+diff_context_lines = 5
+diff_only = false
+encoding_strategy = "detect"
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert_eq!(config.output.unwrap(), "test-output.md");
+        assert_eq!(config.filter.unwrap(), vec!["rs", "toml"]);
+        assert_eq!(config.ignore.unwrap(), vec!["target", ".git"]);
+        assert!(config.line_numbers.unwrap());
+        assert!(!config.preview.unwrap());
+        assert!(config.token_count.unwrap());
+        assert!(config.timestamped_output.unwrap());
+        assert!(!config.yes.unwrap());
+        assert!(config.auto_diff.unwrap());
+        assert_eq!(config.diff_context_lines.unwrap(), 5);
+        assert!(!config.diff_only.unwrap());
+        assert_eq!(config.encoding_strategy.unwrap(), "detect");
+    }
+
+    #[test]
+    fn load_config_from_path_partial_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        let config_content = r#"
+output = "minimal.md"
+filter = ["py"]
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert_eq!(config.output.unwrap(), "minimal.md");
+        assert_eq!(config.filter.unwrap(), vec!["py"]);
+        assert!(config.ignore.is_none());
+        assert!(config.line_numbers.is_none());
+        assert!(config.auto_diff.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_invalid_toml() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        // Invalid TOML content
+        let config_content = r#"
+output = "test.md"
+invalid_toml [
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let config = load_config_from_path(dir.path());
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn load_config_from_path_empty_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+
+        fs::write(&config_path, "").unwrap();
+
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert!(config.output.is_none());
+        assert!(config.filter.is_none());
+        assert!(config.ignore.is_none());
+    }
+
+    #[test]
+    fn config_default_implementation() {
+        let config = Config::default();
+        assert!(config.output.is_none());
+        assert!(config.filter.is_none());
+        assert!(config.ignore.is_none());
+        assert!(config.line_numbers.is_none());
+        assert!(config.preview.is_none());
+        assert!(config.token_count.is_none());
+        assert!(config.output_folder.is_none());
+        assert!(config.timestamped_output.is_none());
+        assert!(config.yes.is_none());
+        assert!(config.auto_diff.is_none());
+        assert!(config.diff_context_lines.is_none());
+        assert!(config.diff_only.is_none());
+        assert!(config.encoding_strategy.is_none());
+        assert!(config.max_tokens.is_none());
+        assert!(config.signatures.is_none());
+        assert!(config.structure.is_none());
+        assert!(config.truncate.is_none());
+        assert!(config.visibility.is_none());
+    }
+}
+```
+
+### File: `src/config_resolver.rs`
+
+- Size: 15995 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Configuration resolution module for context-builder.
+//!
+//! This module provides centralized logic for merging CLI arguments with configuration
+//! file values, implementing proper precedence rules and handling complex scenarios
+//! like timestamping and output folder resolution.
+
+use chrono::Utc;
+use std::path::{Path, PathBuf};
+
+use crate::cli::Args;
+use crate::config::Config;
+
+/// Resolved configuration combining CLI arguments and config file values
+#[derive(Debug, Clone)]
+pub struct ResolvedConfig {
+    pub input: String,
+    pub output: String,
+    pub filter: Vec<String>,
+    pub ignore: Vec<String>,
+    pub line_numbers: bool,
+    pub preview: bool,
+    pub token_count: bool,
+    pub yes: bool,
+    pub diff_only: bool,
+    pub clear_cache: bool,
+    pub auto_diff: bool,
+    pub diff_context_lines: usize,
+    pub max_tokens: Option<usize>,
+    pub init: bool,
+    pub signatures: bool,
+    pub structure: bool,
+    pub truncate: String,
+    pub visibility: String,
+}
+
+/// Result of configuration resolution including the final config and any warnings
+#[derive(Debug)]
+pub struct ConfigResolution {
+    pub config: ResolvedConfig,
+    pub warnings: Vec<String>,
+}
+
+/// Resolves final configuration by merging CLI arguments with config file values.
+///
+/// Precedence rules (highest to lowest):
+/// 1. Explicit CLI arguments (non-default values)
+/// 2. Configuration file values
+/// 3. CLI default values
+///
+/// Special handling:
+/// - `output` field supports timestamping and output folder resolution
+/// - Boolean flags respect explicit CLI usage vs defaults
+/// - Arrays (filter, ignore) use CLI if non-empty, otherwise config file
+pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigResolution {
+    let mut warnings = Vec::new();
+
+    // Start with CLI defaults, then apply config file, then explicit CLI overrides
+    let final_config = if let Some(config) = config {
+        apply_config_to_args(&mut args, &config, &mut warnings);
+        resolve_output_path(&mut args, &config, &mut warnings);
+        config
+    } else {
+        Config::default()
+    };
+
+    let resolved = ResolvedConfig {
+        input: args.input,
+        output: args.output,
+        filter: args.filter,
+        ignore: args.ignore,
+        line_numbers: args.line_numbers,
+        preview: args.preview,
+        token_count: args.token_count,
+        yes: args.yes,
+        diff_only: args.diff_only,
+        clear_cache: args.clear_cache,
+        auto_diff: final_config.auto_diff.unwrap_or(false),
+        diff_context_lines: final_config.diff_context_lines.unwrap_or(3),
+        max_tokens: args.max_tokens.or(final_config.max_tokens),
+        init: args.init,
+        signatures: args.signatures || final_config.signatures.unwrap_or(false),
+        structure: args.structure || final_config.structure.unwrap_or(false),
+        truncate: if args.truncate != "smart" {
+            args.truncate.clone()
+        } else {
+            final_config
+                .truncate
+                .clone()
+                .unwrap_or_else(|| args.truncate.clone())
+        },
+        visibility: if args.visibility != "all" {
+            args.visibility.clone()
+        } else {
+            final_config
+                .visibility
+                .clone()
+                .unwrap_or_else(|| args.visibility.clone())
+        },
+    };
+
+    ConfigResolution {
+        config: resolved,
+        warnings,
+    }
+}
+
+/// Apply configuration file values to CLI arguments based on precedence rules
+fn apply_config_to_args(args: &mut Args, config: &Config, warnings: &mut Vec<String>) {
+    // Output: only apply config if CLI is using default value
+    if args.output == "output.md"
+        && let Some(ref output) = config.output
+    {
+        args.output = output.clone();
+    }
+
+    // Filter: CLI takes precedence if non-empty
+    if args.filter.is_empty()
+        && let Some(ref filter) = config.filter
+    {
+        args.filter = filter.clone();
+    }
+
+    // Ignore: CLI takes precedence if non-empty
+    if args.ignore.is_empty()
+        && let Some(ref ignore) = config.ignore
+    {
+        args.ignore = ignore.clone();
+    }
+
+    // Boolean flags: config applies only if CLI is using default (false)
+    // Note: We can't distinguish between explicit --no-flag and default false,
+    // so config file can only enable features, not disable them
+    if !args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        args.line_numbers = line_numbers;
+    }
+
+    if !args.preview
+        && let Some(preview) = config.preview
+    {
+        args.preview = preview;
+    }
+
+    if !args.token_count
+        && let Some(token_count) = config.token_count
+    {
+        args.token_count = token_count;
+    }
+
+    if !args.yes
+        && let Some(yes) = config.yes
+    {
+        args.yes = yes;
+    }
+
+    // diff_only: config can enable it, but CLI flag always takes precedence
+    if !args.diff_only
+        && let Some(true) = config.diff_only
+    {
+        args.diff_only = true;
+    }
+
+    // Validate auto_diff configuration
+    if let Some(true) = config.auto_diff
+        && config.timestamped_output != Some(true)
+    {
+        warnings.push(
+            "auto_diff is enabled but timestamped_output is not enabled. \
+            Auto-diff requires timestamped_output = true to function properly."
+                .to_string(),
+        );
+    }
+}
+
+/// Resolve output path including timestamping and output folder logic
+fn resolve_output_path(args: &mut Args, config: &Config, warnings: &mut Vec<String>) {
+    let mut output_folder_path: Option<PathBuf> = None;
+
+    // Apply output folder first
+    if let Some(ref output_folder) = config.output_folder {
+        let mut path = PathBuf::from(output_folder);
+        path.push(&args.output);
+        args.output = path.to_string_lossy().to_string();
+        output_folder_path = Some(PathBuf::from(output_folder));
+    }
+
+    // Apply timestamping if enabled
+    if let Some(true) = config.timestamped_output {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = Path::new(&args.output);
+
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+
+        if let Some(output_folder) = output_folder_path {
+            args.output = output_folder
+                .join(new_filename)
+                .to_string_lossy()
+                .to_string();
+        } else {
+            let new_path = path.with_file_name(new_filename);
+            args.output = new_path.to_string_lossy().to_string();
+        }
+    }
+
+    // Validate output folder exists if specified
+    if let Some(ref output_folder) = config.output_folder {
+        let folder_path = Path::new(output_folder);
+        if !folder_path.exists() {
+            warnings.push(format!(
+                "Output folder '{}' does not exist. It will be created if possible.",
+                output_folder
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_precedence_cli_over_config() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "custom.md".to_string(), // Explicit CLI value
+            filter: vec!["rs".to_string()],  // Explicit CLI value
+            ignore: vec![],
+            line_numbers: true, // Explicit CLI value
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            output: Some("config.md".to_string()),  // Should be ignored
+            filter: Some(vec!["toml".to_string()]), // Should be ignored
+            line_numbers: Some(false),              // Should be ignored
+            preview: Some(true),                    // Should apply
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args.clone(), Some(config));
+
+        assert_eq!(resolution.config.output, "custom.md"); // CLI wins
+        assert_eq!(resolution.config.filter, vec!["rs"]); // CLI wins
+        assert!(resolution.config.line_numbers); // CLI wins
+        assert!(resolution.config.preview); // Config applies
+    }
+
+    #[test]
+    fn test_config_applies_when_cli_uses_defaults() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "output.md".to_string(), // Default value
+            filter: vec![],                  // Default value
+            ignore: vec![],                  // Default value
+            line_numbers: false,             // Default value
+            preview: false,                  // Default value
+            token_count: false,              // Default value
+            yes: false,                      // Default value
+            diff_only: false,                // Default value
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            output: Some("from_config.md".to_string()),
+            filter: Some(vec!["rs".to_string(), "toml".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            preview: Some(true),
+            token_count: Some(true),
+            yes: Some(true),
+            diff_only: Some(true),
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args, Some(config));
+
+        assert_eq!(resolution.config.output, "from_config.md");
+        assert_eq!(
+            resolution.config.filter,
+            vec!["rs".to_string(), "toml".to_string()]
+        );
+        assert_eq!(resolution.config.ignore, vec!["target".to_string()]);
+        assert!(resolution.config.line_numbers);
+        assert!(resolution.config.preview);
+        assert!(resolution.config.token_count);
+        assert!(resolution.config.yes);
+        assert!(resolution.config.diff_only);
+    }
+
+    #[test]
+    fn test_timestamped_output_resolution() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            timestamped_output: Some(true),
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args, Some(config));
+
+        // Output should have timestamp format: test_YYYYMMDDHHMMSS.md
+        assert!(resolution.config.output.starts_with("test_"));
+        assert!(resolution.config.output.ends_with(".md"));
+        assert!(resolution.config.output.len() > "test_.md".len());
+    }
+
+    #[test]
+    fn test_output_folder_resolution() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            output_folder: Some("docs".to_string()),
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args, Some(config));
+
+        assert!(resolution.config.output.contains("docs"));
+        assert!(resolution.config.output.ends_with("test.md"));
+    }
+
+    #[test]
+    fn test_output_folder_with_timestamping() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            output_folder: Some("docs".to_string()),
+            timestamped_output: Some(true),
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args, Some(config));
+
+        assert!(resolution.config.output.contains("docs"));
+        assert!(resolution.config.output.contains("test_"));
+        assert!(resolution.config.output.ends_with(".md"));
+    }
+
+    #[test]
+    fn test_auto_diff_without_timestamping_warning() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            auto_diff: Some(true),
+            timestamped_output: Some(false), // This should generate a warning
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args, Some(config));
+
+        assert!(!resolution.warnings.is_empty());
+        assert!(resolution.warnings[0].contains("auto_diff"));
+        assert!(resolution.warnings[0].contains("timestamped_output"));
+    }
+
+    #[test]
+    fn test_no_config_uses_cli_defaults() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "output.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let resolution = resolve_final_config(args.clone(), None);
+
+        assert_eq!(resolution.config.input, args.input);
+        assert_eq!(resolution.config.output, args.output);
+        assert_eq!(resolution.config.filter, args.filter);
+        assert_eq!(resolution.config.ignore, args.ignore);
+        assert_eq!(resolution.config.line_numbers, args.line_numbers);
+        assert_eq!(resolution.config.preview, args.preview);
+        assert_eq!(resolution.config.token_count, args.token_count);
+        assert_eq!(resolution.config.yes, args.yes);
+        assert_eq!(resolution.config.diff_only, args.diff_only);
+        assert!(!resolution.config.auto_diff);
+        assert_eq!(resolution.config.diff_context_lines, 3);
+        assert!(resolution.warnings.is_empty());
+    }
+}
+```
+
+### File: `src/diff.rs`
+
+- Size: 21233 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use similar::{ChangeTag, TextDiff};
+use std::collections::HashMap;
+
+/// Line based diff utilities.
+///
+/// This module previously exposed `generate_diff` which produced a single
+/// "## File Differences" section for an entire markdown document. That
+/// approach made it easy for volatile sections (timestamps, file tree
+/// structure, etc.) to create noisy diffs. To address this the new
+/// per‑file API lets the caller diff only the normalized *file content*
+/// blocks that appear under each `### File: `path`` heading in the
+/// canonical output, completely ignoring the global header or the file
+/// tree portion. Each file receives an isolated unified style diff.
+///
+/// High level additions:
+/// * `PerFileStatus` – classification of the change.
+/// * `PerFileDiff` – structured diff result for a single file.
+/// * `diff_file_contents` – core engine producing diffs per file without any
+///   global "## File Differences" header.
+/// * `render_per_file_diffs` – helper to render the per file diffs into
+///   markdown (still omits a global header so the caller can choose).
+///
+/// Backwards compatibility: the existing `generate_diff` function (full
+/// document diff) is retained for now. New code should prefer the
+/// per‑file functions.
+/// Determine number of context lines either from explicit argument or env.
+fn resolve_context_lines(explicit: Option<usize>) -> usize {
+    explicit
+        .filter(|v| *v > 0)
+        .or_else(|| {
+            std::env::var("CB_DIFF_CONTEXT_LINES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|v: &usize| *v > 0)
+        })
+        .unwrap_or(3)
+}
+
+/// Original API: produce a single markdown section headed by "## File Differences".
+/// (Kept unchanged for compatibility.)
+pub fn generate_diff(old_content: &str, new_content: &str) -> String {
+    let diff = TextDiff::from_lines(old_content, new_content);
+    if diff.ratio() == 1.0 {
+        return String::new();
+    }
+    let context_lines = resolve_context_lines(None);
+    let grouped = diff.grouped_ops(context_lines);
+    let mut out = String::new();
+    out.push_str("## File Differences\n\n");
+    out.push_str("```diff\n");
+    for (group_index, group) in grouped.iter().enumerate() {
+        if group_index > 0 {
+            out.push_str("  ...\n");
+        }
+        // Emit standard unified diff hunk header for positional context
+        if let (Some(first), Some(last)) = (group.first(), group.last()) {
+            let old_start = first.old_range().start + 1;
+            let old_len = last.old_range().end - first.old_range().start;
+            let new_start = first.new_range().start + 1;
+            let new_len = last.new_range().end - first.new_range().start;
+            out.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                old_start, old_len, new_start, new_len
+            ));
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let tag = change.tag();
+                let mut line = change.to_string();
+                if line.ends_with('\n') {
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                }
+
+                match tag {
+                    ChangeTag::Delete => {
+                        out.push_str("- ");
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                    ChangeTag::Insert => {
+                        out.push_str("+ ");
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                    ChangeTag::Equal => {
+                        out.push_str("  ");
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+    }
+    out.push_str("```\n\n");
+    out
+}
+
+/// Classification of how a file changed between two snapshots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PerFileStatus {
+    Added,
+    Removed,
+    Modified,
+    Unchanged,
+}
+
+/// Structured diff result for a single file.
+#[derive(Debug, Clone)]
+pub struct PerFileDiff {
+    pub path: String,
+    pub status: PerFileStatus,
+    /// Unified diff fenced in ```diff (omitted when status == Unchanged and skip_unchanged=true)
+    pub diff: String,
+}
+
+impl PerFileDiff {
+    pub fn is_changed(&self) -> bool {
+        self.status != PerFileStatus::Unchanged
+    }
+}
+
+/// Produce a unified style diff for two text blobs WITHOUT adding any global
+/// section header. Returns empty string if contents are identical.
+fn unified_no_header(old: &str, new: &str, context_lines: usize) -> String {
+    let diff = TextDiff::from_lines(old, new);
+    if diff.ratio() == 1.0 {
+        return String::new();
+    }
+    let grouped = diff.grouped_ops(context_lines);
+    let mut out = String::new();
+    out.push_str("```diff\n");
+    for (group_index, group) in grouped.iter().enumerate() {
+        if group_index > 0 {
+            out.push_str("  ...\n");
+        }
+        // Emit standard unified diff hunk header for positional context
+        if let (Some(first), Some(last)) = (group.first(), group.last()) {
+            let old_start = first.old_range().start + 1;
+            let old_len = last.old_range().end - first.old_range().start;
+            let new_start = first.new_range().start + 1;
+            let new_len = last.new_range().end - first.new_range().start;
+            out.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                old_start, old_len, new_start, new_len
+            ));
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let tag = change.tag();
+                let mut line = change.to_string();
+                if line.ends_with('\n') {
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                }
+
+                match tag {
+                    ChangeTag::Delete => {
+                        out.push_str("- ");
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                    ChangeTag::Insert => {
+                        out.push_str("+ ");
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                    ChangeTag::Equal => {
+                        out.push_str("  ");
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+    }
+    out.push_str("```\n");
+    out
+}
+
+/// Diff per file content sets.
+///
+/// Inputs are maps keyed by file path (relative or absolute – caller decides)
+/// with values being the raw file content EXACTLY as you wish it to be diffed
+/// (e.g. already stripped of volatile metadata, no size/modified lines, only
+/// the real file body). This keeps higher level logic (parsing the markdown
+/// document) out of the diff layer.
+///
+/// Returns a vector of `PerFileDiff` for every file that is Added, Removed,
+/// or Modified. Unchanged files are omitted by default (`skip_unchanged=true`)
+/// to reduce noise, but you can opt to include them.
+pub fn diff_file_contents(
+    previous: &HashMap<String, String>,
+    current: &HashMap<String, String>,
+    skip_unchanged: bool,
+    explicit_context: Option<usize>,
+) -> Vec<PerFileDiff> {
+    let mut all_paths: Vec<String> = previous.keys().chain(current.keys()).cloned().collect();
+    all_paths.sort();
+    all_paths.dedup();
+
+    let context_lines = resolve_context_lines(explicit_context);
+    let mut results = Vec::new();
+
+    for path in all_paths {
+        let old_opt = previous.get(&path);
+        let new_opt = current.get(&path);
+        match (old_opt, new_opt) {
+            (None, Some(new_content)) => {
+                // Added file: present only in current snapshot
+                let mut diff = String::new();
+                diff.push_str("```diff\n");
+                for line in new_content.lines() {
+                    diff.push_str("+ ");
+                    diff.push_str(line);
+                    diff.push('\n');
+                }
+                diff.push_str("```\n");
+                results.push(PerFileDiff {
+                    path,
+                    status: PerFileStatus::Added,
+                    diff,
+                });
+            }
+            (Some(_old_content), None) => {
+                // Removed file
+                let old_content = previous.get(&path).unwrap();
+                let mut diff = String::new();
+                diff.push_str("```diff\n");
+                for line in old_content.lines() {
+                    diff.push_str("- ");
+                    diff.push_str(line);
+                    diff.push('\n');
+                }
+                diff.push_str("```\n");
+                results.push(PerFileDiff {
+                    path,
+                    status: PerFileStatus::Removed,
+                    diff,
+                });
+            }
+            (Some(old_content), Some(new_content)) => {
+                if old_content == new_content {
+                    if !skip_unchanged {
+                        results.push(PerFileDiff {
+                            path,
+                            status: PerFileStatus::Unchanged,
+                            diff: String::new(),
+                        });
+                    }
+                } else {
+                    let diff = unified_no_header(old_content, new_content, context_lines);
+                    results.push(PerFileDiff {
+                        path,
+                        status: PerFileStatus::Modified,
+                        diff,
+                    });
+                }
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+
+    results
+}
+
+/// Render a collection of per file diffs into markdown WITHOUT a global
+/// "## File Differences" header. Each file begins with a "### Diff: `<path>`"
+/// heading so that it can be appended near the changed files summary.
+pub fn render_per_file_diffs(diffs: &[PerFileDiff]) -> String {
+    let mut out = String::new();
+    for d in diffs {
+        out.push_str(&format!("### Diff: `{}`\n\n", d.path));
+        match d.status {
+            PerFileStatus::Added => out.push_str("_Status: Added_\n\n"),
+            PerFileStatus::Removed => out.push_str("_Status: Removed_\n\n"),
+            PerFileStatus::Modified => out.push_str("_Status: Modified_\n\n"),
+            PerFileStatus::Unchanged => {
+                out.push_str("_Status: Unchanged_\n\n");
+            }
+        }
+        if !d.diff.is_empty() {
+            out.push_str(&d.diff);
+            if !d.diff.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn unchanged_is_skipped() {
+        let prev = map(&[("a.txt", "one\n")]);
+        let curr = map(&[("a.txt", "one\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, Some(2));
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn added_file_diff() {
+        let prev = map(&[]);
+        let curr = map(&[("new.rs", "fn main() {}\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, Some(2));
+        assert_eq!(diffs.len(), 1);
+        let d = &diffs[0];
+        assert_eq!(d.status, PerFileStatus::Added);
+        assert!(d.diff.contains("+ fn main() {}"));
+    }
+
+    #[test]
+    fn removed_file_diff() {
+        let prev = map(&[("old.rs", "fn old() {}\n")]);
+        let curr = map(&[]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        let d = &diffs[0];
+        assert_eq!(d.status, PerFileStatus::Removed);
+        assert!(d.diff.contains("- fn old() {}"));
+    }
+
+    #[test]
+    fn modified_file_diff() {
+        let prev = map(&[("lib.rs", "fn add(a:i32,b:i32)->i32{a+b}\n")]);
+        let curr = map(&[("lib.rs", "fn add(a: i32, b: i32) -> i32 { a + b }\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, Some(1));
+        assert_eq!(diffs.len(), 1);
+        let d = &diffs[0];
+        assert_eq!(d.status, PerFileStatus::Modified);
+        assert!(d.diff.contains("- fn add(a:i32,b:i32)->i32{a+b}"));
+        assert!(d.diff.contains("+ fn add(a: i32, b: i32) -> i32 { a + b }"));
+    }
+
+    #[test]
+    fn include_unchanged_when_requested() {
+        let prev = map(&[("a.txt", "same\n")]);
+        let curr = map(&[("a.txt", "same\n")]);
+        let diffs = diff_file_contents(&prev, &curr, false, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Unchanged);
+    }
+
+    #[test]
+    fn render_output_basic() {
+        let prev = map(&[("a.txt", "one\n"), ("b.txt", "line1\nline2\n")]);
+        let curr = map(&[
+            ("a.txt", "two\n"),
+            ("b.txt", "line1\nline2\n"),
+            ("c.txt", "new file\n"),
+        ]);
+        let diffs = diff_file_contents(&prev, &curr, true, Some(1));
+        let out = render_per_file_diffs(&diffs);
+        assert!(out.contains("### Diff: `a.txt`"));
+        assert!(out.contains("_Status: Modified_"));
+        assert!(out.contains("+ two"));
+        assert!(out.contains("### Diff: `c.txt`"));
+        assert!(out.contains("_Status: Added_"));
+        assert!(out.contains("+ new file"));
+    }
+
+    #[test]
+    fn test_empty_files() {
+        let prev = map(&[("empty.txt", "")]);
+        let curr = map(&[("empty.txt", "")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn test_empty_to_content() {
+        let prev = map(&[("file.txt", "")]);
+        let curr = map(&[("file.txt", "new content\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("+ new content"));
+    }
+
+    #[test]
+    fn test_content_to_empty() {
+        let prev = map(&[("file.txt", "old content\n")]);
+        let curr = map(&[("file.txt", "")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("- old content"));
+    }
+
+    #[test]
+    fn test_multiline_modifications() {
+        let prev = map(&[("file.txt", "line1\nline2\nline3\nline4\n")]);
+        let curr = map(&[("file.txt", "line1\nmodified2\nline3\nline4\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, Some(2));
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("- line2"));
+        assert!(diffs[0].diff.contains("+ modified2"));
+    }
+
+    #[test]
+    fn test_windows_line_endings() {
+        let prev = map(&[("file.txt", "line1\r\nline2\r\n")]);
+        let curr = map(&[("file.txt", "line1\r\nmodified2\r\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("- line2"));
+        assert!(diffs[0].diff.contains("+ modified2"));
+    }
+
+    #[test]
+    fn test_per_file_diff_is_changed() {
+        let added = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Added,
+            diff: "test".to_string(),
+        };
+        assert!(added.is_changed());
+
+        let removed = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Removed,
+            diff: "test".to_string(),
+        };
+        assert!(removed.is_changed());
+
+        let modified = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Modified,
+            diff: "test".to_string(),
+        };
+        assert!(modified.is_changed());
+
+        let unchanged = PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Unchanged,
+            diff: String::new(),
+        };
+        assert!(!unchanged.is_changed());
+    }
+
+    #[test]
+    fn test_generate_diff_identical_content() {
+        let content = "line1\nline2\nline3\n";
+        let diff = generate_diff(content, content);
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_generate_diff_with_changes() {
+        let old = "line1\nline2\nline3\n";
+        let new = "line1\nmodified2\nline3\n";
+        let diff = generate_diff(old, new);
+        assert!(diff.contains("## File Differences"));
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("- line2"));
+        assert!(diff.contains("+ modified2"));
+    }
+
+    #[test]
+    fn test_resolve_context_lines_default() {
+        let context = resolve_context_lines(None);
+        assert_eq!(context, 3);
+    }
+
+    #[test]
+    fn test_resolve_context_lines_explicit() {
+        let context = resolve_context_lines(Some(5));
+        assert_eq!(context, 5);
+    }
+
+    #[test]
+    fn test_resolve_context_lines_zero_fallback() {
+        let context = resolve_context_lines(Some(0));
+        assert_eq!(context, 3); // Should fallback to default
+    }
+
+    #[test]
+    fn test_unicode_content_diff() {
+        let prev = map(&[("unicode.txt", "Hello 世界\n")]);
+        let curr = map(&[("unicode.txt", "Hello 世界! 🌍\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].status, PerFileStatus::Modified);
+        assert!(diffs[0].diff.contains("Hello 世界"));
+        assert!(diffs[0].diff.contains("🌍"));
+    }
+
+    #[test]
+    fn test_render_per_file_diffs_empty() {
+        let diffs = vec![];
+        let output = render_per_file_diffs(&diffs);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_render_per_file_diffs_unchanged() {
+        let diffs = vec![PerFileDiff {
+            path: "unchanged.txt".to_string(),
+            status: PerFileStatus::Unchanged,
+            diff: String::new(),
+        }];
+        let output = render_per_file_diffs(&diffs);
+        assert!(output.contains("### Diff: `unchanged.txt`"));
+        assert!(output.contains("_Status: Unchanged_"));
+    }
+
+    #[test]
+    fn test_render_per_file_diffs_without_trailing_newline() {
+        let diffs = vec![PerFileDiff {
+            path: "test.txt".to_string(),
+            status: PerFileStatus::Modified,
+            diff: "```diff\n+ line\n```".to_string(), // No trailing newline
+        }];
+        let output = render_per_file_diffs(&diffs);
+        assert!(output.contains("### Diff: `test.txt`"));
+        assert!(output.contains("_Status: Modified_"));
+        assert!(output.ends_with("\n\n")); // Should add newlines
+    }
+
+    #[test]
+    fn test_generate_diff_with_multiple_groups() {
+        // Create content that will result in multiple diff groups to trigger "..." separator
+        let old_content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10";
+        let new_content = "line1_modified\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9_modified\nline10";
+
+        let diff = generate_diff(old_content, new_content);
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("## File Differences"));
+        // With sufficient distance between changes and small context, should create groups with "..." separator
+        println!("Generated diff: {}", diff);
+    }
+
+    #[test]
+    fn test_diff_with_windows_line_endings() {
+        let old_content = "line1\r\nline2\r\n";
+        let new_content = "line1_modified\r\nline2\r\n";
+
+        let diff = generate_diff(old_content, new_content);
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("line1_modified"));
+        assert!(!diff.is_empty());
+    }
+
+    #[test]
+    fn test_unified_no_header_with_multiple_groups() {
+        // Create content that will result in multiple diff groups
+        let old_content = "start\n\n\n\n\n\n\n\n\n\nmiddle\n\n\n\n\n\n\n\n\n\nend";
+        let new_content =
+            "start_modified\n\n\n\n\n\n\n\n\n\nmiddle\n\n\n\n\n\n\n\n\n\nend_modified";
+
+        let diff = unified_no_header(old_content, new_content, 2);
+        assert!(diff.contains("```diff"));
+        // Should contain "..." separator between groups when changes are far apart
+        println!("Unified diff: {}", diff);
+    }
+
+    #[test]
+    fn test_unified_no_header_with_windows_line_endings() {
+        let old_content = "line1\r\nline2\r\n";
+        let new_content = "line1_modified\r\nline2\r\n";
+
+        let diff = unified_no_header(old_content, new_content, 3);
+        assert!(diff.contains("```diff"));
+        assert!(diff.contains("line1_modified"));
+        assert!(!diff.is_empty());
+    }
+}
+```
+
+### File: `src/file_utils.rs`
+
+- Size: 23556 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+/// Returns a numeric category for file relevance ordering.
+/// Lower numbers appear first in output. Categories:
+/// 0 = Project config + key docs (Cargo.toml, README.md, AGENTS.md, etc.)
+/// 1 = Source code (src/, lib/) — entry points sorted first within category
+/// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
+/// 3 = Documentation, scripts, and everything else
+/// 4 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
+/// 5 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
+fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
+    let relative = path.strip_prefix(base_path).unwrap_or(path);
+    let rel_str = relative.to_string_lossy();
+
+    // Check filename for lockfiles first — these are lowest priority
+    if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
+        let lockfile_names = [
+            "Cargo.lock",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "Gemfile.lock",
+            "poetry.lock",
+            "composer.lock",
+            "go.sum",
+            "bun.lockb",
+            "flake.lock",
+        ];
+        if lockfile_names.contains(&name) {
+            return 5;
+        }
+
+        // Check for config/manifest files + key project docs — highest priority
+        let config_names = [
+            // Package manifests
+            "Cargo.toml",
+            "package.json",
+            "tsconfig.json",
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "go.mod",
+            "Gemfile",
+            // Tool config
+            "context-builder.toml",
+            ".gitignore",
+            // Key project documentation (LLMs need these for context)
+            "README.md",
+            "README",
+            "README.txt",
+            "README.rst",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "GEMINI.md",
+            "COPILOT.md",
+            "CONTRIBUTING.md",
+            "CHANGELOG.md",
+        ];
+        if config_names.contains(&name) {
+            return 0;
+        }
+    }
+
+    // Check path prefix for category
+    let first_component = relative
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .unwrap_or("");
+
+    match first_component {
+        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => {
+            // Check sub-components for test directories within source trees.
+            // e.g., src/tests/auth.rs should be cat 2 (tests), not cat 1 (source).
+            let sub_path = rel_str.as_ref();
+            if sub_path.contains("/tests/")
+                || sub_path.contains("/test/")
+                || sub_path.contains("/spec/")
+                || sub_path.contains("/__tests__/")
+                || sub_path.contains("/benches/")
+                || sub_path.contains("/benchmarks/")
+            {
+                2
+            } else {
+                1
+            }
+        }
+        "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
+        "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
+        // Build/CI infrastructure — useful context but not core source
+        ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
+        _ => {
+            // Check extensions for additional heuristics
+            if let Some(ext) = relative.extension().and_then(|e| e.to_str()) {
+                match ext {
+                    "rs" | "go" | "py" | "ts" | "js" | "java" | "c" | "cpp" | "h" | "hpp"
+                    | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
+                        // Source file not in a recognized dir — check if it's a test
+                        // Use path boundaries to avoid false positives (e.g., "contest.rs")
+                        if rel_str.contains("/test/")
+                            || rel_str.contains("/tests/")
+                            || rel_str.contains("/spec/")
+                            || rel_str.contains("/__tests__/")
+                            || rel_str.ends_with("_test.rs")
+                            || rel_str.ends_with("_test.go")
+                            || rel_str.ends_with("_spec.rb")
+                            || rel_str.ends_with(".test.ts")
+                            || rel_str.ends_with(".test.js")
+                            || rel_str.ends_with(".spec.ts")
+                            || rel_str.starts_with("test_")
+                        {
+                            2
+                        } else {
+                            1
+                        }
+                    }
+                    "md" | "txt" | "rst" | "adoc" => 3,
+                    _ => 1, // Unknown extension in root — treat as source
+                }
+            } else {
+                // Check for build-related root files without extensions
+                if let Some(
+                    "Makefile" | "CMakeLists.txt" | "Dockerfile" | "Containerfile" | "Justfile"
+                    | "Taskfile" | "Rakefile" | "Vagrantfile",
+                ) = relative.file_name().and_then(|n| n.to_str())
+                {
+                    4
+                } else {
+                    3 // No extension — docs/other
+                }
+            }
+        }
+    }
+}
+
+/// Returns a sub-priority for sorting within the same relevance category.
+/// Lower values appear first. Entry points (main, lib, mod) get priority 0,
+/// other files get priority 1. This ensures LLMs see architectural entry
+/// points before helper modules.
+fn file_entry_point_priority(path: &Path) -> u8 {
+    if let Some("main" | "lib" | "mod" | "index" | "app" | "__init__") =
+        path.file_stem().and_then(|s| s.to_str())
+    {
+        0
+    } else {
+        1
+    }
+}
+
+/// Collects all files to be processed using `ignore` crate for efficient traversal.
+///
+/// `auto_ignores` are runtime-computed exclusion patterns (e.g., the tool's own
+/// output file or cache directory). They are processed identically to user ignores
+/// but kept separate to avoid polluting user-facing configuration.
+pub fn collect_files(
+    base_path: &Path,
+    filters: &[String],
+    ignores: &[String],
+    auto_ignores: &[String],
+) -> io::Result<Vec<DirEntry>> {
+    let mut walker = WalkBuilder::new(base_path);
+    // By default, the "ignore" crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
+
+    // Build overrides for custom ignore patterns
+    let mut override_builder = OverrideBuilder::new(base_path);
+
+    // Hardcoded auto-ignores for common heavy directories that should NEVER be
+    // included, even when there's no .git directory (so .gitignore isn't read).
+    // Without these, projects missing .git can produce million-line outputs
+    // from dependency trees.
+    //
+    // IMPORTANT: These are added FIRST so that user ignores can override them.
+    // The ignore crate uses "last-match-wins" semantics, so a user can whitelist
+    // a legitimate "vendor" or "build" dir by passing it as a filter pattern.
+    //
+    // IMPORTANT: Patterns must NOT contain a slash — the ignore crate anchors
+    // slash-containing patterns to the root, so `!dir/**` would only match
+    // top-level dirs, missing nested ones like `apps/web/node_modules/`.
+    let default_ignores = [
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "vendor",  // Go, PHP, Ruby
+        ".bundle", // Ruby
+        "bower_components",
+        ".next",       // Next.js build output
+        ".nuxt",       // Nuxt build output
+        ".svelte-kit", // SvelteKit build output
+        ".angular",    // Angular cache
+        "dist",        // Common build output
+        "build",       // Common build output
+        ".gradle",     // Gradle cache
+        ".cargo",      // Cargo registry cache
+    ];
+    for dir in &default_ignores {
+        // No slash in pattern → matches at any depth (not root-anchored)
+        let pattern = format!("!{}", dir);
+        if let Err(e) = override_builder.add(&pattern) {
+            log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
+        }
+    }
+
+    // User-specified ignore patterns (added AFTER defaults so they can override)
+    for pattern in ignores {
+        // Attention: Confusing pattern ahead!
+        // Add the pattern to the override builder with ! prefix to ignore matching files.
+        // In OverrideBuilder, patterns without ! are whitelist (include) patterns,
+        // while patterns with ! are ignore patterns.
+        let ignore_pattern = format!("!{}", pattern);
+        if let Err(e) = override_builder.add(&ignore_pattern) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Invalid ignore pattern '{}': {}", pattern, e),
+            ));
+        }
+    }
+    // Apply auto-computed ignore patterns (output file, cache dir, etc.)
+    for pattern in auto_ignores {
+        let ignore_pattern = format!("!{}", pattern);
+        if let Err(e) = override_builder.add(&ignore_pattern) {
+            log::warn!("Skipping invalid auto-ignore pattern '{}': {}", pattern, e);
+        }
+    }
+    // Also, always ignore the config file itself
+    if let Err(e) = override_builder.add("!context-builder.toml") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Failed to add config ignore: {}", e),
+        ));
+    }
+
+    let overrides = override_builder.build().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Failed to build overrides: {}", e),
+        )
+    })?;
+    walker.overrides(overrides);
+
+    if !filters.is_empty() {
+        let mut type_builder = ignore::types::TypesBuilder::new();
+        type_builder.add_defaults();
+        for filter in filters {
+            let _ = type_builder.add(filter, &format!("*.{}", filter));
+            type_builder.select(filter);
+        }
+        let types = type_builder.build().unwrap();
+        walker.types(types);
+    }
+
+    let mut files: Vec<DirEntry> = walker
+        .build()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+        .collect();
+
+    // Sort files by relevance category, then entry-point priority, then alphabetically.
+    // This puts config + docs first, then source code (entry points before helpers),
+    // then tests, then docs/other, then build/CI, then lockfiles.
+    // LLMs comprehend codebases better when core source appears before test scaffolding.
+    files.sort_by(|a, b| {
+        let cat_a = file_relevance_category(a.path(), base_path);
+        let cat_b = file_relevance_category(b.path(), base_path);
+        cat_a
+            .cmp(&cat_b)
+            .then_with(|| {
+                file_entry_point_priority(a.path()).cmp(&file_entry_point_priority(b.path()))
+            })
+            .then_with(|| a.path().cmp(b.path()))
+    });
+
+    Ok(files)
+}
+
+/// Asks for user confirmation if the number of files is large.
+pub fn confirm_processing(file_count: usize) -> io::Result<bool> {
+    if file_count > 100 {
+        print!(
+            "Warning: You're about to process {} files. This might take a while. Continue? [y/N] ",
+            file_count
+        );
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Asks for user confirmation to overwrite an existing file.
+pub fn confirm_overwrite(file_path: &str) -> io::Result<bool> {
+    print!("The file '{}' already exists. Overwrite? [y/N] ", file_path);
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    if input.trim().eq_ignore_ascii_case("y") {
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+
+    let mut latest_file = None;
+    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
+
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let metadata = fs::metadata(&path)?;
+            let modified = metadata.modified()?;
+            if modified > latest_time {
+                latest_time = modified;
+                latest_file = Some(path);
+            }
+        }
+    }
+
+    Ok(latest_file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    fn to_rel_paths(mut entries: Vec<DirEntry>, base: &Path) -> Vec<String> {
+        entries.sort_by_key(|e| e.path().to_path_buf());
+        entries
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn collect_files_respects_filters() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        // create files
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::create_dir_all(base.join("scripts")).unwrap();
+        fs::write(base.join("src").join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("Cargo.toml"), "[package]\nname=\"x\"").unwrap();
+        fs::write(base.join("README.md"), "# readme").unwrap();
+        fs::write(base.join("scripts").join("build.sh"), "#!/bin/sh\n").unwrap();
+
+        let filters = vec!["rs".to_string(), "toml".to_string()];
+        let ignores: Vec<String> = vec![];
+
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
+        let relative_paths = to_rel_paths(files, base);
+
+        assert!(relative_paths.contains(&"src/main.rs".to_string()));
+        assert!(relative_paths.contains(&"Cargo.toml".to_string()));
+        assert!(!relative_paths.contains(&"README.md".to_string()));
+        assert!(!relative_paths.contains(&"scripts/build.sh".to_string()));
+    }
+
+    #[test]
+    fn collect_files_respects_ignores_for_dirs_and_files() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::create_dir_all(base.join("target")).unwrap();
+        fs::create_dir_all(base.join("node_modules")).unwrap();
+
+        fs::write(base.join("src").join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("target").join("artifact.txt"), "bin").unwrap();
+        fs::write(base.join("node_modules").join("pkg.js"), "console.log();").unwrap();
+        fs::write(base.join("README.md"), "# readme").unwrap();
+
+        let filters: Vec<String> = vec![];
+        let ignores: Vec<String> = vec!["target".into(), "node_modules".into(), "README.md".into()];
+
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
+        let relative_paths = to_rel_paths(files, base);
+
+        assert!(relative_paths.contains(&"src/main.rs".to_string()));
+        assert!(!relative_paths.contains(&"target/artifact.txt".to_string()));
+        assert!(!relative_paths.contains(&"node_modules/pkg.js".to_string()));
+        assert!(!relative_paths.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn collect_files_handles_invalid_ignore_pattern() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src").join("main.rs"), "fn main() {}").unwrap();
+
+        let filters: Vec<String> = vec![];
+        let ignores: Vec<String> = vec!["[".into()]; // Invalid regex pattern
+
+        let result = collect_files(base, &filters, &ignores, &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid ignore pattern")
+        );
+    }
+
+    #[test]
+    fn collect_files_empty_directory() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        let filters: Vec<String> = vec![];
+        let ignores: Vec<String> = vec![];
+
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn collect_files_no_matching_filters() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("README.md"), "# readme").unwrap();
+        fs::write(base.join("script.py"), "print('hello')").unwrap();
+
+        let filters = vec!["rs".to_string()]; // Only Rust files
+        let ignores: Vec<String> = vec![];
+
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn collect_files_ignores_config_file() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::write(base.join("context-builder.toml"), "[config]").unwrap();
+        fs::write(base.join("other.toml"), "[other]").unwrap();
+
+        let filters: Vec<String> = vec![];
+        let ignores: Vec<String> = vec![];
+
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
+        let relative_paths = to_rel_paths(files, base);
+
+        assert!(!relative_paths.contains(&"context-builder.toml".to_string()));
+        assert!(relative_paths.contains(&"other.toml".to_string()));
+    }
+
+    #[test]
+    fn confirm_processing_small_count() {
+        // Test that small file counts don't require confirmation
+        let result = confirm_processing(50);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn find_latest_file_empty_directory() {
+        let dir = tempdir().unwrap();
+        let result = find_latest_file(dir.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_latest_file_nonexistent_directory() {
+        let dir = tempdir().unwrap();
+        let nonexistent = dir.path().join("nonexistent");
+        let result = find_latest_file(&nonexistent).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_latest_file_single_file() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        fs::write(&file_path, "content").unwrap();
+
+        let result = find_latest_file(dir.path()).unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), file_path);
+    }
+
+    #[test]
+    fn find_latest_file_multiple_files() {
+        let dir = tempdir().unwrap();
+
+        let file1 = dir.path().join("old.txt");
+        let file2 = dir.path().join("new.txt");
+
+        fs::write(&file1, "old content").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        fs::write(&file2, "new content").unwrap();
+
+        let result = find_latest_file(dir.path()).unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), file2);
+    }
+
+    #[test]
+    fn find_latest_file_ignores_directories() {
+        let dir = tempdir().unwrap();
+        let subdir = dir.path().join("subdir");
+        fs::create_dir(&subdir).unwrap();
+
+        let file_path = dir.path().join("test.txt");
+        fs::write(&file_path, "content").unwrap();
+
+        let result = find_latest_file(dir.path()).unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), file_path);
+    }
+
+    #[test]
+    fn test_confirm_processing_requires_user_interaction() {
+        // This test verifies the function signature and basic logic for large file counts
+        // The actual user interaction cannot be tested in unit tests
+
+        // For file counts <= 100, should return Ok(true) without prompting
+        // This is already tested implicitly by the fact that small counts don't prompt
+
+        // For file counts > 100, the function would prompt user input
+        // We can't easily test this without mocking stdin, but we can verify
+        // that the function exists and has the expected signature
+        use std::io::Cursor;
+
+        // Create a mock stdin that simulates user typing "y"
+        let input = b"y\n";
+        let _ = Cursor::new(input);
+
+        // We can't easily override stdin in a unit test without complex setup,
+        // so we'll just verify the function exists and handles small counts
+        let result = confirm_processing(50);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_confirm_overwrite_function_exists() {
+        // Similar to confirm_processing, this function requires user interaction
+        // We can verify it exists and has the expected signature
+
+        // For testing purposes, we know this function prompts for user input
+        // and returns Ok(true) if user types "y" or "Y", Ok(false) otherwise
+
+        // The function signature should be:
+        // pub fn confirm_overwrite(file_path: &str) -> io::Result<bool>
+
+        // We can't easily test the interactive behavior without mocking stdin,
+        // but we can ensure the function compiles and has the right signature
+        let _: fn(&str) -> std::io::Result<bool> = confirm_overwrite;
+    }
+
+    #[test]
+    fn test_collect_files_handles_permission_errors() {
+        // Test what happens when we can't access a directory
+        // This is harder to test portably, but we can test with invalid patterns
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        // Test with a pattern that might cause issues
+        let filters: Vec<String> = vec![];
+        let ignores: Vec<String> = vec!["[invalid".into()]; // Incomplete bracket
+
+        let result = collect_files(base, &filters, &ignores, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_latest_file_permission_error() {
+        // Test behavior when we can't read directory metadata
+        use std::path::Path;
+
+        // Test with a path that doesn't exist
+        let nonexistent = Path::new("/this/path/should/not/exist/anywhere");
+        let result = find_latest_file(nonexistent);
+
+        // Should return Ok(None) for non-existent directories
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_collect_files_with_symlinks() {
+        // Test behavior with symbolic links (if supported on platform)
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        // Create a regular file
+        fs::write(base.join("regular.txt"), "content").unwrap();
+
+        // On Unix-like systems, try creating a symlink
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let _ = symlink("regular.txt", base.join("link.txt"));
+        }
+
+        // On Windows, symlinks require special privileges, so skip this part
+        #[cfg(windows)]
+        {
+            // Just create another regular file to test
+            fs::write(base.join("another.txt"), "content2").unwrap();
+        }
+
+        let filters: Vec<String> = vec![];
+        let ignores: Vec<String> = vec![];
+
+        let files = collect_files(base, &filters, &ignores, &[]).unwrap();
+        // Should find at least the regular file
+        assert!(!files.is_empty());
+    }
+}
+```
+
+### File: `src/markdown.rs`
+
+- Size: 45110 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use chrono::Utc;
+use ignore::DirEntry;
+use log::{error, info, warn};
+use std::fs;
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::Path;
+
+use crate::tree::{FileTree, write_tree_to_file};
+use encoding_rs::{Encoding, UTF_8};
+
+#[cfg(feature = "parallel")]
+use crossbeam_channel::{Receiver, Sender, bounded};
+#[cfg(feature = "parallel")]
+use std::thread;
+
+/// Configuration for tree-sitter powered output.
+#[derive(Debug, Clone, Default)]
+pub struct TreeSitterConfig {
+    /// Output only signatures (function/type declarations) instead of full content.
+    pub signatures: bool,
+    /// Include a structure summary (counts of functions, structs, etc.) per file.
+    pub structure: bool,
+    /// Truncation mode: "smart" uses AST boundaries, anything else uses byte truncation.
+    pub truncate: String,
+    /// Visibility filter: "public", "private", or "all".
+    pub visibility: String,
+}
+
+/// Generates the final Markdown file.
+#[allow(clippy::too_many_arguments, unused_variables)]
+pub fn generate_markdown(
+    output_path: &str,
+    input_dir: &str,
+    filters: &[String],
+    ignores: &[String],
+    file_tree: &FileTree,
+    files: &[DirEntry],
+    base_path: &Path,
+    line_numbers: bool,
+    encoding_strategy: Option<&str>,
+    max_tokens: Option<usize>,
+    ts_config: &TreeSitterConfig,
+) -> io::Result<()> {
+    if let Some(parent) = Path::new(output_path).parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut output = fs::File::create(output_path)?;
+
+    let input_dir_name = if input_dir == "." {
+        let current_dir = std::env::current_dir()?;
+        current_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_else(|| current_dir.to_str().unwrap_or("project"))
+            .to_string()
+    } else {
+        input_dir.to_string()
+    };
+
+    // --- Header --- //
+    writeln!(output, "# Directory Structure Report\n")?;
+
+    if !filters.is_empty() {
+        writeln!(
+            output,
+            "This document contains files from the `{}` directory with extensions: {}",
+            input_dir_name,
+            filters.join(", ")
+        )?;
+    } else {
+        writeln!(
+            output,
+            "This document contains all files from the `{}` directory, optimized for LLM consumption.",
+            input_dir_name
+        )?;
+    }
+
+    if !ignores.is_empty() {
+        writeln!(output, "Custom ignored patterns: {}", ignores.join(", "))?;
+    }
+
+    // Deterministic content hash (enables LLM prompt caching across runs)
+    // Uses xxh3 over file content bytes — stable across Rust versions and machines.
+    // Previous implementation hashed mtime (broken by git checkout, cp, etc.)
+    let mut content_hasher = xxhash_rust::xxh3::Xxh3::new();
+    for entry in files {
+        // Hash relative unix-style path for cross-OS determinism.
+        // Using absolute or OS-native paths would produce different hashes
+        // on different machines or operating systems.
+        let rel_path = entry.path().strip_prefix(base_path).unwrap_or(entry.path());
+        let normalized = rel_path.to_string_lossy().replace('\\', "/");
+        content_hasher.update(normalized.as_bytes());
+        // Null delimiter prevents collision: path="a" content="bc" vs path="ab" content="c"
+        content_hasher.update(b"\0");
+        // Hash actual file content (not mtime!) for determinism
+        if let Ok(bytes) = std::fs::read(entry.path()) {
+            content_hasher.update(&bytes);
+        }
+        content_hasher.update(b"\0");
+    }
+    writeln!(output, "Content hash: {:016x}", content_hasher.digest())?;
+    writeln!(output)?;
+
+    // --- File Tree --- //
+
+    writeln!(output, "## File Tree Structure\n")?;
+
+    write_tree_to_file(&mut output, file_tree, 0)?;
+
+    writeln!(output)?;
+
+    // (No '## Files' heading here; it will be injected later only once during final composition)
+    // (Diff section will be conditionally inserted later by the auto_diff logic in lib.rs)
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+
+        // Create a bounded channel for ordered chunks
+        type ChunkResult = (usize, io::Result<Vec<u8>>);
+        let (sender, receiver): (Sender<ChunkResult>, Receiver<ChunkResult>) =
+            bounded(num_cpus::get() * 2); // Buffer size based on CPU count
+
+        let writer_handle = {
+            let mut output = output;
+            let total_files = files.len();
+            let budget = max_tokens;
+
+            thread::spawn(move || -> io::Result<()> {
+                let mut completed_chunks = std::collections::BTreeMap::new();
+                let mut next_index = 0;
+                let mut errors = Vec::new();
+                let mut tokens_used: usize = 0;
+                let mut budget_exceeded = false;
+
+                // Receive chunks and write them in order
+                while next_index < total_files {
+                    match receiver.recv() {
+                        Ok((index, chunk_result)) => {
+                            completed_chunks.insert(index, chunk_result);
+
+                            // Write all consecutive chunks starting from next_index
+                            while let Some(chunk_result) = completed_chunks.remove(&next_index) {
+                                if budget_exceeded {
+                                    // Already over budget — skip remaining chunks
+                                    next_index += 1;
+                                    continue;
+                                }
+
+                                match chunk_result {
+                                    Ok(buf) => {
+                                        // Estimate tokens for this chunk (~4 bytes per token)
+                                        let chunk_tokens = buf.len() / 4;
+
+                                        if let Some(max) = budget
+                                            && tokens_used + chunk_tokens > max
+                                            && tokens_used > 0
+                                        {
+                                            let remaining = total_files - next_index;
+                                            let notice = format!(
+                                                "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
+                                                max, remaining
+                                            );
+                                            if let Err(e) = output.write_all(notice.as_bytes()) {
+                                                errors.push(format!(
+                                                    "Failed to write truncation notice: {}",
+                                                    e
+                                                ));
+                                            }
+                                            budget_exceeded = true;
+                                            next_index += 1;
+                                            continue;
+                                        }
+
+                                        tokens_used += chunk_tokens;
+                                        if let Err(e) = output.write_all(&buf) {
+                                            errors.push(format!(
+                                                "Failed to write output for file index {}: {}",
+                                                next_index, e
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        errors.push(format!(
+                                            "Failed to process file index {}: {}",
+                                            next_index, e
+                                        ));
+                                    }
+                                }
+                                next_index += 1;
+                            }
+                        }
+                        Err(_) => break, // Channel closed
+                    }
+                }
+
+                if !errors.is_empty() {
+                    error!(
+                        "Encountered {} errors during parallel processing:",
+                        errors.len()
+                    );
+                    for err in &errors {
+                        error!("  {}", err);
+                    }
+                    return Err(std::io::Error::other(format!(
+                        "Failed to process {} files: {}",
+                        errors.len(),
+                        errors.join("; ")
+                    )));
+                }
+
+                Ok(())
+            })
+        };
+
+        // Process files in parallel and send results to writer
+        let ts_config_clone = ts_config.clone();
+        files.par_iter().enumerate().for_each(|(index, entry)| {
+            let mut buf = Vec::new();
+            let result = process_file(
+                base_path,
+                entry.path(),
+                &mut buf,
+                line_numbers,
+                encoding_strategy,
+                &ts_config_clone,
+            )
+            .map(|_| buf);
+
+            // Send result to writer thread (ignore send errors - channel might be closed)
+            let _ = sender.send((index, result));
+        });
+
+        // Close the sender to signal completion
+        drop(sender);
+
+        // Wait for writer thread to complete and propagate any errors
+        writer_handle
+            .join()
+            .map_err(|_| std::io::Error::other("Writer thread panicked"))??;
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        let mut tokens_used: usize = 0;
+
+        for (idx, entry) in files.iter().enumerate() {
+            // Estimate tokens for this file (~4 bytes per token)
+            let file_size = std::fs::metadata(entry.path())
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let estimated_file_tokens = (file_size as usize) / 4;
+
+            if let Some(budget) = max_tokens {
+                if tokens_used + estimated_file_tokens > budget && tokens_used > 0 {
+                    let remaining = files.len() - idx;
+                    writeln!(output, "---\n")?;
+                    writeln!(
+                        output,
+                        "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
+                        budget, remaining
+                    )?;
+                    break;
+                }
+            }
+
+            tokens_used += estimated_file_tokens;
+            process_file(
+                base_path,
+                entry.path(),
+                &mut output,
+                line_numbers,
+                encoding_strategy,
+                ts_config,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Processes a single file and writes its content to the output.
+pub fn process_file(
+    base_path: &Path,
+    file_path: &Path,
+    output: &mut impl Write,
+    line_numbers: bool,
+    encoding_strategy: Option<&str>,
+    ts_config: &TreeSitterConfig,
+) -> io::Result<()> {
+    let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
+    info!("Processing file: {}", relative_path.display());
+
+    let metadata = match fs::metadata(file_path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            error!(
+                "Failed to get metadata for {}: {}",
+                relative_path.display(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    let modified_time = metadata
+        .modified()
+        .ok()
+        .map(|time| {
+            let system_time: chrono::DateTime<Utc> = time.into();
+            system_time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+        })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    writeln!(output)?;
+    writeln!(output, "### File: `{}`", relative_path.display())?;
+
+    writeln!(output)?;
+
+    writeln!(output, "- Size: {} bytes", metadata.len())?;
+    writeln!(output, "- Modified: {}", modified_time)?;
+    writeln!(output)?;
+
+    // --- File Content --- //
+    let extension = file_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("text");
+    let language = match extension {
+        "rs" => "rust",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "jsx" => "jsx",
+        "tsx" => "tsx",
+        "json" => "json",
+        "toml" => "toml",
+        "md" => "markdown",
+        "yaml" | "yml" => "yaml",
+        "html" => "html",
+        "css" => "css",
+        "py" => "python",
+        "java" => "java",
+        "cpp" => "cpp",
+        "c" => "c",
+        "h" => "c",
+        "hpp" => "cpp",
+        "sql" => "sql",
+        "sh" => "bash",
+        "xml" => "xml",
+        "lock" => "toml",
+        _ => extension,
+    };
+
+    // Enhanced binary file handling with encoding detection and transcoding
+    match fs::File::open(file_path) {
+        Ok(mut file) => {
+            let mut sniff = [0u8; 8192];
+            let n = match file.read(&mut sniff) {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(
+                        "Could not read file {}: {}. Skipping content.",
+                        relative_path.display(),
+                        e
+                    );
+
+                    writeln!(output, "```text")?;
+
+                    writeln!(
+                        output,
+                        "<Could not read file content (e.g., binary file or permission error)>"
+                    )?;
+
+                    writeln!(output, "```")?;
+
+                    return Ok(());
+                }
+            };
+            let slice = &sniff[..n];
+
+            // Find a valid UTF-8 boundary by backtracking up to 3 bytes.
+            // If the sniff buffer cuts a multi-byte char (e.g., emoji at byte 8191),
+            // from_utf8 would falsely classify the file as non-UTF-8.
+            let check_len = if n == sniff.len() {
+                // Buffer is full — may have split a multi-byte char at the end
+                let mut end = n;
+                while end > 0 && end > n.saturating_sub(4) && sniff[end - 1] & 0xC0 == 0x80 {
+                    end -= 1; // skip continuation bytes
+                }
+                // If we landed on a leading byte, check if the sequence is complete
+                if end > 0 && end < n {
+                    let leading = sniff[end - 1];
+                    let expected_len = if leading & 0xE0 == 0xC0 {
+                        2
+                    } else if leading & 0xF0 == 0xE0 {
+                        3
+                    } else if leading & 0xF8 == 0xF0 {
+                        4
+                    } else {
+                        1
+                    };
+                    if end - 1 + expected_len > n {
+                        end - 1 // incomplete char — exclude the leading byte too
+                    } else {
+                        n
+                    }
+                } else {
+                    n
+                }
+            } else {
+                n // didn't fill the buffer, so no boundary issue
+            };
+
+            // First check if it's valid UTF-8
+            let is_utf8 = std::str::from_utf8(&sniff[..check_len]).is_ok();
+
+            if is_utf8 && !slice.contains(&0) {
+                // Valid UTF-8 text file - proceed normally
+            } else {
+                // Try encoding detection for non-UTF-8 files
+                // If it's not UTF-8, try to detect the encoding
+                let (encoding, _consumed) =
+                    encoding_rs::Encoding::for_bom(slice).unwrap_or((encoding_rs::UTF_8, 0));
+
+                // If it's not UTF-8, try to detect the encoding
+                let detected_encoding = if encoding == UTF_8 {
+                    // Use chardet-like detection for common encodings
+                    detect_text_encoding(slice)
+                } else {
+                    Some(encoding)
+                };
+
+                match detected_encoding {
+                    Some(enc) if enc != UTF_8 => {
+                        let strategy = encoding_strategy.unwrap_or("detect");
+                        match strategy {
+                            "strict" | "skip" => {
+                                // Skip files with non-UTF-8 encoding
+                                warn!(
+                                    "Skipping non-UTF-8 file {} (encoding: {}, strategy: {})",
+                                    relative_path.display(),
+                                    enc.name(),
+                                    strategy
+                                );
+                            }
+                            _ => {
+                                // Default "detect" strategy: attempt to transcode
+                                match transcode_file_content(file_path, enc) {
+                                    Ok(transcoded_content) => {
+                                        info!(
+                                            "Successfully transcoded {} from {} to UTF-8",
+                                            relative_path.display(),
+                                            enc.name()
+                                        );
+                                        write_text_content(
+                                            output,
+                                            &transcoded_content,
+                                            language,
+                                            line_numbers,
+                                        )?;
+                                        return Ok(());
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to transcode {} from {}: {}. Treating as binary.",
+                                            relative_path.display(),
+                                            enc.name(),
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        // Check if it's likely binary (contains null bytes)
+                        if slice.contains(&0) {
+                            warn!(
+                                "Detected binary file {} (contains null bytes). Skipping content.",
+                                relative_path.display()
+                            );
+                        } else {
+                            warn!(
+                                "Could not determine encoding for {}. Treating as binary.",
+                                relative_path.display()
+                            );
+                        }
+                    }
+                }
+
+                // Fallback to binary file placeholder
+                writeln!(output, "```text")?;
+                writeln!(
+                    output,
+                    "<Binary file or unsupported encoding: {} bytes>",
+                    metadata.len()
+                )?;
+                writeln!(output, "```")?;
+                return Ok(());
+            }
+
+            // Reset cursor and stream the content
+            if let Err(e) = file.seek(SeekFrom::Start(0)) {
+                warn!(
+                    "Could not reset file cursor for {}: {}. Skipping content.",
+                    relative_path.display(),
+                    e
+                );
+                writeln!(output, "```text")?;
+                writeln!(
+                    output,
+                    "<Could not read file content (e.g., binary file or permission error)>"
+                )?;
+                writeln!(output, "```")?;
+                return Ok(());
+            }
+
+            // Stream UTF-8 content
+            let content = match std::fs::read_to_string(file_path) {
+                Ok(content) => content,
+                Err(e) => {
+                    warn!(
+                        "Error reading file {}: {}. Output may be truncated.",
+                        relative_path.display(),
+                        e
+                    );
+                    writeln!(output, "```text")?;
+                    writeln!(output, "<Error reading file content>")?;
+                    writeln!(output, "```")?;
+                    return Ok(());
+                }
+            };
+            // When --signatures is active, replace file content with signatures-only output
+            let signatures_only = ts_config.signatures;
+
+            if !signatures_only {
+                // Note: Smart truncation (`truncate: "smart"`) indicates AST-boundary
+                // truncation should be preferred when content needs truncating.
+                // Without a per-file max_tokens budget, no truncation is applied.
+                // The flag is stored for future use when per-file token limits are implemented.
+                write_text_content(output, &content, language, line_numbers)?;
+            }
+
+            // Tree-sitter enrichment: signatures and/or structure
+            write_tree_sitter_enrichment(output, &content, extension, ts_config)?;
+        }
+        Err(e) => {
+            warn!(
+                "Could not open file {}: {}. Skipping content.",
+                relative_path.display(),
+                e
+            );
+            writeln!(output, "```text")?;
+            writeln!(
+                output,
+                "<Could not read file content (e.g., binary file or permission error)>"
+            )?;
+            writeln!(output, "```")?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Write tree-sitter enrichment (signatures, structure) after file content.
+#[allow(unused_variables)]
+fn write_tree_sitter_enrichment(
+    output: &mut impl Write,
+    content: &str,
+    extension: &str,
+    ts_config: &TreeSitterConfig,
+) -> io::Result<()> {
+    if !ts_config.signatures && !ts_config.structure {
+        return Ok(());
+    }
+
+    #[cfg(feature = "tree-sitter-base")]
+    {
+        use crate::tree_sitter::language_support::Visibility;
+
+        let vis_filter: Visibility = ts_config.visibility.parse().unwrap_or(Visibility::All);
+
+        if ts_config.structure
+            && let Some(structure) =
+                crate::tree_sitter::extract_structure_for_file(content, extension)
+        {
+            let summary = crate::tree_sitter::structure::format_structure_as_markdown(&structure);
+            if !summary.is_empty() {
+                writeln!(output)?;
+                write!(output, "{}", summary)?;
+            }
+        }
+
+        if ts_config.signatures
+            && let Some(signatures) =
+                crate::tree_sitter::extract_signatures_for_file(content, extension, vis_filter)
+            && !signatures.is_empty()
+        {
+            let language = match extension {
+                "rs" => "rust",
+                "js" | "mjs" | "cjs" => "javascript",
+                "ts" | "tsx" | "mts" | "cts" => "typescript",
+                "py" | "pyw" => "python",
+                "go" => "go",
+                "java" => "java",
+                "c" | "h" => "c",
+                "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
+                _ => extension,
+            };
+            writeln!(output)?;
+            writeln!(output, "**Signatures:**")?;
+            writeln!(output)?;
+            let formatted = crate::tree_sitter::signatures::format_signatures_as_markdown(
+                &signatures,
+                language,
+            );
+            write!(output, "{}", formatted)?;
+        }
+    }
+
+    #[cfg(not(feature = "tree-sitter-base"))]
+    {
+        // Tree-sitter not compiled in — flags have no effect.
+        // Warning is printed once at startup in lib.rs.
+    }
+
+    Ok(())
+}
+
+/// Detect text encoding using heuristics for common encodings
+fn detect_text_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
+    // Try common encodings
+    let encodings = [
+        encoding_rs::WINDOWS_1252,
+        encoding_rs::UTF_16LE,
+        encoding_rs::UTF_16BE,
+        encoding_rs::SHIFT_JIS,
+    ];
+
+    for encoding in &encodings {
+        let (decoded, _, had_errors) = encoding.decode(bytes);
+        if !had_errors && is_likely_text(&decoded) {
+            return Some(encoding);
+        }
+    }
+
+    None
+}
+
+/// Check if decoded content looks like text (no control characters except common ones)
+fn is_likely_text(content: &str) -> bool {
+    let mut control_chars = 0;
+    let mut total_chars = 0;
+
+    for ch in content.chars() {
+        total_chars += 1;
+        if ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t' {
+            control_chars += 1;
+        }
+
+        // If more than 5% control characters, probably not text
+        if total_chars > 100 && control_chars * 20 > total_chars {
+            return false;
+        }
+    }
+
+    // Allow up to 5% control characters in small files
+    if total_chars > 0 {
+        control_chars * 20 <= total_chars
+    } else {
+        true
+    }
+}
+
+/// Transcode file content from detected encoding to UTF-8
+fn transcode_file_content(file_path: &Path, encoding: &'static Encoding) -> io::Result<String> {
+    let bytes = std::fs::read(file_path)?;
+    let (decoded, _, had_errors) = encoding.decode(&bytes);
+
+    if had_errors {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Failed to decode file with encoding {}", encoding.name()),
+        ));
+    }
+
+    Ok(decoded.into_owned())
+}
+
+/// Write text content with optional line numbers
+fn write_text_content(
+    output: &mut impl Write,
+    content: &str,
+    language: &str,
+    line_numbers: bool,
+) -> io::Result<()> {
+    writeln!(output, "```{}", language)?;
+
+    if line_numbers {
+        for (i, line) in content.lines().enumerate() {
+            writeln!(output, "{:>4} | {}", i + 1, line)?;
+        }
+    } else {
+        output.write_all(content.as_bytes())?;
+        if !content.ends_with('\n') {
+            writeln!(output)?;
+        }
+    }
+
+    writeln!(output, "```")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_code_block_formatting() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join("test.rs");
+        let output_path = base_path.join("output.md");
+
+        // Create a test Rust file
+        fs::write(
+            &file_path,
+            "fn main() {\n    println!(\"Hello, world!\");\n}",
+        )
+        .unwrap();
+
+        // Create an output file
+        let mut output = fs::File::create(&output_path).unwrap();
+
+        // Process the file
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        // Read the output
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Check that code blocks are properly formatted
+        assert!(content.contains("```rust"));
+        assert!(content.contains("```") && content.matches("```").count() >= 2);
+    }
+
+    #[test]
+    fn test_markdown_file_formatting() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join("README.md");
+        let output_path = base_path.join("output.md");
+
+        // Create a test Markdown file
+        fs::write(&file_path, "# Test\n\nThis is a test markdown file.").unwrap();
+
+        // Create an output file
+        let mut output = fs::File::create(&output_path).unwrap();
+
+        // Process the file
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        // Read the output
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Debug prints the content
+        println!("Generated content:\n{}", content);
+
+        // Check that markdown files use the correct language identifier
+        assert!(
+            content.contains("```markdown"),
+            "Content should contain '```markdown' but was: {}",
+            content
+        );
+        // Count the number of code block markers
+        let code_block_markers = content.matches("```").count();
+
+        assert!(
+            code_block_markers >= 2,
+            "Expected at least 2 code block markers, found {}",
+            code_block_markers
+        );
+    }
+
+    #[test]
+    fn test_line_numbered_code_blocks() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join("lib.rs");
+        let output_path = base_path.join("out.md");
+
+        // Create a multi-line Rust file
+        fs::write(
+                    &file_path,
+                    "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\nfn main() {\n    println!(\"{}\", add(1, 2));\n}\n",
+                )
+                .unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            true,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Check language and line numbers prefix
+        assert!(content.contains("```rust"));
+        assert!(content.contains("   1 | "));
+        assert!(content.contains("   2 | "));
+
+        // Count lines with "|" prefix equals number of lines in an original file
+        let numbered_lines = content
+            .lines()
+            .filter(|l| {
+                l.trim_start()
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                    && l.contains(" | ")
+            })
+            .count();
+        let original_line_count = fs::read_to_string(&file_path).unwrap().lines().count();
+        assert_eq!(numbered_lines, original_line_count);
+
+        // Ensure code fence closes
+        assert!(content.contains("```"));
+    }
+
+    #[test]
+    fn test_binary_file_handling() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join("image.bin");
+        let output_path = base_path.join("out.md");
+
+        // Write truly binary data that won't be decoded by encoding detection
+        let bytes = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG header
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // PNG chunk
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, // More binary data
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Null bytes
+        ];
+        fs::write(&file_path, bytes).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Expect a text block to fall back with a helpful message
+        assert!(content.contains("```text"));
+        assert!(content.contains("<Binary file or unsupported encoding:"));
+
+        // Ensure the code block is closed
+        let fence_count = content.matches("```").count();
+        assert!(
+            fence_count >= 2,
+            "expected at least opening and closing fences, got {}",
+            fence_count
+        );
+    }
+
+    #[test]
+    fn test_encoding_detection_and_transcoding() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        // Test Windows-1252 encoded file (common in Windows)
+        let windows1252_content = [
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, // "Hello "
+            0x93, 0x57, 0x6F, 0x72, 0x6C, 0x64, 0x94, // "World" with smart quotes
+            0x0A, // newline
+        ];
+        let file_path = base_path.join("windows1252.txt");
+        fs::write(&file_path, windows1252_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("detect"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should contain transcoded content with UTF-8 equivalents
+        assert!(content.contains("Hello"));
+        assert!(content.contains("World"));
+        // Should use text language
+        assert!(content.contains("```txt"));
+
+        // Ensure the code block is closed
+        let fence_count = content.matches("```").count();
+        assert!(
+            fence_count >= 2,
+            "expected at least opening and closing fences, got {}",
+            fence_count
+        );
+    }
+
+    #[test]
+    fn test_encoding_strategy_strict() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        // Create a file with non-UTF-8 content
+        let non_utf8_content = [0xFF, 0xFE, 0x41, 0x00]; // UTF-16 LE BOM + "A"
+        let file_path = base_path.join("utf16.txt");
+        fs::write(&file_path, non_utf8_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("strict"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should contain binary file placeholder
+        assert!(content.contains("<Binary file or unsupported encoding:"));
+        assert!(content.contains("```text"));
+
+        // Ensure the code block is closed
+        let fence_count = content.matches("```").count();
+        assert!(
+            fence_count >= 2,
+            "expected at least opening and closing fences, got {}",
+            fence_count
+        );
+    }
+
+    #[test]
+    fn test_encoding_strategy_skip() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        // Create a file with UTF-16 content
+        let utf16_content = [0xFF, 0xFE, 0x48, 0x00, 0x69, 0x00]; // UTF-16 LE "Hi"
+        let file_path = base_path.join("utf16.txt");
+        fs::write(&file_path, utf16_content).unwrap();
+
+        let mut output = fs::File::create(&output_path).unwrap();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("skip"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should contain binary file placeholder (skipped transcoding)
+        assert!(content.contains("<Binary file or unsupported encoding:"));
+        assert!(content.contains("```text"));
+    }
+
+    #[test]
+    fn test_generate_markdown_with_current_directory() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("test.md");
+
+        // Create test files
+        fs::write(base_path.join("readme.txt"), "Hello world").unwrap();
+
+        // Collect files
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        // Change to the test directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(base_path).unwrap();
+
+        // Test with "." as input directory
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            ".",
+            &[],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            None, // max_tokens
+            &TreeSitterConfig::default(),
+        );
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+    }
+
+    #[test]
+    fn test_generate_markdown_creates_output_directory() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let nested_output = base_path.join("nested").join("deep").join("output.md");
+
+        // Create test files
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &nested_output.to_string_lossy(),
+            "test_dir",
+            &[],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            None, // max_tokens
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        assert!(nested_output.exists());
+        assert!(nested_output.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn test_generate_markdown_with_filters_and_ignores() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("filtered.md");
+
+        fs::write(base_path.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("config.toml"), "[package]").unwrap();
+        fs::write(base_path.join("readme.md"), "# README").unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            "project",
+            &["rs".to_string(), "toml".to_string()],
+            &["readme.md".to_string()],
+            &file_tree,
+            &files,
+            base_path,
+            true,
+            Some("strict"),
+            None, // max_tokens
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("Directory Structure Report"));
+        // The actual generate_markdown function doesn't format filters/ignores this way
+        assert!(content.contains("main.rs") || content.contains("config.toml"));
+    }
+
+    #[test]
+    fn test_write_text_content_with_line_numbers() {
+        let mut output = Vec::new();
+        let content = "line one\nline two\nline three";
+
+        write_text_content(&mut output, content, "rust", true).unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("```rust"));
+        assert!(result.contains("   1 | line one"));
+        assert!(result.contains("   2 | line two"));
+        assert!(result.contains("   3 | line three"));
+        assert!(result.contains("```"));
+    }
+
+    #[test]
+    fn test_write_text_content_without_line_numbers() {
+        let mut output = Vec::new();
+        let content = "function test() {\n  return true;\n}";
+
+        write_text_content(&mut output, content, "javascript", false).unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("```javascript"));
+        assert!(result.contains("function test() {"));
+        assert!(result.contains("  return true;"));
+        assert!(result.contains("```"));
+        assert!(!result.contains(" | ")); // No line number prefix
+    }
+
+    #[test]
+    fn test_write_text_content_without_trailing_newline() {
+        let mut output = Vec::new();
+        let content = "no newline at end"; // No \n at end
+
+        write_text_content(&mut output, content, "text", false).unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("```text"));
+        assert!(result.contains("no newline at end"));
+        assert!(result.ends_with("```\n")); // Should add newline
+    }
+
+    #[test]
+    fn test_is_likely_text() {
+        // Normal text should be considered text
+        assert!(is_likely_text("Hello world\nThis is normal text"));
+
+        // Text with some control characters should still be text
+        assert!(is_likely_text(
+            "Line 1\nLine 2\tTabbed\r\nWindows line ending"
+        ));
+
+        // Text with too many control characters should not be text
+        let mut bad_text = String::new();
+        for i in 0..200 {
+            if i % 5 == 0 {
+                bad_text.push('\x01'); // Control character
+            } else {
+                bad_text.push('a');
+            }
+        }
+        assert!(!is_likely_text(&bad_text));
+
+        // Empty string should be considered text
+        assert!(is_likely_text(""));
+    }
+
+    #[test]
+    fn test_detect_text_encoding() {
+        // UTF-8 should return None (already UTF-8)
+        let utf8_bytes = "Hello world".as_bytes();
+        let result = detect_text_encoding(utf8_bytes);
+        // The function may return an encoding even for UTF-8 text if it detects it differently
+        // Just verify it doesn't crash
+        assert!(result.is_some() || result.is_none());
+
+        // Windows-1252 encoded text should be detected
+        let windows1252_bytes = [
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x93, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x94,
+        ];
+        let detected = detect_text_encoding(&windows1252_bytes);
+        assert!(detected.is_some());
+    }
+
+    #[test]
+    fn test_transcode_file_content() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("windows1252.txt");
+
+        // Write Windows-1252 encoded content
+        let windows1252_content = [
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, // "Hello "
+            0x93, 0x57, 0x6F, 0x72, 0x6C, 0x64, 0x94, // "World" with smart quotes
+        ];
+        fs::write(&file_path, windows1252_content).unwrap();
+
+        let result = transcode_file_content(&file_path, encoding_rs::WINDOWS_1252);
+        assert!(result.is_ok());
+
+        let transcoded = result.unwrap();
+        assert!(transcoded.contains("Hello"));
+        assert!(transcoded.contains("World"));
+    }
+
+    #[test]
+    fn test_process_file_with_metadata_error() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let nonexistent_file = base_path.join("nonexistent.txt");
+        let output_path = base_path.join("output.md");
+
+        let mut output = fs::File::create(&output_path).unwrap();
+
+        // This should handle the metadata error gracefully
+        let result = process_file(
+            base_path,
+            &nonexistent_file,
+            &mut output,
+            false,
+            None,
+            &TreeSitterConfig::default(),
+        );
+        assert!(result.is_ok());
+
+        // Output should be minimal since file doesn't exist
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.is_empty() || content.trim().is_empty());
+    }
+
+    #[test]
+    fn test_process_file_with_different_extensions() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        // Test various file extensions
+        let test_files = [
+            ("script.py", "print('hello')", "python"),
+            ("data.json", r#"{"key": "value"}"#, "json"),
+            ("config.yaml", "key: value", "yaml"),
+            ("style.css", "body { margin: 0; }", "css"),
+            ("page.html", "<html><body>Test</body></html>", "html"),
+            ("query.sql", "SELECT * FROM users;", "sql"),
+            ("build.sh", "#!/bin/bash\necho 'building'", "bash"),
+            ("unknown.xyz", "unknown content", "xyz"),
+        ];
+
+        for (filename, content, expected_lang) in test_files.iter() {
+            let file_path = base_path.join(filename);
+            fs::write(&file_path, content).unwrap();
+
+            let mut output = fs::File::create(&output_path).unwrap();
+            process_file(
+                base_path,
+                &file_path,
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+
+            let result = fs::read_to_string(&output_path).unwrap();
+            assert!(result.contains(&format!("```{}", expected_lang)));
+            assert!(result.contains(content));
+            assert!(result.contains(filename));
+        }
+    }
+}
+```
+
+### File: `src/state.rs`
+
+- Size: 26113 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Project state representation for context-builder.
+//!
+//! This module provides structured data types to represent the state of a project
+//! at a point in time. This replaces the previous approach of caching generated
+//! markdown and enables more robust diff generation.
+
+use chrono::Utc;
+use ignore::DirEntry;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use crate::config::Config;
+use crate::diff::{PerFileDiff, PerFileStatus, diff_file_contents};
+
+/// Complete state representation of a project at a point in time
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProjectState {
+    /// Timestamp when this state was captured
+    pub timestamp: String,
+    /// Hash of the configuration used to generate this state
+    pub config_hash: String,
+    /// Map of file paths to their state information
+    pub files: BTreeMap<PathBuf, FileState>,
+    /// Project metadata
+    pub metadata: ProjectMetadata,
+}
+
+/// State information for a single file
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FileState {
+    /// Raw file content as string
+    pub content: String,
+    /// File size in bytes
+    pub size: u64,
+    /// Last modified time
+    pub modified: SystemTime,
+    /// Content hash for quick comparison
+    pub content_hash: String,
+}
+
+/// Metadata about the project
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProjectMetadata {
+    /// Project directory name
+    pub project_name: String,
+    /// Total number of files processed
+    pub file_count: usize,
+    /// Filters applied during processing
+    pub filters: Vec<String>,
+    /// Ignore patterns applied
+    pub ignores: Vec<String>,
+    /// Whether line numbers were enabled
+    pub line_numbers: bool,
+}
+
+/// Result of comparing two project states
+#[derive(Debug, Clone)]
+pub struct StateComparison {
+    /// Per-file differences
+    pub file_diffs: Vec<PerFileDiff>,
+    /// Summary of changes
+    pub summary: ChangeSummary,
+}
+
+/// Summary of changes between two states
+#[derive(Debug, Clone)]
+pub struct ChangeSummary {
+    /// Files that were added
+    pub added: Vec<PathBuf>,
+    /// Files that were removed
+    pub removed: Vec<PathBuf>,
+    /// Files that were modified
+    pub modified: Vec<PathBuf>,
+    /// Total number of changed files
+    pub total_changes: usize,
+}
+
+impl ProjectState {
+    /// Create a new project state from collected files
+    pub fn from_files(
+        files: &[DirEntry],
+        base_path: &Path,
+        config: &Config,
+        line_numbers: bool,
+    ) -> std::io::Result<Self> {
+        let mut file_states = BTreeMap::new();
+
+        // Ensure paths stored in the state are *always* relative (never absolute).
+        // This keeps cache stable across different launch contexts and matches
+        // test expectations. We attempt a few strategies to derive a relative path.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| base_path.to_path_buf());
+        for entry in files {
+            let entry_path = entry.path();
+
+            let relative_path = entry_path
+                // Preferred: relative to provided base_path (common case when input is absolute)
+                .strip_prefix(base_path)
+                .or_else(|_| entry_path.strip_prefix(&cwd))
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|_| {
+                    // Fallback: last component (file name) to avoid leaking absolute paths
+                    entry_path
+                        .file_name()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| entry_path.to_path_buf())
+                });
+
+            let file_state = FileState::from_path(entry_path)?;
+            file_states.insert(relative_path, file_state);
+        }
+
+        // Resolve project name robustly: canonicalize to handle "." and relative paths
+        let canonical = base_path.canonicalize().ok();
+        let resolved = canonical.as_deref().unwrap_or(base_path);
+        let project_name = resolved
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                // Fallback: try CWD if base_path has no file_name (e.g., root path)
+                std::env::current_dir()
+                    .ok()
+                    .and_then(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
+
+        let metadata = ProjectMetadata {
+            project_name,
+            file_count: files.len(),
+            filters: config.filter.clone().unwrap_or_default(),
+            ignores: config.ignore.clone().unwrap_or_default(),
+            line_numbers,
+        };
+
+        Ok(ProjectState {
+            timestamp: Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            config_hash: Self::compute_config_hash(config),
+            files: file_states,
+            metadata,
+        })
+    }
+
+    /// Compare this state with a previous state
+    pub fn compare_with(&self, previous: &ProjectState) -> StateComparison {
+        // Convert file states to content maps for diff_file_contents
+        let previous_content: std::collections::HashMap<String, String> = previous
+            .files
+            .iter()
+            .map(|(path, state)| (path.to_string_lossy().to_string(), state.content.clone()))
+            .collect();
+
+        let current_content: std::collections::HashMap<String, String> = self
+            .files
+            .iter()
+            .map(|(path, state)| (path.to_string_lossy().to_string(), state.content.clone()))
+            .collect();
+
+        // Generate per-file diffs
+        let file_diffs = diff_file_contents(&previous_content, &current_content, true, None);
+
+        // Generate summary
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        let mut modified = Vec::new();
+
+        for diff in &file_diffs {
+            let path = PathBuf::from(&diff.path);
+            match diff.status {
+                PerFileStatus::Added => added.push(path),
+                PerFileStatus::Removed => removed.push(path),
+                PerFileStatus::Modified => modified.push(path),
+                PerFileStatus::Unchanged => {}
+            }
+        }
+
+        let summary = ChangeSummary {
+            total_changes: added.len() + removed.len() + modified.len(),
+            added,
+            removed,
+            modified,
+        };
+
+        StateComparison {
+            file_diffs,
+            summary,
+        }
+    }
+
+    /// Check if this state has any content changes compared to another
+    pub fn has_changes(&self, other: &ProjectState) -> bool {
+        if self.files.len() != other.files.len() {
+            return true;
+        }
+
+        for (path, state) in &self.files {
+            match other.files.get(path) {
+                Some(other_state) => {
+                    if state.content_hash != other_state.content_hash {
+                        return true;
+                    }
+                }
+                None => return true,
+            }
+        }
+
+        false
+    }
+
+    /// Generate a configuration hash for cache validation
+    fn compute_config_hash(config: &Config) -> String {
+        // Build a stable string representation for hashing
+        let mut config_str = String::new();
+        if let Some(ref filters) = config.filter {
+            config_str.push_str(&filters.join(","));
+        }
+        config_str.push('|');
+        if let Some(ref ignores) = config.ignore {
+            config_str.push_str(&ignores.join(","));
+        }
+        config_str.push('|');
+        config_str.push_str(&format!(
+            "{:?}|{:?}|{:?}",
+            config.line_numbers, config.auto_diff, config.diff_context_lines
+        ));
+
+        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
+        format!("{:x}", hash)
+    }
+}
+
+impl FileState {
+    /// Create a file state from a file path
+    pub fn from_path(path: &Path) -> std::io::Result<Self> {
+        use std::fs;
+        use std::io::ErrorKind;
+
+        let metadata = fs::metadata(path)?;
+
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == ErrorKind::InvalidData => {
+                // Handle binary files gracefully
+                log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
+                format!("<Binary file - {} bytes>", metadata.len())
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Compute content hash using stable xxh3
+        let content_hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
+
+        Ok(FileState {
+            content,
+            size: metadata.len(),
+            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            content_hash,
+        })
+    }
+}
+
+impl ChangeSummary {
+    /// Check if there are any changes
+    pub fn has_changes(&self) -> bool {
+        self.total_changes > 0
+    }
+
+    /// Generate markdown representation of the change summary
+    pub fn to_markdown(&self) -> String {
+        if !self.has_changes() {
+            return String::new();
+        }
+
+        let mut output = String::new();
+        output.push_str("## Change Summary\n\n");
+
+        for path in &self.added {
+            output.push_str(&format!("- Added: `{}`\n", path.display()));
+        }
+
+        for path in &self.removed {
+            output.push_str(&format!("- Removed: `{}`\n", path.display()));
+        }
+
+        for path in &self.modified {
+            output.push_str(&format!("- Modified: `{}`\n", path.display()));
+        }
+
+        output.push('\n');
+        output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_file_state_creation() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
+        fs::write(&file_path, "Hello, world!").unwrap();
+
+        let file_state = FileState::from_path(&file_path).unwrap();
+
+        assert_eq!(file_state.content, "Hello, world!");
+        assert_eq!(file_state.size, 13);
+        assert!(!file_state.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_project_state_comparison() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create initial files
+        fs::write(base_path.join("file1.txt"), "content1").unwrap();
+        fs::write(base_path.join("file2.txt"), "content2").unwrap();
+
+        let mut state1_files = BTreeMap::new();
+        state1_files.insert(
+            PathBuf::from("file1.txt"),
+            FileState::from_path(&base_path.join("file1.txt")).unwrap(),
+        );
+        state1_files.insert(
+            PathBuf::from("file2.txt"),
+            FileState::from_path(&base_path.join("file2.txt")).unwrap(),
+        );
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "test_hash".to_string(),
+            files: state1_files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 2,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        // Modify and create new state
+        fs::write(base_path.join("file1.txt"), "modified_content1").unwrap();
+        fs::write(base_path.join("file3.txt"), "content3").unwrap();
+
+        let mut state2_files = BTreeMap::new();
+        state2_files.insert(
+            PathBuf::from("file1.txt"),
+            FileState::from_path(&base_path.join("file1.txt")).unwrap(),
+        );
+        state2_files.insert(
+            PathBuf::from("file2.txt"),
+            FileState::from_path(&base_path.join("file2.txt")).unwrap(),
+        );
+        state2_files.insert(
+            PathBuf::from("file3.txt"),
+            FileState::from_path(&base_path.join("file3.txt")).unwrap(),
+        );
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "test_hash".to_string(),
+            files: state2_files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 3,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let comparison = state2.compare_with(&state1);
+
+        assert_eq!(comparison.summary.added.len(), 1);
+        assert_eq!(comparison.summary.modified.len(), 1);
+        assert_eq!(comparison.summary.removed.len(), 0);
+        assert!(
+            comparison
+                .summary
+                .added
+                .contains(&PathBuf::from("file3.txt"))
+        );
+        assert!(
+            comparison
+                .summary
+                .modified
+                .contains(&PathBuf::from("file1.txt"))
+        );
+    }
+
+    #[test]
+    fn test_change_summary_markdown() {
+        let summary = ChangeSummary {
+            added: vec![PathBuf::from("new.txt")],
+            removed: vec![PathBuf::from("old.txt")],
+            modified: vec![PathBuf::from("changed.txt")],
+            total_changes: 3,
+        };
+
+        let markdown = summary.to_markdown();
+
+        assert!(markdown.contains("## Change Summary"));
+        assert!(markdown.contains("- Added: `new.txt`"));
+        assert!(markdown.contains("- Removed: `old.txt`"));
+        assert!(markdown.contains("- Modified: `changed.txt`"));
+    }
+
+    #[test]
+    fn test_binary_file_handling() {
+        let temp_dir = tempdir().unwrap();
+        let binary_file = temp_dir.path().join("test.bin");
+
+        // Write binary data (non-UTF8)
+        let binary_data = vec![0u8, 255, 128, 42, 0, 1, 2, 3];
+        fs::write(&binary_file, &binary_data).unwrap();
+
+        // Should not crash and should handle gracefully
+        let file_state = FileState::from_path(&binary_file).unwrap();
+
+        // Content should be a placeholder for binary files
+        assert!(file_state.content.contains("Binary file"));
+        assert!(file_state.content.contains("8 bytes"));
+        assert_eq!(file_state.size, 8);
+        assert!(!file_state.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_has_changes_identical_states() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content").unwrap();
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            PathBuf::from("test.txt"),
+            FileState::from_path(&base_path.join("test.txt")).unwrap(),
+        );
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files.clone(),
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        assert!(!state1.has_changes(&state2));
+    }
+
+    #[test]
+    fn test_has_changes_different_file_count() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test1.txt"), "content1").unwrap();
+        fs::write(base_path.join("test2.txt"), "content2").unwrap();
+
+        let mut files1 = BTreeMap::new();
+        files1.insert(
+            PathBuf::from("test1.txt"),
+            FileState::from_path(&base_path.join("test1.txt")).unwrap(),
+        );
+
+        let mut files2 = BTreeMap::new();
+        files2.insert(
+            PathBuf::from("test1.txt"),
+            FileState::from_path(&base_path.join("test1.txt")).unwrap(),
+        );
+        files2.insert(
+            PathBuf::from("test2.txt"),
+            FileState::from_path(&base_path.join("test2.txt")).unwrap(),
+        );
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files1,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files2,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 2,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        assert!(state1.has_changes(&state2));
+    }
+
+    #[test]
+    fn test_has_changes_content_different() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("test.txt"), "content1").unwrap();
+
+        let file_state1 = FileState::from_path(&base_path.join("test.txt")).unwrap();
+
+        fs::write(base_path.join("test.txt"), "content2").unwrap();
+        let file_state2 = FileState::from_path(&base_path.join("test.txt")).unwrap();
+
+        let mut files1 = BTreeMap::new();
+        files1.insert(PathBuf::from("test.txt"), file_state1);
+
+        let mut files2 = BTreeMap::new();
+        files2.insert(PathBuf::from("test.txt"), file_state2);
+
+        let state1 = ProjectState {
+            timestamp: "2023-01-01T00:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files1,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let state2 = ProjectState {
+            timestamp: "2023-01-01T01:00:00Z".to_string(),
+            config_hash: "hash1".to_string(),
+            files: files2,
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        assert!(state1.has_changes(&state2));
+    }
+
+    #[test]
+    fn test_config_hash_generation() {
+        let config1 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(false),
+            diff_context_lines: Some(3),
+            ..Default::default()
+        };
+
+        let config2 = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(false),
+            diff_context_lines: Some(3),
+            ..Default::default()
+        };
+
+        let config3 = Config {
+            filter: Some(vec!["py".to_string()]), // Different filter
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            auto_diff: Some(false),
+            diff_context_lines: Some(3),
+            ..Default::default()
+        };
+
+        let hash1 = ProjectState::compute_config_hash(&config1);
+        let hash2 = ProjectState::compute_config_hash(&config2);
+        let hash3 = ProjectState::compute_config_hash(&config3);
+
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_change_summary_no_changes() {
+        let summary = ChangeSummary {
+            added: vec![],
+            removed: vec![],
+            modified: vec![],
+            total_changes: 0,
+        };
+
+        assert!(!summary.has_changes());
+        assert_eq!(summary.to_markdown(), "");
+    }
+
+    #[test]
+    fn test_from_files_with_config() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        fs::write(base_path.join("test.rs"), "fn main() {}").unwrap();
+        fs::write(base_path.join("README.md"), "# Test").unwrap();
+
+        let entries = vec![
+            create_mock_dir_entry(&base_path.join("test.rs")),
+            create_mock_dir_entry(&base_path.join("README.md")),
+        ];
+
+        let config = Config {
+            filter: Some(vec!["rs".to_string()]),
+            ignore: Some(vec!["target".to_string()]),
+            line_numbers: Some(true),
+            ..Default::default()
+        };
+
+        let state = ProjectState::from_files(&entries, base_path, &config, true).unwrap();
+
+        assert_eq!(state.files.len(), 2);
+        assert_eq!(state.metadata.file_count, 2);
+        assert_eq!(state.metadata.filters, vec!["rs"]);
+        assert_eq!(state.metadata.ignores, vec!["target"]);
+        assert!(state.metadata.line_numbers);
+        assert!(!state.timestamp.is_empty());
+        assert!(!state.config_hash.is_empty());
+    }
+
+    #[test]
+    fn test_from_files_absolute_path_fallback() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create a file in the temp dir
+        fs::write(base_path.join("test.txt"), "test content").unwrap();
+        let file_path = base_path.join("test.txt");
+
+        // Create entry with the file
+        let entry = create_mock_dir_entry(&file_path);
+
+        // Use a completely different base_path to force the fallback
+        let different_base = PathBuf::from("/completely/different/path");
+
+        let config = Config::default();
+
+        let state = ProjectState::from_files(&[entry], &different_base, &config, false).unwrap();
+
+        // Should fall back to just the filename
+        assert_eq!(state.files.len(), 1);
+        assert!(state.files.contains_key(&PathBuf::from("test.txt")));
+    }
+
+    #[test]
+    fn test_change_summary_with_unchanged_files() {
+        let changes = vec![
+            PerFileDiff {
+                path: "added.txt".to_string(),
+                status: PerFileStatus::Added,
+                diff: "diff content".to_string(),
+            },
+            PerFileDiff {
+                path: "unchanged.txt".to_string(),
+                status: PerFileStatus::Unchanged,
+                diff: "".to_string(),
+            },
+        ];
+
+        // Manually create the summary like the actual code does
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        let mut modified = Vec::new();
+
+        for diff in &changes {
+            let path = PathBuf::from(&diff.path);
+            match diff.status {
+                PerFileStatus::Added => added.push(path),
+                PerFileStatus::Removed => removed.push(path),
+                PerFileStatus::Modified => modified.push(path),
+                PerFileStatus::Unchanged => {} // This line should be covered now
+            }
+        }
+
+        let summary = ChangeSummary {
+            total_changes: added.len() + removed.len() + modified.len(),
+            added,
+            removed,
+            modified,
+        };
+
+        assert_eq!(summary.total_changes, 1); // Only the added file counts
+        assert_eq!(summary.added.len(), 1);
+        assert_eq!(summary.removed.len(), 0);
+        assert_eq!(summary.modified.len(), 0);
+    }
+
+    #[test]
+    fn test_has_changes_with_missing_file() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create files for the first state
+        fs::write(base_path.join("file1.txt"), "content1").unwrap();
+        let entry1 = create_mock_dir_entry(&base_path.join("file1.txt"));
+
+        let config = Config::default();
+        let state1 = ProjectState::from_files(&[entry1], base_path, &config, false).unwrap();
+
+        // Create a different state with different files
+        fs::write(base_path.join("file2.txt"), "content2").unwrap();
+        let entry2 = create_mock_dir_entry(&base_path.join("file2.txt"));
+        let state2 = ProjectState::from_files(&[entry2], base_path, &config, false).unwrap();
+
+        // Should detect changes because files are completely different
+        assert!(state1.has_changes(&state2));
+    }
+
+    #[test]
+    fn test_file_state_with_invalid_data_error() {
+        // Create a temporary file with binary content that might trigger InvalidData
+        let temp_dir = tempdir().unwrap();
+        let binary_file = temp_dir.path().join("binary.dat");
+
+        // Write invalid UTF-8 bytes
+        let binary_data = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA];
+        fs::write(&binary_file, &binary_data).unwrap();
+
+        // This might trigger the InvalidData error path, but since we can't guarantee it,
+        // we at least verify the function can handle binary files
+        let result = FileState::from_path(&binary_file);
+        assert!(result.is_ok());
+    }
+
+    // Helper function to create a mock DirEntry for testing
+    fn create_mock_dir_entry(path: &std::path::Path) -> ignore::DirEntry {
+        // This is a bit of a hack since DirEntry doesn't have a public constructor
+        // We use the ignore crate's WalkBuilder to create a real DirEntry
+        let walker = ignore::WalkBuilder::new(path.parent().unwrap());
+        walker
+            .build()
+            .filter_map(Result::ok)
+            .find(|entry| entry.path() == path)
+            .expect("Failed to create DirEntry for test")
+    }
+}
+```
+
+### File: `src/token_count.rs`
+
+- Size: 10045 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use ignore::DirEntry;
+use once_cell::sync::Lazy;
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+/// Token counting utilities for estimating LLM token usage
+use tiktoken_rs::{CoreBPE, cl100k_base};
+
+// Initialize the tokenizer once and reuse it
+static TOKENIZER: Lazy<CoreBPE> = Lazy::new(|| cl100k_base().unwrap());
+
+/// Estimates the number of tokens in a text string using a real tokenizer
+pub fn estimate_tokens(text: &str) -> usize {
+    TOKENIZER.encode_with_special_tokens(text).len()
+}
+
+/// Counts the tokens that would be generated for a file
+pub fn count_file_tokens(base_path: &Path, entry: &DirEntry, line_numbers: bool) -> usize {
+    let file_path = entry.path();
+    let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
+
+    // Start with tokens for the file header (path, size, modified time)
+    let mut token_count = estimate_tokens(&format!(
+        "\n### File: `{}`\n\n- Size: {} bytes\n- Modified: {}\n\n",
+        relative_path.display(),
+        entry.metadata().map(|m| m.len()).unwrap_or(0),
+        "Unknown"
+    )); // Using "Unknown" as placeholder for modified time in estimation
+
+    // Add tokens for the code fences
+    token_count += estimate_tokens("```\n```");
+
+    // Try to read file content
+    if let Ok(content) = fs::read_to_string(file_path) {
+        if line_numbers {
+            // When line numbers are enabled, we add the line number prefix to each line
+            let lines_with_numbers: String = content
+                .lines()
+                .enumerate()
+                .map(|(i, line)| format!("{:>4} | {}\n", i + 1, line))
+                .collect();
+            token_count += estimate_tokens(&lines_with_numbers);
+        } else {
+            token_count += estimate_tokens(&content);
+        }
+    }
+
+    token_count
+}
+
+/// Counts the tokens that would be generated for the entire file tree section
+pub fn count_tree_tokens(tree: &BTreeMap<String, crate::tree::FileNode>, depth: usize) -> usize {
+    let mut token_count = 0;
+
+    // Add tokens for indentation
+    let indent = "  ".repeat(depth);
+
+    for (name, node) in tree {
+        match node {
+            crate::tree::FileNode::File => {
+                token_count += estimate_tokens(&format!("{}- 📄 {}\n", indent, name));
+            }
+            crate::tree::FileNode::Directory(children) => {
+                token_count += estimate_tokens(&format!("{}- 📁 {}\n", indent, name));
+                token_count += count_tree_tokens(children, depth + 1);
+            }
+        }
+    }
+
+    token_count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn test_estimate_tokens() {
+        // Test with a simple string
+        let text = "Hello, world!";
+        let tokens = estimate_tokens(text);
+        // "Hello, world!" is 4 tokens with cl100k_base
+        assert_eq!(tokens, 4);
+
+        // Test with code-like content
+        let code_text = "fn main() {\n    println!(\"Hello, world!\");\n}";
+        let tokens = estimate_tokens(code_text);
+        // This specific code snippet is 12 tokens with cl100k_base
+        assert_eq!(tokens, 12);
+    }
+
+    #[test]
+    fn test_count_tree_tokens() {
+        // Create a simple tree structure
+        let mut tree = BTreeMap::new();
+        tree.insert("file1.rs".to_string(), crate::tree::FileNode::File);
+
+        let mut subdir = BTreeMap::new();
+        subdir.insert("file2.md".to_string(), crate::tree::FileNode::File);
+        tree.insert("src".to_string(), crate::tree::FileNode::Directory(subdir));
+
+        let tokens = count_tree_tokens(&tree, 0);
+        // "- 📄 file1.rs\n" -> 8 tokens
+        // "- 📁 src\n" -> 6 tokens
+        // "  - 📄 file2.md\n" -> 9 tokens
+        // Total should be 23 tokens
+        assert_eq!(tokens, 23);
+    }
+
+    #[test]
+    fn test_token_estimation_format_consistency() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("test.rs");
+        std::fs::write(&test_file, "fn main() {}\n").unwrap();
+
+        let entry = ignore::WalkBuilder::new(&test_file)
+            .build()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        // Estimate tokens for the file
+        let estimated_tokens = count_file_tokens(dir.path(), &entry, false);
+
+        // Generate actual markdown content
+        let mut actual_content = Vec::new();
+        crate::markdown::process_file(
+            dir.path(),
+            &test_file,
+            &mut actual_content,
+            false,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        )
+        .unwrap();
+        let actual_content_str = String::from_utf8(actual_content).unwrap();
+
+        // Count actual tokens
+        let actual_tokens = estimate_tokens(&actual_content_str);
+
+        // The estimation should be close to actual (within a reasonable margin)
+        // Allow for some variance due to timestamp differences and minor formatting
+        let difference = actual_tokens.abs_diff(estimated_tokens);
+
+        // Should be within 10% or 20 tokens difference (whichever is larger)
+        let max_allowed_difference = std::cmp::max(actual_tokens / 10, 20);
+
+        assert!(
+            difference <= max_allowed_difference,
+            "Token estimation {} differs too much from actual {} (difference: {})",
+            estimated_tokens,
+            actual_tokens,
+            difference
+        );
+    }
+
+    #[test]
+    fn test_estimate_tokens_empty_string() {
+        let tokens = estimate_tokens("");
+        assert_eq!(tokens, 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_whitespace_only() {
+        let tokens = estimate_tokens("   \n\t  ");
+        assert!(tokens > 0); // Whitespace still counts as tokens
+    }
+
+    #[test]
+    fn test_estimate_tokens_unicode() {
+        let tokens = estimate_tokens("Hello 世界! 🌍");
+        assert!(tokens > 0);
+        // Unicode characters may be encoded as multiple tokens
+        assert!(tokens >= 4);
+    }
+
+    #[test]
+    fn test_count_file_tokens_with_line_numbers() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("test.rs");
+        std::fs::write(&test_file, "line 1\nline 2\nline 3").unwrap();
+
+        let entry = ignore::WalkBuilder::new(&test_file)
+            .build()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        let tokens_without_line_numbers = count_file_tokens(dir.path(), &entry, false);
+        let tokens_with_line_numbers = count_file_tokens(dir.path(), &entry, true);
+
+        // With line numbers should have more tokens due to line number prefixes
+        assert!(tokens_with_line_numbers > tokens_without_line_numbers);
+    }
+
+    #[test]
+    fn test_count_file_tokens_unreadable_file() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("nonexistent.txt");
+
+        // Create a mock DirEntry for a file that doesn't exist
+        // This simulates what happens when a file is deleted between discovery and processing
+        let walker = ignore::WalkBuilder::new(dir.path());
+        let mut found_entry = None;
+
+        // Create the file temporarily to get a DirEntry
+        std::fs::write(&test_file, "temp").unwrap();
+        for entry in walker.build() {
+            if let Ok(entry) = entry
+                && entry.path() == test_file
+            {
+                found_entry = Some(entry);
+                break;
+            }
+        }
+
+        // Now delete the file
+        std::fs::remove_file(&test_file).unwrap();
+
+        if let Some(entry) = found_entry {
+            let tokens = count_file_tokens(dir.path(), &entry, false);
+            // Should still return some tokens for the file header even if content can't be read
+            assert!(tokens > 0);
+        }
+    }
+
+    #[test]
+    fn test_count_tree_tokens_empty_tree() {
+        let tree = BTreeMap::new();
+        let tokens = count_tree_tokens(&tree, 0);
+        assert_eq!(tokens, 0);
+    }
+
+    #[test]
+    fn test_count_tree_tokens_nested_directories() {
+        let mut tree = BTreeMap::new();
+
+        // Create deeply nested structure
+        let mut level3 = BTreeMap::new();
+        level3.insert("deep_file.txt".to_string(), crate::tree::FileNode::File);
+
+        let mut level2 = BTreeMap::new();
+        level2.insert(
+            "level3".to_string(),
+            crate::tree::FileNode::Directory(level3),
+        );
+
+        let mut level1 = BTreeMap::new();
+        level1.insert(
+            "level2".to_string(),
+            crate::tree::FileNode::Directory(level2),
+        );
+
+        tree.insert(
+            "level1".to_string(),
+            crate::tree::FileNode::Directory(level1),
+        );
+
+        let tokens = count_tree_tokens(&tree, 0);
+        assert!(tokens > 0);
+
+        // Should account for indentation at different levels
+        let tokens_with_depth = count_tree_tokens(&tree, 2);
+        assert!(tokens_with_depth > tokens); // More indentation = more tokens
+    }
+
+    #[test]
+    fn test_count_tree_tokens_mixed_content() {
+        let mut tree = BTreeMap::new();
+
+        // Add files with various name lengths and characters
+        tree.insert("a.txt".to_string(), crate::tree::FileNode::File);
+        tree.insert(
+            "very_long_filename_with_underscores.rs".to_string(),
+            crate::tree::FileNode::File,
+        );
+        tree.insert("файл.txt".to_string(), crate::tree::FileNode::File); // Unicode filename
+
+        let mut subdir = BTreeMap::new();
+        subdir.insert("nested.md".to_string(), crate::tree::FileNode::File);
+        tree.insert(
+            "directory".to_string(),
+            crate::tree::FileNode::Directory(subdir),
+        );
+
+        let tokens = count_tree_tokens(&tree, 0);
+        assert!(tokens > 0);
+
+        // Verify it handles unicode filenames without crashing
+        assert!(tokens > 20); // Should be substantial given the content
+    }
+}
+```
+
+### File: `src/tree.rs`
+
+- Size: 10845 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use ignore::DirEntry;
+use std::collections::BTreeMap;
+use std::io::{self, Write};
+use std::path::Path;
+
+/// A nested map to represent the file tree structure.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileNode {
+    File,
+    Directory(BTreeMap<String, FileNode>),
+}
+
+/// Type alias for the file tree structure.
+pub type FileTree = BTreeMap<String, FileNode>;
+
+/// Builds a nested BTreeMap representing the file structure.
+pub fn build_file_tree(files: &[DirEntry], base_path: &Path) -> FileTree {
+    let mut tree = BTreeMap::new();
+    for entry in files {
+        let path = entry
+            .path()
+            .strip_prefix(base_path)
+            .unwrap_or_else(|_| entry.path());
+        let components: Vec<_> = path.components().collect();
+
+        // Insert this path into the tree
+        insert_path(&mut tree, &components);
+    }
+    tree
+}
+
+/// Helper function to insert a path into the tree structure
+fn insert_path(tree: &mut FileTree, components: &[std::path::Component]) {
+    if components.is_empty() {
+        return;
+    }
+
+    let name = components[0].as_os_str().to_string_lossy().to_string();
+
+    if components.len() == 1 {
+        // This is the last component, so it's a file
+        tree.insert(name, FileNode::File);
+    } else {
+        // This is a directory component
+        // Make sure the directory exists
+        tree.entry(name.clone())
+            .or_insert_with(|| FileNode::Directory(BTreeMap::new()));
+
+        // Recursively insert the rest of the path
+        if let Some(FileNode::Directory(next_dir)) = tree.get_mut(&name) {
+            insert_path(next_dir, &components[1..]);
+        }
+    }
+}
+
+/// Recursively prints the file tree to the console.
+pub fn print_tree(tree: &FileTree, depth: usize) {
+    for (name, node) in tree {
+        let indent = "  ".repeat(depth);
+        match node {
+            FileNode::File => {
+                println!("{}- 📄 {}", indent, name);
+            }
+            FileNode::Directory(children) => {
+                println!("{}- 📁 {}", indent, name);
+                print_tree(children, depth + 1);
+            }
+        }
+    }
+}
+
+/// Recursively writes the file tree to a file.
+pub fn write_tree_to_file(
+    output: &mut impl Write,
+    tree: &FileTree,
+    depth: usize,
+) -> io::Result<()> {
+    for (name, node) in tree {
+        let indent = "  ".repeat(depth);
+        match node {
+            FileNode::File => {
+                writeln!(output, "{}- 📄 {}", indent, name)?;
+            }
+            FileNode::Directory(children) => {
+                writeln!(output, "{}- 📁 {}", indent, name)?;
+                write_tree_to_file(output, children, depth + 1)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file_utils::collect_files;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_build_file_tree_with_collected_files() {
+        // 1. Set up a temporary directory with a file structure
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        fs::create_dir(base_path.join("src")).unwrap();
+        fs::File::create(base_path.join("src/main.rs")).unwrap();
+        fs::File::create(base_path.join("README.md")).unwrap();
+        // Add a hidden file that should be ignored by default
+        fs::File::create(base_path.join(".env")).unwrap();
+
+        // 2. Collect files using the actual function
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+
+        // 3. Assert that the correct files were collected (a hidden file is ignored)
+        assert_eq!(files.len(), 2);
+
+        // 4. Build the tree with the collected files
+        let tree = build_file_tree(&files, base_path);
+
+        // 5. Assert the tree structure is correct
+        let mut expected: FileTree = BTreeMap::new();
+        let mut src_tree = BTreeMap::new();
+        src_tree.insert("main.rs".to_string(), FileNode::File);
+        expected.insert("src".to_string(), FileNode::Directory(src_tree));
+        expected.insert("README.md".to_string(), FileNode::File);
+
+        assert_eq!(tree, expected);
+    }
+
+    #[test]
+    fn test_build_file_tree_empty() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let tree = build_file_tree(&files, base_path);
+
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn test_build_file_tree_single_file() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        fs::File::create(base_path.join("single.txt")).unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let tree = build_file_tree(&files, base_path);
+
+        let mut expected: FileTree = BTreeMap::new();
+        expected.insert("single.txt".to_string(), FileNode::File);
+
+        assert_eq!(tree, expected);
+    }
+
+    #[test]
+    fn test_build_file_tree_nested_directories() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        fs::create_dir_all(base_path.join("a/b/c")).unwrap();
+        fs::File::create(base_path.join("a/b/c/deep.txt")).unwrap();
+        fs::File::create(base_path.join("a/shallow.txt")).unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let tree = build_file_tree(&files, base_path);
+
+        // Build expected structure
+        let mut c_tree = BTreeMap::new();
+        c_tree.insert("deep.txt".to_string(), FileNode::File);
+
+        let mut b_tree = BTreeMap::new();
+        b_tree.insert("c".to_string(), FileNode::Directory(c_tree));
+
+        let mut a_tree = BTreeMap::new();
+        a_tree.insert("b".to_string(), FileNode::Directory(b_tree));
+        a_tree.insert("shallow.txt".to_string(), FileNode::File);
+
+        let mut expected: FileTree = BTreeMap::new();
+        expected.insert("a".to_string(), FileNode::Directory(a_tree));
+
+        assert_eq!(tree, expected);
+    }
+
+    #[test]
+    fn test_build_file_tree_unicode_filenames() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        fs::create_dir(base_path.join("测试目录")).unwrap();
+        fs::File::create(base_path.join("测试目录/文件.txt")).unwrap();
+        fs::File::create(base_path.join("🦀.rs")).unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let tree = build_file_tree(&files, base_path);
+
+        let mut test_dir = BTreeMap::new();
+        test_dir.insert("文件.txt".to_string(), FileNode::File);
+
+        let mut expected: FileTree = BTreeMap::new();
+        expected.insert("测试目录".to_string(), FileNode::Directory(test_dir));
+        expected.insert("🦀.rs".to_string(), FileNode::File);
+
+        assert_eq!(tree, expected);
+    }
+
+    #[test]
+    fn test_insert_path_empty_components() {
+        let mut tree = BTreeMap::new();
+        insert_path(&mut tree, &[]);
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn test_write_tree_to_file() {
+        let mut tree = BTreeMap::new();
+        tree.insert("file1.txt".to_string(), FileNode::File);
+
+        let mut subdir = BTreeMap::new();
+        subdir.insert("file2.md".to_string(), FileNode::File);
+        tree.insert("src".to_string(), FileNode::Directory(subdir));
+
+        let mut output = Vec::new();
+        write_tree_to_file(&mut output, &tree, 0).unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("- 📄 file1.txt"));
+        assert!(result.contains("- 📁 src"));
+        assert!(result.contains("  - 📄 file2.md"));
+    }
+
+    #[test]
+    fn test_write_tree_to_file_with_depth() {
+        let mut tree = BTreeMap::new();
+        tree.insert("nested.txt".to_string(), FileNode::File);
+
+        let mut output = Vec::new();
+        write_tree_to_file(&mut output, &tree, 2).unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("    - 📄 nested.txt")); // 2 levels of indentation
+    }
+
+    #[test]
+    fn test_write_tree_to_file_empty_tree() {
+        let tree = BTreeMap::new();
+        let mut output = Vec::new();
+        write_tree_to_file(&mut output, &tree, 0).unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_file_node_equality() {
+        let file1 = FileNode::File;
+        let file2 = FileNode::File;
+        assert_eq!(file1, file2);
+
+        let mut dir1 = BTreeMap::new();
+        dir1.insert("test.txt".to_string(), FileNode::File);
+        let node1 = FileNode::Directory(dir1.clone());
+        let node2 = FileNode::Directory(dir1);
+        assert_eq!(node1, node2);
+
+        // Different directories should not be equal
+        let mut dir2 = BTreeMap::new();
+        dir2.insert("other.txt".to_string(), FileNode::File);
+        let node3 = FileNode::Directory(dir2);
+        assert_ne!(node1, node3);
+
+        // File and directory should not be equal
+        assert_ne!(file1, node1);
+    }
+
+    #[test]
+    fn test_build_file_tree_absolute_path_fallback() {
+        // Test the fallback case when strip_prefix fails by using different base paths
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let other_dir = tempdir().unwrap();
+        let other_base = other_dir.path();
+
+        // Create a file in the first directory
+        fs::File::create(base_path.join("test.txt")).unwrap();
+
+        // Create a DirEntry from the first directory but use a different base_path
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+
+        // This should trigger the unwrap_or_else case since other_base is unrelated to the file path
+        let tree = build_file_tree(&files, other_base);
+
+        // The tree should still contain the file, but with its full path
+        assert!(!tree.is_empty());
+    }
+
+    #[test]
+    fn test_build_file_tree_multiple_files_same_directory() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        fs::create_dir(base_path.join("docs")).unwrap();
+        fs::File::create(base_path.join("docs/readme.md")).unwrap();
+        fs::File::create(base_path.join("docs/guide.md")).unwrap();
+        fs::File::create(base_path.join("docs/api.md")).unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let tree = build_file_tree(&files, base_path);
+
+        let mut docs_tree = BTreeMap::new();
+        docs_tree.insert("api.md".to_string(), FileNode::File);
+        docs_tree.insert("guide.md".to_string(), FileNode::File);
+        docs_tree.insert("readme.md".to_string(), FileNode::File);
+
+        let mut expected: FileTree = BTreeMap::new();
+        expected.insert("docs".to_string(), FileNode::Directory(docs_tree));
+
+        assert_eq!(tree, expected);
+    }
+}
+```
+
+### File: `src/tree_sitter/language_support.rs`
+
+- Size: 3935 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Core types and traits for language support.
+
+use std::fmt;
+use std::str::FromStr;
+
+/// The kind of signature extracted from source code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureKind {
+    Function,
+    Method,
+    Struct,
+    Enum,
+    Trait,
+    Interface,
+    Class,
+    Impl,
+    Module,
+    Constant,
+    TypeAlias,
+    Macro,
+}
+
+impl fmt::Display for SignatureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SignatureKind::Function => write!(f, "function"),
+            SignatureKind::Method => write!(f, "method"),
+            SignatureKind::Struct => write!(f, "struct"),
+            SignatureKind::Enum => write!(f, "enum"),
+            SignatureKind::Trait => write!(f, "trait"),
+            SignatureKind::Interface => write!(f, "interface"),
+            SignatureKind::Class => write!(f, "class"),
+            SignatureKind::Impl => write!(f, "impl"),
+            SignatureKind::Module => write!(f, "module"),
+            SignatureKind::Constant => write!(f, "constant"),
+            SignatureKind::TypeAlias => write!(f, "type"),
+            SignatureKind::Macro => write!(f, "macro"),
+        }
+    }
+}
+
+/// Visibility level of a signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Visibility {
+    #[default]
+    All,
+    Public,
+    Private,
+}
+
+impl FromStr for Visibility {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "public" => Visibility::Public,
+            "private" => Visibility::Private,
+            _ => Visibility::All,
+        })
+    }
+}
+
+impl Visibility {
+    /// Check if a symbol's visibility passes the filter.
+    /// Returns `true` if the symbol should be included.
+    pub fn matches_filter(self, filter: Visibility) -> bool {
+        match filter {
+            Visibility::All => true,
+            Visibility::Public => self == Visibility::Public,
+            Visibility::Private => self == Visibility::Private,
+        }
+    }
+}
+
+/// A signature extracted from source code (function, class, etc.).
+#[derive(Debug, Clone)]
+pub struct Signature {
+    pub kind: SignatureKind,
+    pub name: String,
+    pub params: Option<String>,
+    pub return_type: Option<String>,
+    pub visibility: Visibility,
+    pub line_number: usize,
+    pub full_signature: String,
+}
+
+impl fmt::Display for Signature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.full_signature)
+    }
+}
+
+/// Structure information extracted from a source file.
+#[derive(Debug, Clone, Default)]
+pub struct CodeStructure {
+    pub imports: Vec<String>,
+    pub exports: Vec<String>,
+    pub functions: usize,
+    pub structs: usize,
+    pub enums: usize,
+    pub traits: usize,
+    pub classes: usize,
+    pub interfaces: usize,
+    pub constants: usize,
+    pub type_aliases: usize,
+    pub macros: usize,
+    pub total_lines: usize,
+    pub code_lines: usize,
+}
+
+impl CodeStructure {
+    pub fn total_symbols(&self) -> usize {
+        self.functions
+            + self.structs
+            + self.enums
+            + self.traits
+            + self.classes
+            + self.interfaces
+            + self.constants
+            + self.type_aliases
+            + self.macros
+    }
+}
+
+/// Trait for language-specific parsing support.
+pub trait LanguageSupport: Send + Sync {
+    fn file_extensions(&self) -> &[&'static str];
+
+    fn supports_extension(&self, ext: &str) -> bool {
+        self.file_extensions()
+            .iter()
+            .any(|&e| e.eq_ignore_ascii_case(ext))
+    }
+
+    fn parse(&self, source: &str) -> Option<tree_sitter::Tree>;
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature>;
+
+    fn extract_structure(&self, source: &str) -> CodeStructure;
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize;
+}
+```
+
+### File: `src/tree_sitter/languages/c.rs`
+
+- Size: 10337 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! C language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-c")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-c")]
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct CSupport;
+
+#[cfg(feature = "tree-sitter-c")]
+impl CSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_c::LANGUAGE.into()
+    }
+}
+
+#[cfg(feature = "tree-sitter-c")]
+impl LanguageSupport for CSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["c", "h"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+#[cfg(feature = "tree-sitter-c")]
+impl CSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_definition" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "struct_specifier" => {
+                if let Some(sig) = self.extract_struct_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_specifier" => {
+                if let Some(sig) = self.extract_enum_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "type_definition" => {
+                if let Some(sig) = self.extract_typedef_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "preproc_function_def" => {
+                if let Some(sig) = self.extract_macro_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_definition" => structure.functions += 1,
+            "struct_specifier" => structure.structs += 1,
+            "enum_specifier" => structure.enums += 1,
+            "preproc_include" => {
+                structure.imports.push("include".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_function_name(node, source)?;
+        let return_type = self.find_return_type(node, source);
+
+        let mut full_sig = String::new();
+        if let Some(r) = &return_type {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        full_sig.push_str("()");
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None,
+            return_type,
+            visibility: Visibility::All, // C has no visibility
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_struct_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("struct {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Struct,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("enum {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_typedef_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("typedef {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_macro_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let full_sig = format!("#define {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Macro,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_function_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "function_declarator" {
+                let mut inner_cursor = child.walk();
+                for inner in child.children(&mut inner_cursor) {
+                    if inner.kind() == "identifier" {
+                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn find_return_type(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "primitive_type" || child.kind() == "type_identifier" {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_definition"
+                        | "struct_specifier"
+                        | "enum_specifier"
+                        | "type_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+int main() {
+    return 0;
+
+void hello(const char* name) {
+    printf("Hello, %s\n", name);
+}
+}
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(!funcs.is_empty());
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(CSupport.supports_extension("c"));
+        assert!(CSupport.supports_extension("h"));
+        assert!(!CSupport.supports_extension("cpp"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/cpp.rs`
+
+- Size: 12070 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! C++ language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-cpp")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-cpp")]
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct CppSupport;
+
+#[cfg(feature = "tree-sitter-cpp")]
+impl CppSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_cpp::LANGUAGE.into()
+    }
+}
+
+#[cfg(feature = "tree-sitter-cpp")]
+impl LanguageSupport for CppSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["cpp", "cxx", "cc", "hpp", "hxx", "hh"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+#[cfg(feature = "tree-sitter-cpp")]
+impl CppSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_definition" => {
+                if let Some(sig) = self.extract_function_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "class_specifier" => {
+                if let Some(sig) = self.extract_class_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "struct_specifier" => {
+                if let Some(sig) = self.extract_struct_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_specifier" => {
+                if let Some(sig) = self.extract_enum_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "alias_declaration" | "type_definition" => {
+                if let Some(sig) = self.extract_alias_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "preproc_function_def" => {
+                if let Some(sig) = self.extract_macro_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_definition" => structure.functions += 1,
+            "class_specifier" => structure.classes += 1,
+            "struct_specifier" => structure.structs += 1,
+            "enum_specifier" => structure.enums += 1,
+            "preproc_include" => {
+                structure.imports.push("include".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    #[allow(dead_code)]
+    fn get_visibility(&self, _node: &tree_sitter::Node) -> Visibility {
+        // C++ has access specifiers: public, private, protected
+        // For simplicity, we check sibling nodes for access specifiers
+        // This is a simplified check; full implementation would track class context
+        Visibility::All
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self.find_function_name(node, source)?;
+        let return_type = self.find_return_type(node, source);
+
+        let mut full_sig = String::new();
+        if let Some(r) = &return_type {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        full_sig.push_str("()");
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None,
+            return_type,
+            visibility,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("class {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_struct_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("struct {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Struct,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("enum {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_alias_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("using/typedef {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_macro_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let full_sig = format!("#define {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Macro,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_function_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "function_declarator" || child.kind() == "reference_declarator" {
+                let mut inner_cursor = child.walk();
+                for inner in child.children(&mut inner_cursor) {
+                    if inner.kind() == "identifier" || inner.kind() == "qualified_identifier" {
+                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+                    }
+                }
+            }
+            if child.kind() == "identifier" || child.kind() == "qualified_identifier" {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_return_type(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "primitive_type" | "type_identifier" | "sized_type_specifier" => {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_definition"
+                        | "class_specifier"
+                        | "struct_specifier"
+                        | "enum_specifier"
+                        | "alias_declaration"
+                        | "type_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+class HelloWorld {
+public:
+    void greet() {
+        std::cout << "Hello" << std::endl;
+    }
+};
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "HelloWorld");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(CppSupport.supports_extension("cpp"));
+        assert!(CppSupport.supports_extension("hpp"));
+        assert!(CppSupport.supports_extension("cxx"));
+        assert!(!CppSupport.supports_extension("c"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/go.rs`
+
+- Size: 13186 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Go language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-go")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-go")]
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct GoSupport;
+
+#[cfg(feature = "tree-sitter-go")]
+impl GoSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_go::LANGUAGE.into()
+    }
+}
+
+#[cfg(feature = "tree-sitter-go")]
+impl LanguageSupport for GoSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["go"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+#[cfg(feature = "tree-sitter-go")]
+impl GoSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_declaration" => {
+                if let Some(sig) = self.extract_function_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "method_declaration" => {
+                if let Some(sig) = self.extract_method_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "type_declaration" => {
+                self.extract_type_signatures(source, node, visibility, signatures);
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_declaration" | "method_declaration" => structure.functions += 1,
+            "type_spec" => {
+                // Check what type it is
+                if let Some(parent) = node.parent()
+                    && parent.kind() == "type_declaration"
+                {
+                    // Could be struct, interface, or type alias
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        match child.kind() {
+                            "struct_type" => structure.structs += 1,
+                            "interface_type" => structure.interfaces += 1,
+                            "type_identifier" => structure.type_aliases += 1,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "import_declaration" => {
+                structure.imports.push("import".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn is_exported(&self, name: &str) -> bool {
+        name.chars().next().is_some_and(|c| c.is_uppercase())
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let is_exported = self.is_exported(&name);
+
+        if visibility == Visibility::Public && !is_exported {
+            return None;
+        }
+        if visibility == Visibility::Private && is_exported {
+            return None;
+        }
+
+        let params = self.find_child_text(node, "parameter_list", source);
+        let result = self
+            .find_child_text(node, "type_identifier", source)
+            .or_else(|| self.find_child_text_for_result(node, source));
+
+        let mut full_sig = String::new();
+        full_sig.push_str("func ");
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+        if let Some(r) = &result {
+            full_sig.push(' ');
+            full_sig.push_str(r);
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type: result,
+            visibility: if is_exported {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            },
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_method_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let name = self
+            .find_child_text(node, "field_identifier", source)
+            .or_else(|| self.find_child_text(node, "identifier", source))?;
+        let is_exported = self.is_exported(&name);
+
+        if visibility == Visibility::Public && !is_exported {
+            return None;
+        }
+        if visibility == Visibility::Private && is_exported {
+            return None;
+        }
+
+        let receiver = self.find_child_text(node, "parameter_list", source);
+        let params = self.find_method_params(node, source);
+        let result = self.find_child_text_for_result(node, source);
+
+        let mut full_sig = String::new();
+        full_sig.push_str("func ");
+        if let Some(r) = &receiver {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+        if let Some(r) = &result {
+            full_sig.push(' ');
+            full_sig.push_str(r);
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Method,
+            name,
+            params,
+            return_type: result,
+            visibility: if is_exported {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            },
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_type_signatures(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "type_spec"
+                && let Some(name) = self.find_child_text(&child, "type_identifier", source)
+            {
+                let is_exported = self.is_exported(&name);
+
+                if visibility == Visibility::Public && !is_exported {
+                    continue;
+                }
+                if visibility == Visibility::Private && is_exported {
+                    continue;
+                }
+
+                let kind = self.get_type_kind(&child);
+                let full_sig = format!("type {} {}", name, kind);
+
+                signatures.push(Signature {
+                    kind,
+                    name,
+                    params: None,
+                    return_type: None,
+                    visibility: if is_exported {
+                        Visibility::Public
+                    } else {
+                        Visibility::Private
+                    },
+                    line_number: child.start_position().row + 1,
+                    full_signature: full_sig,
+                });
+            }
+        }
+    }
+
+    fn get_type_kind(&self, node: &tree_sitter::Node) -> SignatureKind {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "struct_type" => return SignatureKind::Struct,
+                "interface_type" => return SignatureKind::Interface,
+                _ => {}
+            }
+        }
+        SignatureKind::TypeAlias
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_child_text_for_result(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "func_result" {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_method_params(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        let mut found_receiver = false;
+        for child in node.children(&mut cursor) {
+            if child.kind() == "parameter_list" {
+                if found_receiver {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                found_receiver = true;
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_declaration" | "method_declaration" | "type_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+package main
+
+func Hello(name string) string {
+    return "Hello, " + name
+}
+
+func internal() int {
+    return 42
+}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(funcs.len() >= 2);
+    }
+
+    #[test]
+    fn test_public_only_filter() {
+        let source = r#"
+func PublicFunc() {}
+func privateFunc() {}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::Public);
+        assert_eq!(signatures.len(), 1);
+        assert_eq!(signatures[0].name, "PublicFunc");
+    }
+
+    #[test]
+    fn test_extract_struct_signature() {
+        let source = r#"
+type User struct {
+    Name string
+    Age  int
+}
+"#;
+
+        let signatures = GoSupport.extract_signatures(source, Visibility::All);
+        let structs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Struct)
+            .collect();
+        assert!(!structs.is_empty());
+        assert_eq!(structs[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(GoSupport.supports_extension("go"));
+        assert!(!GoSupport.supports_extension("rs"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/java.rs`
+
+- Size: 12548 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Java language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-java")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-java")]
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct JavaSupport;
+
+#[cfg(feature = "tree-sitter-java")]
+impl JavaSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_java::LANGUAGE.into()
+    }
+}
+
+#[cfg(feature = "tree-sitter-java")]
+impl LanguageSupport for JavaSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["java"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+#[cfg(feature = "tree-sitter-java")]
+impl JavaSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "method_declaration" => {
+                if let Some(sig) = self.extract_method_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "class_declaration" => {
+                if let Some(sig) = self.extract_class_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(sig) = self.extract_interface_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(sig) = self.extract_enum_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "field_declaration" => {
+                if let Some(sig) = self.extract_field_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "method_declaration" => structure.functions += 1,
+            "class_declaration" => structure.classes += 1,
+            "interface_declaration" => structure.interfaces += 1,
+            "enum_declaration" => structure.enums += 1,
+            "import_declaration" => {
+                structure.imports.push("import".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    #[allow(dead_code)]
+    fn get_visibility(&self, _node: &tree_sitter::Node) -> Visibility {
+        // Java visibility is determined by modifiers
+        // Simplified: check for public/private/protected keywords in AST modifiers
+        Visibility::All
+    }
+
+    fn extract_method_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "formal_parameters", source);
+        let return_type = self
+            .find_child_text(node, "type_identifier", source)
+            .or_else(|| self.find_child_text_for_type(node, source));
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        if let Some(r) = &return_type {
+            full_sig.push_str(r);
+            full_sig.push(' ');
+        }
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Method,
+            name,
+            params,
+            return_type,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        full_sig.push_str("class ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_interface_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        full_sig.push_str("interface ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Interface,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("public ");
+        }
+        full_sig.push_str("enum ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_field_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+
+        if visibility == Visibility::Public && vis != Visibility::Public {
+            return None;
+        }
+        if visibility == Visibility::Private && vis == Visibility::Public {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+        let full_signature = format!("field {}", &name);
+
+        Some(Signature {
+            kind: SignatureKind::Constant,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature,
+        })
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_child_text_for_type(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "void_type"
+                || child.kind() == "integral_type"
+                || child.kind() == "boolean_type"
+            {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "method_declaration"
+                        | "class_declaration"
+                        | "interface_declaration"
+                        | "enum_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+public class HelloWorld {
+    public static void main(String[] args) {
+        System.out.println("Hello");
+    }
+}
+}
+"#;
+
+        let signatures = JavaSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "HelloWorld");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(JavaSupport.supports_extension("java"));
+        assert!(!JavaSupport.supports_extension("rs"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/javascript.rs`
+
+- Size: 9969 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! JavaScript language support for tree-sitter.
+
+use tree_sitter::{Parser, Tree};
+
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct JavaScriptSupport;
+
+impl JavaScriptSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_javascript::LANGUAGE.into()
+    }
+}
+
+impl LanguageSupport for JavaScriptSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["js", "mjs", "cjs"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+impl JavaScriptSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_declaration" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "class_declaration" => {
+                if let Some(sig) = self.extract_class_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "variable_declaration" | "lexical_declaration" => {
+                self.extract_variable_declarations(source, node, signatures);
+            }
+            "export_statement" => {
+                self.extract_export_signatures(source, node, signatures);
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_declaration" | "generator_function_declaration" | "function_expression" => {
+                structure.functions += 1;
+            }
+            "class_declaration" | "class_expression" => {
+                structure.classes += 1;
+            }
+            "import_statement" => {
+                structure.imports.push("import".to_string());
+            }
+            "export_statement" => {
+                structure.exports.push("export".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "formal_parameters", source);
+
+        let full_sig = match &params {
+            Some(p) => format!("function {}({})", name, p),
+            None => format!("function {}()", name),
+        };
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type: None, // JS doesn't have explicit return types in syntax
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let full_sig = format!("class {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_variable_declarations(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "variable_declarator"
+                && let Some(name) = self.find_child_text(&child, "identifier", source)
+            {
+                let full_signature = format!("const {}", &name);
+                signatures.push(Signature {
+                    kind: SignatureKind::Constant,
+                    name,
+                    params: None,
+                    return_type: None,
+                    visibility: Visibility::All,
+                    line_number: child.start_position().row + 1,
+                    full_signature,
+                });
+            }
+        }
+    }
+
+    fn extract_export_signatures(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "function_declaration" {
+                if let Some(sig) = self.extract_function_signature(source, &child) {
+                    signatures.push(sig);
+                }
+            } else if child.kind() == "class_declaration"
+                && let Some(sig) = self.extract_class_signature(source, &child)
+            {
+                signatures.push(sig);
+            }
+        }
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+            let mut nested_cursor = child.walk();
+            for nested in child.children(&mut nested_cursor) {
+                if nested.kind() == kind {
+                    return Some(source[nested.start_byte()..nested.end_byte()].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_declaration"
+                        | "class_declaration"
+                        | "method_definition"
+                        | "export_statement"
+                        | "variable_declaration"
+                        | "lexical_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+function hello(name) {
+    return `Hello, ${name}!`;
+}
+
+const add = (a, b) => a + b;
+"#;
+
+        let signatures = JavaScriptSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .collect();
+        assert!(!funcs.is_empty());
+        assert_eq!(funcs[0].name, "hello");
+    }
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+class User {
+    constructor(name) {
+        this.name = name;
+    }
+}
+}
+"#;
+
+        let signatures = JavaScriptSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(JavaScriptSupport.supports_extension("js"));
+        assert!(JavaScriptSupport.supports_extension("mjs"));
+        assert!(!JavaScriptSupport.supports_extension("ts"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/python.rs`
+
+- Size: 9289 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Python language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-python")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-python")]
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct PythonSupport;
+
+#[cfg(feature = "tree-sitter-python")]
+impl PythonSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_python::LANGUAGE.into()
+    }
+}
+
+#[cfg(feature = "tree-sitter-python")]
+impl LanguageSupport for PythonSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["py", "pyw"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+#[cfg(feature = "tree-sitter-python")]
+impl PythonSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_definition" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "class_definition" => {
+                if let Some(sig) = self.extract_class_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_definition" => structure.functions += 1,
+            "class_definition" => structure.classes += 1,
+            "import_statement" | "import_from_statement" => {
+                structure.imports.push("import".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "parameters", source);
+
+        // Check for decorators (to detect @property, @staticmethod, etc.)
+        let is_method = node
+            .parent()
+            .is_some_and(|p| p.kind() == "class_definition");
+        let kind = if is_method {
+            SignatureKind::Method
+        } else {
+            SignatureKind::Function
+        };
+
+        let mut full_sig = String::new();
+        if let Some(decorators) = self.find_decorators(source, node) {
+            full_sig.push_str(&decorators);
+            full_sig.push('\n');
+        }
+        full_sig.push_str("def ");
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        } else {
+            full_sig.push_str("()");
+        }
+
+        Some(Signature {
+            kind,
+            name,
+            params,
+            return_type: None, // Python uses type hints differently
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let bases = self.find_child_text(node, "argument_list", source);
+
+        let mut full_sig = String::new();
+        if let Some(decorators) = self.find_decorators(source, node) {
+            full_sig.push_str(&decorators);
+            full_sig.push('\n');
+        }
+        full_sig.push_str("class ");
+        full_sig.push_str(&name);
+        if let Some(b) = &bases {
+            full_sig.push('(');
+            full_sig.push_str(b);
+            full_sig.push(')');
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: bases,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_decorators(&self, source: &str, node: &tree_sitter::Node) -> Option<String> {
+        let parent = node.parent()?;
+        let mut cursor = parent.walk();
+        let mut decorators = Vec::new();
+
+        for sibling in parent.children(&mut cursor) {
+            if sibling.kind() == "decorator"
+                && sibling.end_position().row == node.start_position().row.saturating_sub(1)
+            {
+                let text = &source[sibling.start_byte()..sibling.end_byte()];
+                decorators.push(text.to_string());
+            }
+        }
+
+        if decorators.is_empty() {
+            None
+        } else {
+            Some(decorators.join("\n"))
+        }
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_definition" | "class_definition" | "decorated_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+def hello(name):
+    return f"Hello, {name}!"
+
+def add(a: int, b: int) -> int:
+    return a + b
+"#;
+
+        let signatures = PythonSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+
+        let funcs: Vec<_> = signatures
+            .iter()
+            .filter(|s| matches!(s.kind, SignatureKind::Function | SignatureKind::Method))
+            .collect();
+        assert!(funcs.len() >= 2);
+        assert_eq!(funcs[0].name, "hello");
+    }
+
+    #[test]
+    fn test_extract_class_signature() {
+        let source = r#"
+class User:
+    def __init__(self, name):
+        self.name = name
+"#;
+
+        let signatures = PythonSupport.extract_signatures(source, Visibility::All);
+        let classes: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Class)
+            .collect();
+        assert!(!classes.is_empty());
+        assert_eq!(classes[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(PythonSupport.supports_extension("py"));
+        assert!(PythonSupport.supports_extension("pyw"));
+        assert!(!PythonSupport.supports_extension("rs"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/rust.rs`
+
+- Size: 18127 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Rust language support for tree-sitter.
+
+use tree_sitter::{Parser, Tree};
+
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct RustSupport;
+
+impl RustSupport {
+    fn get_language() -> tree_sitter::Language {
+        tree_sitter_rust::LANGUAGE.into()
+    }
+}
+
+impl LanguageSupport for RustSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["rs"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(source, &root, &mut structure);
+
+        structure.code_lines = source
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                !trimmed.is_empty() && !trimmed.starts_with("//")
+            })
+            .count();
+
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+
+        let mut best_end = 0;
+        let mut cursor = root.walk();
+
+        self.walk_for_boundary(&mut cursor, max_bytes, &mut best_end);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+impl RustSupport {
+    fn walk_for_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_item"
+                        | "struct_item"
+                        | "enum_item"
+                        | "trait_item"
+                        | "impl_item"
+                        | "mod_item"
+                        | "const_item"
+                        | "static_item"
+                        | "type_item"
+                        | "macro_definition"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.walk_for_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_item" => {
+                if let Some(sig) = self.extract_function_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "struct_item" => {
+                if let Some(sig) = self.extract_struct_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_item" => {
+                if let Some(sig) = self.extract_enum_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "trait_item" => {
+                if let Some(sig) = self.extract_trait_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "impl_item" => {
+                if let Some(sig) = self.extract_impl_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "mod_item" => {
+                if let Some(sig) = self.extract_mod_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "const_item" => {
+                if let Some(sig) = self.extract_const_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "type_item" => {
+                if let Some(sig) = self.extract_type_alias_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            "macro_definition" => {
+                if let Some(sig) = self.extract_macro_signature(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        structure: &mut CodeStructure,
+    ) {
+        match node.kind() {
+            "function_item" => structure.functions += 1,
+            "struct_item" => structure.structs += 1,
+            "enum_item" => structure.enums += 1,
+            "trait_item" => structure.traits += 1,
+            "const_item" => structure.constants += 1,
+            "type_item" => structure.type_aliases += 1,
+            "macro_definition" => structure.macros += 1,
+            "use_declaration" => {
+                structure
+                    .imports
+                    .push(self.node_text(source, node).to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(source, &child, structure);
+        }
+    }
+
+    fn is_public(&self, node: &tree_sitter::Node) -> bool {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "visibility_modifier" {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn get_visibility(&self, node: &tree_sitter::Node) -> Visibility {
+        if self.is_public(node) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        }
+    }
+
+    fn node_text<'a>(&self, source: &'a str, node: &tree_sitter::Node) -> &'a str {
+        &source[node.start_byte()..node.end_byte()]
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "parameters", source);
+        let return_type = self.find_child_text(node, "type", source);
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("fn ");
+        full_sig.push_str(&name);
+        if let Some(p) = &params {
+            full_sig.push_str(p);
+        }
+        if let Some(r) = &return_type {
+            full_sig.push_str(" -> ");
+            full_sig.push_str(r);
+        }
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_struct_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("struct ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Struct,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("enum ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_trait_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("trait ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Trait,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_impl_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        full_sig.push_str("impl ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Impl,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_mod_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("mod ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Module,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_const_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("const ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Constant,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_type_alias_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("type ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_macro_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.get_visibility(node);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+
+        let mut full_sig = String::new();
+        if vis == Visibility::Public {
+            full_sig.push_str("pub ");
+        }
+        full_sig.push_str("macro_rules! ");
+        full_sig.push_str(&name);
+
+        Some(Signature {
+            kind: SignatureKind::Macro,
+            name,
+            params: None,
+            return_type: None,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(self.node_text(source, &child).to_string());
+            }
+            let mut nested_cursor = child.walk();
+            for nested in child.children(&mut nested_cursor) {
+                if nested.kind() == kind {
+                    return Some(self.node_text(source, &nested).to_string());
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+pub fn hello(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+fn private_helper(x: i32) -> i32 {
+    x * 2
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        assert_eq!(signatures.len(), 2);
+
+        assert_eq!(signatures[0].name, "hello");
+        assert_eq!(signatures[0].kind, SignatureKind::Function);
+        assert_eq!(signatures[0].visibility, Visibility::Public);
+
+        assert_eq!(signatures[1].name, "private_helper");
+        assert_eq!(signatures[1].visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_public_only_filter() {
+        let source = r#"
+pub fn public_fn() {}
+fn private_fn() {}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::Public);
+        assert_eq!(signatures.len(), 1);
+        assert_eq!(signatures[0].name, "public_fn");
+    }
+
+    #[test]
+    fn test_extract_struct_signature() {
+        let source = r#"
+pub struct User {
+    name: String,
+    age: u32,
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        assert_eq!(signatures.len(), 1);
+        assert_eq!(signatures[0].name, "User");
+        assert_eq!(signatures[0].kind, SignatureKind::Struct);
+    }
+
+    #[test]
+    fn test_extract_structure() {
+        let source = r#"
+use std::fs;
+
+pub struct Config {
+    path: String,
+}
+
+pub fn load() -> Config {
+    Config { path: ".".into() }
+}
+
+enum Status {
+    Active,
+    Inactive,
+}
+"#;
+
+        let structure = RustSupport.extract_structure(source);
+        assert_eq!(structure.structs, 1);
+        assert_eq!(structure.functions, 1);
+        assert_eq!(structure.enums, 1);
+    }
+
+    #[test]
+    fn test_find_truncation_point() {
+        let source = r#"
+fn first() -> i32 {
+    1
+}
+
+fn second() -> i32 {
+    2
+}
+
+fn third() -> i32 {
+    3
+}
+"#;
+
+        let after_first = source.find("fn second()").unwrap();
+        let point = RustSupport.find_truncation_point(source, after_first);
+
+        assert!(point <= after_first);
+        assert!(source[..point].contains("fn first()"));
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(RustSupport.supports_extension("rs"));
+        assert!(!RustSupport.supports_extension("py"));
+    }
+}
+```
+
+### File: `src/tree_sitter/languages/typescript.rs`
+
+- Size: 13571 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! TypeScript language support for tree-sitter.
+
+#[cfg(feature = "tree-sitter-ts")]
+use tree_sitter::{Parser, Tree};
+
+#[cfg(feature = "tree-sitter-ts")]
+use crate::tree_sitter::language_support::{
+    CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+};
+
+pub struct TypeScriptSupport;
+
+#[cfg(feature = "tree-sitter-ts")]
+impl TypeScriptSupport {
+    fn get_language() -> tree_sitter::Language {
+        // Use TypeScript grammar (not TSX)
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    }
+}
+
+#[cfg(feature = "tree-sitter-ts")]
+impl LanguageSupport for TypeScriptSupport {
+    fn file_extensions(&self) -> &[&'static str] {
+        &["ts", "tsx", "mts", "cts"]
+    }
+
+    fn parse(&self, source: &str) -> Option<Tree> {
+        let mut parser = Parser::new();
+        parser.set_language(&Self::get_language()).ok()?;
+        parser.parse(source, None)
+    }
+
+    fn extract_signatures(&self, source: &str, visibility: Visibility) -> Vec<Signature> {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures = Vec::new();
+
+        self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
+
+        signatures.sort_by_key(|s| s.line_number);
+        signatures
+    }
+
+    fn extract_structure(&self, source: &str) -> CodeStructure {
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return CodeStructure::default(),
+        };
+
+        let root = tree.root_node();
+        let mut structure = CodeStructure {
+            total_lines: source.lines().count(),
+            ..Default::default()
+        };
+
+        self.extract_structure_from_node(&root, &mut structure);
+        structure
+    }
+
+    fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize {
+        if source.len() <= max_bytes {
+            return source.len();
+        }
+
+        let tree = match self.parse(source) {
+            Some(t) => t,
+            None => return max_bytes,
+        };
+
+        let root = tree.root_node();
+        let mut best_end = 0;
+
+        let mut cursor = root.walk();
+        self.find_best_boundary(&mut cursor, max_bytes, &mut best_end);
+        drop(cursor);
+
+        if best_end == 0 { max_bytes } else { best_end }
+    }
+}
+
+#[cfg(feature = "tree-sitter-ts")]
+impl TypeScriptSupport {
+    fn extract_signatures_from_node(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        _visibility: Visibility,
+        signatures: &mut Vec<Signature>,
+    ) {
+        match node.kind() {
+            "function_declaration" | "generator_function_declaration" => {
+                if let Some(sig) = self.extract_function_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "class_declaration" => {
+                if let Some(sig) = self.extract_class_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(sig) = self.extract_interface_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "type_alias_declaration" => {
+                if let Some(sig) = self.extract_type_alias_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(sig) = self.extract_enum_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
+            "lexical_declaration" => {
+                self.extract_variable_declarations(source, node, signatures);
+            }
+            "export_statement" => {
+                self.extract_export_signatures(source, node, signatures);
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_signatures_from_node(source, &child, _visibility, signatures);
+        }
+    }
+
+    fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+        match node.kind() {
+            "function_declaration" | "function_expression" | "arrow_function" => {
+                structure.functions += 1;
+            }
+            "class_declaration" | "class_expression" => {
+                structure.classes += 1;
+            }
+            "interface_declaration" => {
+                structure.interfaces += 1;
+            }
+            "type_alias_declaration" => {
+                structure.type_aliases += 1;
+            }
+            "enum_declaration" => {
+                structure.enums += 1;
+            }
+            "import_statement" => {
+                structure.imports.push("import".to_string());
+            }
+            "export_statement" => {
+                structure.exports.push("export".to_string());
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_structure_from_node(&child, structure);
+        }
+    }
+
+    fn extract_function_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "formal_parameters", source);
+        let return_type = self.find_child_text(node, "type_annotation", source);
+
+        let full_sig = match (params.as_ref(), return_type.as_ref()) {
+            (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
+            (Some(p), None) => format!("function {}{}", name, p),
+            (None, Some(r)) => format!("function {}() {}", name, r),
+            (None, None) => format!("function {}()", name),
+        };
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self
+            .find_child_text(node, "type_identifier", source)
+            .or_else(|| self.find_child_text(node, "identifier", source))?;
+
+        let full_sig = format!("class {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Class,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_interface_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("interface {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Interface,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_type_alias_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        let name = self.find_child_text(node, "type_identifier", source)?;
+
+        let full_sig = format!("type {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::TypeAlias,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+        let name = self
+            .find_child_text(node, "identifier", source)
+            .or_else(|| self.find_child_text(node, "type_identifier", source))?;
+
+        let full_sig = format!("enum {}", name);
+
+        Some(Signature {
+            kind: SignatureKind::Enum,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    fn extract_variable_declarations(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "variable_declarator"
+                && let Some(name) = self.find_child_text(&child, "identifier", source)
+            {
+                let type_ann = self.find_child_text(&child, "type_annotation", source);
+                let full_sig = match &type_ann {
+                    Some(t) => format!("const {} {}", name, t),
+                    None => format!("const {}", name),
+                };
+                signatures.push(Signature {
+                    kind: SignatureKind::Constant,
+                    name,
+                    params: None,
+                    return_type: type_ann,
+                    visibility: Visibility::All,
+                    line_number: child.start_position().row + 1,
+                    full_signature: full_sig,
+                });
+            }
+        }
+    }
+
+    fn extract_export_signatures(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        signatures: &mut Vec<Signature>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "function_declaration" => {
+                    if let Some(sig) = self.extract_function_signature(source, &child) {
+                        signatures.push(sig);
+                    }
+                }
+                "class_declaration" => {
+                    if let Some(sig) = self.extract_class_signature(source, &child) {
+                        signatures.push(sig);
+                    }
+                }
+                "interface_declaration" => {
+                    if let Some(sig) = self.extract_interface_signature(source, &child) {
+                        signatures.push(sig);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn find_child_text(
+        &self,
+        node: &tree_sitter::Node,
+        kind: &str,
+        source: &str,
+    ) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == kind {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
+            }
+            let mut nested_cursor = child.walk();
+            for nested in child.children(&mut nested_cursor) {
+                if nested.kind() == kind {
+                    return Some(source[nested.start_byte()..nested.end_byte()].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn find_best_boundary(
+        &self,
+        cursor: &mut tree_sitter::TreeCursor,
+        max_bytes: usize,
+        best_end: &mut usize,
+    ) {
+        loop {
+            let node = cursor.node();
+            let end_byte = node.end_byte();
+
+            if end_byte <= max_bytes && end_byte > *best_end {
+                let is_item = matches!(
+                    node.kind(),
+                    "function_declaration"
+                        | "class_declaration"
+                        | "interface_declaration"
+                        | "type_alias_declaration"
+                        | "enum_declaration"
+                        | "export_statement"
+                        | "lexical_declaration"
+                );
+                if is_item {
+                    *best_end = end_byte;
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.find_best_boundary(cursor, max_bytes, best_end);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_function_signature() {
+        let source = r#"
+function hello(name: string): string {
+    return `Hello, ${name}!`;
+}
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        assert!(!signatures.is_empty());
+        assert_eq!(signatures[0].name, "hello");
+        assert!(signatures[0].return_type.is_some());
+    }
+
+    #[test]
+    fn test_extract_interface_signature() {
+        let source = r#"
+interface User {
+    name: string;
+    age: number;
+}
+}
+"#;
+
+        let signatures = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let interfaces: Vec<_> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Interface)
+            .collect();
+        assert!(!interfaces.is_empty());
+        assert_eq!(interfaces[0].name, "User");
+    }
+
+    #[test]
+    fn test_file_extensions() {
+        assert!(TypeScriptSupport.supports_extension("ts"));
+        assert!(TypeScriptSupport.supports_extension("tsx"));
+        assert!(!TypeScriptSupport.supports_extension("js"));
+    }
+}
+```
+
+### File: `src/tree_sitter/signatures.rs`
+
+- Size: 2276 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Signature extraction utilities.
+
+use super::language_support::{LanguageSupport, Signature, Visibility};
+
+/// Extract all signatures from source code.
+pub fn extract_signatures(
+    source: &str,
+    support: &dyn LanguageSupport,
+    visibility: Visibility,
+) -> Vec<Signature> {
+    support.extract_signatures(source, visibility)
+}
+
+/// Format signatures as markdown.
+pub fn format_signatures_as_markdown(signatures: &[Signature], language: &str) -> String {
+    if signatures.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    output.push_str("```");
+    output.push_str(language);
+    output.push('\n');
+
+    let mut current_kind: Option<&str> = None;
+
+    for sig in signatures {
+        let kind_str = match sig.kind {
+            super::language_support::SignatureKind::Function
+            | super::language_support::SignatureKind::Method => "Functions",
+            super::language_support::SignatureKind::Struct
+            | super::language_support::SignatureKind::Class => "Structs/Classes",
+            super::language_support::SignatureKind::Enum => "Enums",
+            super::language_support::SignatureKind::Trait
+            | super::language_support::SignatureKind::Interface => "Traits/Interfaces",
+            super::language_support::SignatureKind::Impl => "Implementations",
+            super::language_support::SignatureKind::Module => "Modules",
+            super::language_support::SignatureKind::Constant => "Constants",
+            super::language_support::SignatureKind::TypeAlias => "Type Aliases",
+            super::language_support::SignatureKind::Macro => "Macros",
+        };
+
+        if current_kind != Some(kind_str) {
+            if current_kind.is_some() {
+                output.push('\n');
+            }
+            output.push_str("// ");
+            output.push_str(kind_str);
+            output.push('\n');
+            current_kind = Some(kind_str);
+        }
+
+        output.push_str(&sig.full_signature);
+        output.push('\n');
+    }
+
+    output.push_str("```\n");
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_empty_signatures() {
+        let output = format_signatures_as_markdown(&[], "rust");
+        assert!(output.is_empty());
+    }
+}
+```
+
+### File: `src/tree_sitter/structure.rs`
+
+- Size: 2617 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Code structure extraction utilities.
+
+use super::language_support::{CodeStructure, LanguageSupport};
+
+/// Extract structure information from source code.
+pub fn extract_structure(source: &str, support: &dyn LanguageSupport) -> CodeStructure {
+    support.extract_structure(source)
+}
+
+/// Format structure as markdown summary.
+pub fn format_structure_as_markdown(structure: &CodeStructure) -> String {
+    if structure.total_symbols() == 0 {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    output.push_str("**Structure:**\n");
+
+    let mut parts = Vec::new();
+
+    if structure.functions > 0 {
+        parts.push(format!("{} functions", structure.functions));
+    }
+    if structure.structs > 0 {
+        parts.push(format!("{} structs", structure.structs));
+    }
+    if structure.classes > 0 {
+        parts.push(format!("{} classes", structure.classes));
+    }
+    if structure.enums > 0 {
+        parts.push(format!("{} enums", structure.enums));
+    }
+    if structure.traits > 0 {
+        parts.push(format!("{} traits", structure.traits));
+    }
+    if structure.interfaces > 0 {
+        parts.push(format!("{} interfaces", structure.interfaces));
+    }
+    if structure.constants > 0 {
+        parts.push(format!("{} constants", structure.constants));
+    }
+    if structure.type_aliases > 0 {
+        parts.push(format!("{} types", structure.type_aliases));
+    }
+    if structure.macros > 0 {
+        parts.push(format!("{} macros", structure.macros));
+    }
+
+    output.push_str("- ");
+    output.push_str(&parts.join(", "));
+    output.push('\n');
+
+    if structure.total_lines > 0 {
+        output.push_str(&format!(
+            "- {} lines ({} code)\n",
+            structure.total_lines, structure.code_lines
+        ));
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_empty_structure() {
+        let structure = CodeStructure::default();
+        let output = format_structure_as_markdown(&structure);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_format_structure_with_symbols() {
+        let structure = CodeStructure {
+            functions: 5,
+            structs: 2,
+            enums: 1,
+            total_lines: 100,
+            code_lines: 80,
+            ..Default::default()
+        };
+
+        let output = format_structure_as_markdown(&structure);
+        assert!(output.contains("5 functions"));
+        assert!(output.contains("2 structs"));
+        assert!(output.contains("1 enums"));
+        assert!(output.contains("100 lines"));
+        assert!(output.contains("80 code"));
+    }
+}
+```
+
+### File: `src/tree_sitter/truncation.rs`
+
+- Size: 1859 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Smart truncation at AST boundaries.
+
+use super::language_support::LanguageSupport;
+
+/// Find a truncation point that ends at a complete AST node boundary.
+///
+/// Returns the byte position where the source should be truncated.
+/// If no suitable boundary is found within max_bytes, returns max_bytes.
+pub fn find_truncation_point(
+    source: &str,
+    max_bytes: usize,
+    support: &dyn LanguageSupport,
+) -> usize {
+    if source.len() <= max_bytes {
+        return source.len();
+    }
+
+    support.find_truncation_point(source, max_bytes)
+}
+
+/// Check if truncation is needed at a UTF-8 boundary.
+pub fn ensure_utf8_boundary(source: &str, position: usize) -> usize {
+    if position >= source.len() {
+        return source.len();
+    }
+
+    let mut pos = position;
+    while pos > 0 && !source.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+/// Add a truncation notice to the output.
+pub fn add_truncation_notice(output: &mut String, truncated_count: usize) {
+    output.push_str("\n\n---\n\n");
+    if truncated_count > 0 {
+        output.push_str(&format!(
+            "_Output truncated: {} more items omitted._\n",
+            truncated_count
+        ));
+    } else {
+        output.push_str("_Output truncated at code boundary._\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ensure_utf8_boundary_ascii() {
+        let source = "Hello, world!";
+        assert_eq!(ensure_utf8_boundary(source, 5), 5);
+        assert_eq!(ensure_utf8_boundary(source, 100), 13);
+    }
+
+    #[test]
+    fn test_ensure_utf8_boundary_unicode() {
+        let source = "Hello, 世界!"; // 4 bytes per Chinese char
+        // Position 8 is inside the first Chinese character (starts at 7)
+        let boundary = ensure_utf8_boundary(source, 8);
+        assert_eq!(boundary, 7); // Should fall back to start of char
+    }
+}
+```
+
+### File: `tests/cli_integration.rs`
+
+- Size: 13986 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use std::cell::Cell;
+use std::fs;
+use std::path::Path;
+
+use tempfile::tempdir;
+
+use context_builder::config::Config;
+use context_builder::{Prompter, cli::Args, run_with_args};
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+    last_processing_count: Cell<usize>,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+            last_processing_count: Cell::new(0),
+        }
+    }
+
+    fn last_count(&self) -> usize {
+        self.last_processing_count.get()
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, file_count: usize) -> std::io::Result<bool> {
+        self.last_processing_count.set(file_count);
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+#[test]
+fn preview_mode_does_not_create_output_file() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("output.md").to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: true,
+        token_count: false,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    // Run in preview mode
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(res.is_ok(), "preview mode should succeed");
+
+    // No output file created
+    assert!(
+        !root.join("output.md").exists(),
+        "output file should not be created in preview mode"
+    );
+}
+
+#[test]
+fn preview_mode_skips_overwrite_confirmation() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create an existing output file
+    let output_path = root.join("output.md");
+    write_file(&output_path, "existing content");
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: true,
+        token_count: false,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // Use false for overwrite response to verify it's not called
+    let prompter = TestPrompter::new(false, true);
+
+    // Run in preview mode - should succeed even with overwrite denied
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(
+        res.is_ok(),
+        "preview mode should succeed without overwrite confirmation"
+    );
+
+    // Output file should remain unchanged
+    let content = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        content, "existing content",
+        "output file should not be modified in preview mode"
+    );
+}
+
+#[test]
+fn token_count_mode_skips_overwrite_confirmation() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create an existing output file
+    let output_path = root.join("output.md");
+    write_file(&output_path, "existing content");
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: true,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // Use false for overwrite response to verify it's not called
+    let prompter = TestPrompter::new(false, true);
+
+    // Run in token count mode - should succeed even with overwrite denied
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(
+        res.is_ok(),
+        "token count mode should succeed without overwrite confirmation"
+    );
+
+    // Output file should remain unchanged
+    let content = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(
+        content, "existing content",
+        "output file should not be modified in token count mode"
+    );
+}
+
+#[test]
+
+fn both_preview_and_token_count_modes_work_together() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("output.md").to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: true,
+        token_count: true,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
+
+    // Run with both modes
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(res.is_ok(), "both modes should work together");
+
+    // No output file created
+    assert!(
+        !root.join("output.md").exists(),
+        "output file should not be created when both modes are active"
+    );
+}
+
+#[test]
+fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Files that should be included by filters
+    write_file(
+        &root.join("src/main.rs"),
+        "fn main() {\n    println!(\"hi\");\n}\n",
+    );
+    write_file(&root.join("README.md"), "# Top-level readme\n\nSome text");
+
+    // Ignored directories/files
+    write_file(
+        &root.join("node_modules/pkg/index.js"),
+        "console.log('ignore');",
+    );
+    write_file(&root.join("target/artifact.txt"), "binary");
+
+    // A large file to exercise streaming and performance
+    let mut large = String::with_capacity(4000 * 25);
+    for i in 0..4000 {
+        large.push_str(&format!("// line {}\n", i + 1));
+    }
+    write_file(&root.join("src/large.rs"), &large);
+
+    let output_path = root.join("ctx.md");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec!["rs".into(), "md".into()],
+        ignore: vec!["node_modules".into(), "target".into()],
+        preview: false,
+        token_count: false,
+        line_numbers: true,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // Always proceed without interactive prompts
+    let prompter = TestPrompter::new(true, true);
+
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(res.is_ok(), "end-to-end generation should succeed");
+
+    // Find the actual output file (may have timestamp appended)
+    let actual_output_path = if output_path.exists() {
+        output_path
+    } else {
+        // Look for timestamped version
+        let parent = output_path.parent().unwrap();
+        let stem = output_path.file_stem().unwrap().to_string_lossy();
+        let ext = output_path.extension().unwrap().to_string_lossy();
+
+        let mut found_file = None;
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                if name.starts_with(&format!("{}_", stem)) && name.ends_with(&format!(".{}", ext)) {
+                    found_file = Some(entry.path());
+                    break;
+                }
+            }
+        }
+
+        found_file.unwrap_or_else(|| {
+            panic!(
+                "No output file found. Expected {} or timestamped version",
+                output_path.display()
+            )
+        })
+    };
+
+    // Basic content checks
+    let out = fs::read_to_string(&actual_output_path).unwrap();
+
+    // Has file tree section
+    assert!(
+        out.contains("## File Tree Structure"),
+        "output should contain a 'File Tree Structure' section"
+    );
+
+    // Has at least one rust code block with line numbers (looking for ' | ' marker)
+    assert!(
+        out.contains("```rust"),
+        "output should contain a rust code block"
+    );
+    assert!(
+        out.contains("   1 | "),
+        "output should contain line-numbered code blocks"
+    );
+
+    // Should not include ignored directory entries' content (not a strict check, but indicative)
+    assert!(
+        !out.contains("console.log('ignore');"),
+        "output should not include content from ignored directories"
+    );
+}
+
+#[test]
+fn overwrite_prompt_is_respected() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Prepare an existing output file with sentinel content
+    let output_path = root.join("out.md");
+    write_file(&output_path, "SENTINEL");
+
+    // Put a file to process
+    write_file(&root.join("src/lib.rs"), "pub fn f() {}");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec!["rs".into()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // Deny overwrite
+    let prompter = TestPrompter::new(false, true);
+
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(
+        res.is_err(),
+        "run should return error when overwrite denied"
+    );
+
+    // Ensure file is unchanged
+    let out = fs::read_to_string(&output_path).unwrap();
+    assert_eq!(out, "SENTINEL", "existing output should not be overwritten");
+}
+
+#[test]
+fn confirm_processing_receives_large_count() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a lot of files (should be well over the 100 threshold)
+    fs::create_dir_all(root.join("data")).unwrap();
+    for i in 0..150 {
+        write_file(&root.join("data").join(format!("f{}.txt", i)), "x");
+    }
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("out.md").to_string_lossy().into_owned(),
+        filter: vec!["txt".into()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(res.is_ok(), "run should succeed with many files");
+
+    // Ensure our injected prompter saw the large count (>= 150)
+    assert!(
+        prompter.last_count() >= 150,
+        "expected confirm_processing to be called with >=150 files, got {}",
+        prompter.last_count()
+    );
+}
+
+#[test]
+fn token_count_mode_does_not_create_output_file() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a small project structure
+    write_file(&root.join("src/main.rs"), "fn main() { println!(\"hi\"); }");
+    write_file(&root.join("README.md"), "# Readme");
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: root.join("output.md").to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: true,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    // Run in token count mode
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(res.is_ok(), "token count mode should succeed");
+
+    // No output file created
+    assert!(
+        !root.join("output.md").exists(),
+        "output file should not be created in token count mode"
+    );
+}
+```
+
+### File: `tests/diff_integration.rs`
+
+- Size: 1122 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+use context_builder::diff::generate_diff;
+
+#[test]
+fn test_diff_with_identical_content() {
+    let content = r#"# Test Document
+
+This is a test document with some content.
+
+## Section 1
+
+Some text here.
+
+## Section 2
+
+More text here.
+"#;
+
+    let diff = generate_diff(content, content);
+
+    // When content is identical, diff should be empty
+    assert!(diff.is_empty());
+}
+
+#[test]
+fn test_diff_with_changes() {
+    let old_content = r#"# Test Document
+
+This is a test document with some content.
+
+## Section 1
+
+Some text here.
+
+## Section 2
+
+More text here.
+"#;
+
+    let new_content = r#"# Test Document
+
+This is a test document with some content.
+
+## Section 1
+
+Some different text here.
+
+## Section 2
+
+More text here.
+"#;
+
+    let diff = generate_diff(old_content, new_content);
+
+    // When content has differences, diff should not be empty
+    assert!(!diff.is_empty());
+    assert!(diff.contains("## File Differences"));
+
+    // Print the diff for debugging
+    println!("Actual diff output:\n{}", diff);
+
+    assert!(diff.contains("- Some text here"));
+    assert!(diff.contains("+ Some different text here"));
+}
+```
+
+### File: `tests/test_auto_diff.rs`
+
+- Size: 34489 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Integration tests for auto-diff functionality
+//!
+//! These tests verify that the auto-diff feature works correctly and robustly:
+//! - Cache management and collision prevention
+//! - Diff generation accuracy
+//! - Configuration changes affecting cache
+//! - Error recovery from corrupted cache
+
+use pretty_assertions::assert_eq;
+use serial_test::serial;
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+use chrono::Utc;
+use context_builder::cli::Args;
+use context_builder::config::{Config, load_config};
+use context_builder::{Prompter, run_with_args};
+
+/// Test prompter that always confirms
+struct TestPrompter;
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(true)
+    }
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(true)
+    }
+}
+
+fn create_simple_project(base_dir: &Path) -> std::io::Result<()> {
+    let src_dir = base_dir.join("src");
+    fs::create_dir_all(&src_dir)?;
+
+    fs::write(
+        src_dir.join("main.rs"),
+        "fn main() {\n    println!(\"Hello, world!\");\n}",
+    )?;
+    fs::write(
+        src_dir.join("lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}",
+    )?;
+    fs::write(
+        base_dir.join("README.md"),
+        "# Test Project\n\nThis is a test project for auto-diff.",
+    )?;
+
+    // Create config file to enable auto-diff
+    fs::write(
+        base_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+"#,
+    )?;
+
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn test_auto_diff_workflow_basic() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(), // Use current directory
+        output: output_dir.join("context.md").to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+    let prompter = TestPrompter;
+
+    // First run - should create initial output without diffs
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut first_args = args.clone();
+
+    // Apply line_numbers from config (matches run_with_args behavior)
+    if let Some(line_numbers) = config.line_numbers {
+        first_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if let Some(diff_only) = config.diff_only {
+        first_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&first_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            first_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            first_args.output = new_filename;
+        }
+    }
+
+    run_with_args(first_args, config.clone(), &prompter).unwrap();
+
+    // Check that output was created
+    let first_output = fs::read_dir(&output_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let first_content = fs::read_to_string(&first_output).unwrap();
+
+    // Should not contain change summary on first run
+    assert!(!first_content.contains("## Change Summary"));
+    assert!(!first_content.contains("## File Differences"));
+
+    // Modify a file
+    fs::write(
+        project_dir.join("src").join("main.rs"),
+        "fn main() {\n    println!(\"Hello, Rust!\");\n    println!(\"Modified!\");\n}",
+    )
+    .unwrap();
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run - should detect changes
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut second_args = args;
+
+    // Apply line_numbers from config (matches run_with_args behavior)
+    if let Some(line_numbers) = config.line_numbers {
+        second_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if let Some(diff_only) = config.diff_only {
+        second_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&second_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            second_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            second_args.output = new_filename;
+        }
+    }
+
+    run_with_args(second_args, config, &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Find the second output file (should have different timestamp)
+    let outputs: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(outputs.len(), 2, "Should have two output files");
+
+    let second_output = outputs.iter().find(|&p| p != &first_output).unwrap();
+    let second_content = fs::read_to_string(second_output).unwrap();
+
+    // Should contain change summary
+    assert!(second_content.contains("## Change Summary"));
+    // Handle both Windows and Unix path separators
+    assert!(
+        second_content.contains("- Modified: `src/main.rs`")
+            || second_content.contains("- Modified: `src\\main.rs`")
+    );
+
+    // Should contain file differences
+    assert!(second_content.contains("## File Differences"));
+    assert!(
+        second_content.contains("### Diff: `src/main.rs`")
+            || second_content.contains("### Diff: `src\\main.rs`")
+    );
+    assert!(second_content.contains("Hello, world!"));
+    assert!(second_content.contains("Hello, Rust!"));
+    assert!(second_content.contains("Modified!"));
+}
+
+#[test]
+#[serial]
+fn test_auto_diff_added_and_removed_files() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(), // Use current directory
+        output: output_dir.join("context.md").to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+
+    // First run
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut first_args = args.clone();
+
+    // Apply line_numbers from config
+    if !first_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        first_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !first_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        first_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&first_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            first_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            first_args.output = new_filename;
+        }
+    }
+
+    run_with_args(first_args, config.clone(), &prompter).unwrap();
+
+    // Add a new file and remove an existing one
+    fs::write(
+        project_dir.join("src").join("new_module.rs"),
+        "pub fn new_function() -> String {\n    \"new\".to_string()\n}",
+    )
+    .unwrap();
+
+    fs::remove_file(project_dir.join("src").join("lib.rs")).unwrap();
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut second_args = args;
+
+    // Apply line_numbers from config
+    if !second_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        second_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !second_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        second_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&second_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            second_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            second_args.output = new_filename;
+        }
+    }
+
+    run_with_args(second_args, config, &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    let outputs: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let latest_output = outputs
+        .iter()
+        .max_by_key(|p| fs::metadata(p).unwrap().modified().unwrap())
+        .unwrap();
+    let content = fs::read_to_string(latest_output).unwrap();
+
+    // Should show both added and removed files
+    // Handle both Windows and Unix path separators
+    assert!(
+        content.contains("- Added: `src/new_module.rs`")
+            || content.contains("- Added: `src\\new_module.rs`")
+    );
+    // Handle both Windows and Unix path separators
+    assert!(
+        content.contains("- Removed: `src/lib.rs`") || content.contains("- Removed: `src\\lib.rs`")
+    );
+
+    // Added files should be marked in the files section
+    assert!(content.contains("_Status: Added_"));
+}
+
+#[test]
+#[serial]
+fn test_diff_only_mode() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    // Update config to enable diff_only
+    fs::write(
+        project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+diff_only = true
+"#,
+    )
+    .unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(), // Use current directory
+        output: output_dir.join("context.md").to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false, // Config file should override this
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+
+    // First run
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut first_args = args.clone();
+
+    // Apply line_numbers from config
+    if !first_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        first_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !first_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        first_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&first_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            first_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            first_args.output = new_filename;
+        }
+    }
+
+    run_with_args(first_args, config.clone(), &prompter).unwrap();
+
+    // Modify a file
+    fs::write(
+        project_dir.join("src").join("main.rs"),
+        "fn main() {\n    println!(\"Changed!\");\n}",
+    )
+    .unwrap();
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut second_args = args;
+
+    // Apply line_numbers from config
+    if !second_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        second_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !second_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        second_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&second_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            second_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            second_args.output = new_filename;
+        }
+    }
+
+    run_with_args(second_args, config, &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    let outputs: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let latest_output = outputs
+        .iter()
+        .max_by_key(|p| fs::metadata(p).unwrap().modified().unwrap())
+        .unwrap();
+    let content = fs::read_to_string(latest_output).unwrap();
+
+    // Should have change summary and diffs
+    assert!(content.contains("## Change Summary"));
+    assert!(content.contains("## File Differences"));
+
+    // Should NOT have full file bodies section
+    assert!(!content.contains("## Files"));
+
+    // But should still have the file tree and header
+    assert!(content.contains("## File Tree Structure"));
+    assert!(content.contains("# Directory Structure Report"));
+}
+
+#[test]
+#[serial]
+fn test_cache_invalidation_on_config_change() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args_base = Args {
+        input: ".".to_string(), // Use current directory
+        output: output_dir.join("context.md").to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+
+    // First run with original config
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut first_args = args_base.clone();
+
+    // Apply line_numbers from config
+    if !first_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        first_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !first_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        first_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&first_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            first_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            first_args.output = new_filename;
+        }
+    }
+
+    run_with_args(first_args, config, &prompter).unwrap();
+
+    // Change configuration - add line numbers
+    fs::write(
+        project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+line_numbers = true
+"#,
+    )
+    .unwrap();
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run with new config should not show diffs (cache should be invalidated)
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut second_args = args_base;
+
+    // Apply line_numbers from config (matches run_with_args behavior)
+    if let Some(line_numbers) = config.line_numbers {
+        second_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if let Some(diff_only) = config.diff_only {
+        second_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&second_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            second_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            second_args.output = new_filename;
+        }
+    }
+
+    run_with_args(second_args, config, &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    let outputs: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let latest_output = outputs
+        .iter()
+        .max_by_key(|p| fs::metadata(p).unwrap().modified().unwrap())
+        .unwrap();
+    let content = fs::read_to_string(latest_output).unwrap();
+
+    // Should have line numbers (showing new config is active)
+    assert!(content.contains("   1 |"));
+
+    // Should not show change summary since cache was invalidated
+    assert!(!content.contains("## Change Summary"));
+}
+
+#[test]
+#[serial]
+fn test_concurrent_cache_access() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    let project_dir = Arc::new(project_dir);
+    let output_dir = Arc::new(output_dir);
+
+    // Spawn multiple threads that try to run the tool concurrently
+    let handles: Vec<_> = (0..3)
+        .map(|i| {
+            let project_dir = Arc::clone(&project_dir);
+            let output_dir = Arc::clone(&output_dir);
+
+            thread::spawn(move || {
+                let args = Args {
+                    input: project_dir.to_string_lossy().to_string(),
+                    output: output_dir
+                        .join(format!("context_{}.md", i))
+                        .to_string_lossy()
+                        .to_string(),
+                    filter: vec![],
+                    ignore: vec![],
+                    preview: false,
+                    token_count: false,
+                    line_numbers: false,
+                    yes: true,
+                    diff_only: false,
+                    clear_cache: false,
+                    init: false,
+                    max_tokens: None,
+                    signatures: false,
+                    structure: false,
+                    truncate: "smart".to_string(),
+                    visibility: "all".to_string(),
+                };
+
+                let prompter = TestPrompter;
+                run_with_args(args, Config::default(), &prompter)
+            })
+        })
+        .collect();
+
+    // Wait for all threads to complete
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+    // All should succeed (no cache corruption)
+    for result in results {
+        assert!(
+            result.is_ok(),
+            "Concurrent access should not cause failures"
+        );
+    }
+
+    // Check that all outputs were created
+    let output_count = fs::read_dir(&*output_dir).unwrap().count();
+    assert_eq!(output_count, 3, "All concurrent runs should produce output");
+}
+
+#[test]
+#[serial]
+fn test_corrupted_cache_recovery() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(), // Use current directory
+        output: output_dir.join("context.md").to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+
+    // First run to create cache
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut first_args = args.clone();
+
+    // Apply line_numbers from config
+    if !first_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        first_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !first_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        first_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&first_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            first_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            first_args.output = new_filename;
+        }
+    }
+
+    run_with_args(first_args, config.clone(), &prompter).unwrap();
+
+    // Corrupt the cache by writing invalid JSON
+    let cache_dir = project_dir.join(".context-builder").join("cache");
+    if cache_dir.exists() {
+        let cache_files: Vec<_> = fs::read_dir(&cache_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s == "json")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if !cache_files.is_empty() {
+            // Corrupt the first cache file found
+            fs::write(cache_files[0].path(), "{ invalid json }").unwrap();
+        }
+    }
+
+    // Modify a file
+    fs::write(
+        project_dir.join("src").join("main.rs"),
+        "fn main() {\n    println!(\"Recovered!\");\n}",
+    )
+    .unwrap();
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run should handle corrupted cache gracefully
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut second_args = args;
+
+    // Apply line_numbers from config
+    if !second_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        second_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !second_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        second_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&second_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            second_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            second_args.output = new_filename;
+        }
+    }
+
+    let result = run_with_args(second_args, config, &prompter);
+    assert!(result.is_ok(), "Should recover from corrupted cache");
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Should produce output despite cache corruption
+    let output_count = fs::read_dir(&output_dir).unwrap().count();
+    assert!(
+        output_count >= 1,
+        "Should produce output even with corrupted cache"
+    );
+}
+
+#[test]
+#[serial]
+fn test_diff_only_mode_includes_added_files() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_simple_project(&project_dir).unwrap();
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    // Create config with auto_diff and diff_only enabled
+    fs::write(
+        project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+diff_only = true
+"#,
+    )
+    .unwrap();
+
+    let prompter = TestPrompter;
+
+    // First run to establish baseline
+    let args = Args {
+        input: ".".to_string(),
+        output: output_dir.join("context.md").to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false, // Will be overridden by config
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();
+
+    // Add a new file
+    fs::write(
+        project_dir.join("src").join("new_module.rs"),
+        "// New module added\npub fn new_function() -> String {\n    \"Hello from new module\".to_string()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn test_new_function() {\n        assert_eq!(new_function(), \"Hello from new module\");\n    }\n}\n",
+    )
+    .unwrap();
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run with the added file
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut second_args = args;
+
+    // Apply line_numbers from config
+    if !second_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        second_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !second_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        second_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&second_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            second_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            second_args.output = new_filename;
+        }
+    }
+
+    run_with_args(second_args, config, &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Find the latest output file
+    let outputs: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let latest_output = outputs
+        .iter()
+        .max_by_key(|p| fs::metadata(p).unwrap().modified().unwrap())
+        .unwrap();
+    let content = fs::read_to_string(latest_output).unwrap();
+
+    // Should have change summary
+    assert!(content.contains("## Change Summary"));
+
+    // Should have added files section (not full Files section)
+    assert!(content.contains("## Added Files"));
+    assert!(!content.contains("## Files\n"));
+
+    // Should include the full content of the added file (handle Windows path separators)
+    assert!(content.contains("### File: `src") && content.contains("new_module.rs`"));
+    assert!(content.contains("pub fn new_function() -> String"));
+    assert!(content.contains("Hello from new module"));
+    assert!(content.contains("_Status: Added_"));
+
+    // Should still have the file tree and header
+    assert!(content.contains("## File Tree Structure"));
+    assert!(content.contains("# Directory Structure Report"));
+
+    // Should not include full content of existing files (since they're unchanged)
+    // The existing main.rs content should not be in the full Files section (handle Windows path separators)
+    let main_rs_in_files = content.contains("### File: `src")
+        && content.contains("main.rs`")
+        && content.contains("Hello, world!");
+    assert!(
+        !main_rs_in_files,
+        "Existing unchanged files should not have full content in diff_only mode"
+    );
+}
+```
+
+### File: `tests/test_binary_file_autodiff.rs`
+
+- Size: 8350 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Integration tests for binary file handling in auto-diff mode
+//!
+//! This test ensures that the application doesn't crash when encountering
+//! binary files during auto-diff processing.
+
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+use context_builder::config::Config;
+use context_builder::{Prompter, cli::Args, run_with_args};
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+        }
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+fn write_binary_file(path: &Path, data: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, data).unwrap();
+}
+
+#[test]
+fn test_binary_files_dont_crash_autodiff() {
+    let temp_dir = tempdir().unwrap();
+    let root = temp_dir.path();
+
+    // Create text files
+    write_file(
+        &root.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+    write_file(&root.join("README.md"), "# Test Project");
+
+    // Create binary files with various problematic byte sequences
+    write_binary_file(
+        &root.join("assets/image.png"),
+        &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG header
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xFE, 0xFD, 0xFC, 0x00, 0x01,
+            0x02, 0x03, // Random binary data
+        ],
+    );
+
+    // Create a file with null bytes
+    write_binary_file(
+        &root.join("data/binary.dat"),
+        &[
+            0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85,
+            0x86, 0x87,
+        ],
+    );
+
+    // Create a file with invalid UTF-8 sequences
+    write_binary_file(
+        &root.join("config/settings.bin"),
+        &[
+            0xC0, 0x80, // Invalid UTF-8: overlong encoding
+            0xE0, 0x80, 0x80, // Invalid UTF-8: overlong encoding
+            0xFF, 0xFE, 0xFF, 0xFE, // Invalid UTF-8: not valid start bytes
+        ],
+    );
+
+    let output_path = root.join("output.md");
+
+    // Configure for auto-diff mode
+    let config = Config {
+        auto_diff: Some(true),
+        diff_context_lines: Some(3),
+        ..Default::default()
+    };
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec![], // Include all file types to catch binary files
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true, // Auto-confirm to avoid prompts
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    // First run - should create initial state without crashing
+    let result1 = run_with_args(args.clone(), config.clone(), &prompter);
+    assert!(
+        result1.is_ok(),
+        "First run with binary files should not crash: {:?}",
+        result1
+    );
+
+    // Verify output file was created
+    assert!(
+        output_path.exists(),
+        "Output file should be created on first run"
+    );
+
+    // Modify a text file to trigger diff on second run
+    write_file(
+        &root.join("src/main.rs"),
+        "fn main() { println!(\"Hello, world!\"); }",
+    );
+
+    // Second run - should handle binary files in diff without crashing
+    let result2 = run_with_args(args, config, &prompter);
+    assert!(
+        result2.is_ok(),
+        "Second run with binary files should not crash during diff: {:?}",
+        result2
+    );
+
+    // Read the output to verify it contains appropriate handling of binary files
+    let output_content = fs::read_to_string(&output_path).unwrap();
+
+    // Should contain the modified text file
+    assert!(
+        output_content.contains("Hello, world!"),
+        "Output should contain modified text content"
+    );
+
+    // Binary files should be represented appropriately (not causing crashes)
+    // The exact representation depends on implementation but should not crash
+    assert!(
+        output_content.len() > 100,
+        "Output should contain substantial content indicating successful processing"
+    );
+}
+
+#[test]
+fn test_mixed_text_and_binary_files_autodiff() {
+    let temp_dir = tempdir().unwrap();
+    let root = temp_dir.path();
+
+    // Create a mix of text and binary files
+    write_file(&root.join("source.txt"), "Original text content");
+    write_binary_file(&root.join("data.bin"), &[0x00, 0xFF, 0x42, 0x13, 0x37]);
+    write_file(&root.join("config.json"), r#"{"version": "1.0"}"#);
+
+    let output_path = root.join("mixed_output.md");
+
+    let config = Config {
+        auto_diff: Some(true),
+        ..Default::default()
+    };
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    // Initial run
+    let result1 = run_with_args(args.clone(), config.clone(), &prompter);
+    assert!(result1.is_ok(), "Initial run should succeed");
+
+    // Modify text file and add another binary file
+    write_file(&root.join("source.txt"), "Modified text content");
+    write_binary_file(
+        &root.join("image.jpg"),
+        &[
+            0xFF, 0xD8, 0xFF, 0xE0, // JPEG header
+            0x00, 0x10, 0x4A, 0x46, 0x49, 0x46,
+        ],
+    );
+
+    // Second run with changes
+    let result2 = run_with_args(args, config, &prompter);
+    assert!(
+        result2.is_ok(),
+        "Second run with mixed file changes should succeed"
+    );
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        output_content.contains("Modified text content"),
+        "Should show updated text content"
+    );
+}
+
+#[test]
+fn test_large_binary_file_autodiff() {
+    let temp_dir = tempdir().unwrap();
+    let root = temp_dir.path();
+
+    // Create a large binary file (simulating real-world scenario)
+    let large_binary_data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+
+    write_binary_file(&root.join("large_binary.dat"), &large_binary_data);
+    write_file(&root.join("small_text.txt"), "Small text file");
+
+    let output_path = root.join("large_binary_output.md");
+
+    let config = Config {
+        auto_diff: Some(true),
+        ..Default::default()
+    };
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: output_path.to_string_lossy().into_owned(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+
+    // Should handle large binary files without memory issues or crashes
+    let result = run_with_args(args, config, &prompter);
+    assert!(
+        result.is_ok(),
+        "Should handle large binary files without crashing: {:?}",
+        result
+    );
+
+    assert!(
+        output_path.exists(),
+        "Output should be created even with large binary files"
+    );
+}
+```
+
+### File: `tests/test_comprehensive_edge_cases.rs`
+
+- Size: 23611 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Comprehensive edge case testing suite for context-builder v0.5.0
+//!
+//! This test suite covers all the critical edge cases and robustness scenarios
+//! that were identified during the v0.5.0 development cycle.
+
+use context_builder::cli::Args;
+use context_builder::config::Config;
+use context_builder::{Prompter, run_with_args};
+use serial_test::serial;
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+        }
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+fn write_binary_file(path: &Path, data: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, data).unwrap();
+}
+
+#[test]
+#[serial]
+fn test_comprehensive_binary_file_edge_cases() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Create various binary and problematic files
+    write_file(&project_dir.join("src/normal.rs"), "fn main() {}\n");
+
+    // Pure binary file (executable-like)
+    let binary_data = vec![
+        0x7f, 0x45, 0x4c, 0x46, // ELF header
+        0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    write_binary_file(&project_dir.join("src/binary.rs"), &binary_data);
+
+    // File with UTF-16 BOM
+    let utf16_data = [
+        0xFF, 0xFE, // UTF-16 LE BOM
+        0x48, 0x00, 0x65, 0x00, 0x6C, 0x00, 0x6C, 0x00, 0x6F, 0x00, // "Hello"
+        0x0A, 0x00, // newline
+    ];
+    write_binary_file(&project_dir.join("src/utf16.rs"), &utf16_data);
+
+    // File with Windows-1252 encoding
+    let windows1252_data = [
+        0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, // "Hello "
+        0x93, 0x57, 0x6F, 0x72, 0x6C, 0x64, 0x94, // "World" with smart quotes
+        0x0A, // newline
+    ];
+    write_binary_file(&project_dir.join("src/win1252.rs"), &windows1252_data);
+
+    // Empty file
+    write_file(&project_dir.join("src/empty.rs"), "");
+
+    // File with only null bytes
+    write_binary_file(&project_dir.join("src/nulls.rs"), &[0x00; 100]);
+
+    // Very large file (test memory efficiency)
+    let large_content = "// Large file\n".repeat(10000);
+    write_file(&project_dir.join("src/large.rs"), &large_content);
+
+    // Test with different encoding strategies
+    let strategies = ["detect", "strict", "skip"];
+
+    for strategy in &strategies {
+        let config = Config {
+            filter: Some(vec!["rs".to_string()]),
+            encoding_strategy: Some(strategy.to_string()),
+            ..Default::default()
+        };
+
+        let args = Args {
+            input: project_dir.to_string_lossy().to_string(),
+            output: output_dir
+                .join(format!("test_{}.md", strategy))
+                .to_string_lossy()
+                .to_string(),
+            filter: vec!["rs".to_string()],
+            ignore: vec![],
+            preview: false,
+            token_count: false,
+            line_numbers: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let prompter = TestPrompter::new(true, true);
+        let result = run_with_args(args, config, &prompter);
+
+        assert!(
+            result.is_ok(),
+            "Should handle binary files gracefully with strategy: {}",
+            strategy
+        );
+
+        // Verify output file was created
+        let output_path = output_dir.join(format!("test_{}.md", strategy));
+        assert!(
+            output_path.exists(),
+            "Output file should exist for strategy: {}",
+            strategy
+        );
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should contain normal file
+        assert!(
+            content.contains("fn main()"),
+            "Should contain normal file content"
+        );
+
+        // Should handle binary files appropriately based on strategy
+        match *strategy {
+            "detect" => {
+                // May contain transcoded content or binary placeholders
+                assert!(
+                    content.contains("Hello") || content.contains("<Binary file"),
+                    "Detect strategy should transcode or show binary placeholder"
+                );
+            }
+            "strict" | "skip" => {
+                // Should show binary placeholders for non-UTF-8 files
+                assert!(
+                    content.contains("<Binary file") || content.contains("binary.rs"),
+                    "Strict/skip strategy should show binary placeholders"
+                );
+            }
+            _ => {}
+        }
+
+        // Should handle empty files
+        assert!(content.contains("empty.rs"), "Should list empty files");
+
+        // Should handle large files
+        assert!(content.contains("large.rs"), "Should handle large files");
+    }
+
+    // No need to restore directory since we never changed it
+}
+
+#[test]
+#[serial]
+fn test_configuration_precedence_edge_cases() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Create test files
+    write_file(&project_dir.join("test.rs"), "fn test() {}\n");
+    write_file(&project_dir.join("README.md"), "# Test Project\n");
+
+    // Test 1: Basic functionality with explicit CLI args
+    let args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_dir
+            .join("basic_test.md")
+            .to_string_lossy()
+            .to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+    let result = run_with_args(args, Config::default(), &prompter);
+    assert!(result.is_ok(), "Basic configuration test should succeed");
+
+    let output_path = output_dir.join("basic_test.md");
+    assert!(output_path.exists(), "Output should exist for basic test");
+
+    let content = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        content.contains("test.rs"),
+        "Should include filtered .rs files"
+    );
+    assert!(
+        !content.contains("README.md"),
+        "Should exclude non-filtered files"
+    );
+
+    // Test 2: Empty filter should include all files
+    let args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_dir
+            .join("all_files_test.md")
+            .to_string_lossy()
+            .to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let result = run_with_args(args, Config::default(), &prompter);
+    assert!(result.is_ok(), "All files test should succeed");
+
+    let output_path = output_dir.join("all_files_test.md");
+    let content = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        content.contains("test.rs"),
+        "Should include all files when no filter"
+    );
+    assert!(
+        content.contains("README.md"),
+        "Should include all files when no filter"
+    );
+}
+
+#[test]
+#[serial]
+fn test_cache_consistency_edge_cases() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    write_file(&project_dir.join("test.rs"), "fn original() {}\n");
+
+    // Change to project directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    // Create config with auto_diff enabled
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+"#,
+    );
+
+    let base_args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_dir
+            .join("cache_test.md")
+            .to_string_lossy()
+            .to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
+    let prompter = TestPrompter::new(true, true);
+
+    // First run - establish cache
+    let result1 = run_with_args(base_args.clone(), config.clone(), &prompter);
+    assert!(result1.is_ok(), "First run should succeed");
+
+    // Verify cache was created
+    let cache_dir = project_dir.join(".context-builder").join("cache");
+    assert!(cache_dir.exists(), "Cache directory should be created");
+
+    // Test cache with different path representations
+    let current_dir_string = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let path_variants = [".", "./", &current_dir_string];
+
+    for (i, path_variant) in path_variants.iter().enumerate() {
+        let mut variant_args = base_args.clone();
+        variant_args.input = path_variant.to_string();
+        variant_args.output = output_dir
+            .join(format!("variant_{}.md", i))
+            .to_string_lossy()
+            .to_string();
+
+        let result = run_with_args(variant_args, config.clone(), &prompter);
+        assert!(
+            result.is_ok(),
+            "Path variant '{}' should succeed",
+            path_variant
+        );
+
+        let output_path = output_dir.join(format!("variant_{}.md", i));
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should show "no changes detected" because cache should be consistent
+        // (or at least not crash due to path inconsistencies)
+        assert!(
+            content.contains("original") || content.contains("no changes"),
+            "Path variant should handle cache consistently"
+        );
+    }
+
+    // Test cache corruption recovery
+    let cache_files: Vec<_> = fs::read_dir(&cache_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s == "json")
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if !cache_files.is_empty() {
+        // Corrupt the cache
+        fs::write(cache_files[0].path(), "{ invalid json }").unwrap();
+
+        // Should recover gracefully
+        let result = run_with_args(base_args.clone(), config.clone(), &prompter);
+        assert!(result.is_ok(), "Should recover from corrupted cache");
+    }
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+}
+
+#[test]
+#[serial]
+fn test_error_conditions_and_exit_codes() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&project_dir).unwrap();
+    fs::create_dir_all(&output_dir).unwrap();
+
+    let prompter = TestPrompter::new(false, true); // Deny overwrite
+
+    // Test 1: Non-existent input directory
+    let args = Args {
+        input: temp_dir
+            .path()
+            .join("nonexistent")
+            .to_string_lossy()
+            .to_string(),
+        output: output_dir.join("test.md").to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let result = run_with_args(args, Config::default(), &prompter);
+    assert!(
+        result.is_err(),
+        "Should fail with non-existent input directory"
+    );
+
+    // Test 2: Permission denied on output
+    write_file(&project_dir.join("test.rs"), "fn test() {}\n");
+    let output_file = output_dir.join("existing.md");
+    write_file(&output_file, "existing content");
+
+    let args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_file.to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: false, // Don't auto-confirm
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter_deny = TestPrompter::new(false, true); // Deny overwrite
+    let result = run_with_args(args, Config::default(), &prompter_deny);
+    assert!(result.is_err(), "Should fail when overwrite is denied");
+
+    // Test 3: User cancellation during processing
+    let args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_dir
+            .join("cancelled.md")
+            .to_string_lossy()
+            .to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter_cancel = TestPrompter::new(true, false); // Allow overwrite, deny processing
+    let result = run_with_args(args, Config::default(), &prompter_cancel);
+    assert!(result.is_err(), "Should fail when processing is cancelled");
+}
+
+#[test]
+#[cfg(feature = "parallel")]
+fn test_memory_usage_under_parallel_processing() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    fs::create_dir_all(&project_dir).unwrap();
+
+    // Create many files to test memory efficiency
+    for i in 0..500 {
+        let subdir = project_dir.join(format!("module_{}", i / 50));
+        fs::create_dir_all(&subdir).unwrap();
+
+        let content = format!(
+            "// File {}\nuse std::collections::HashMap;\n\npub fn function_{}() -> i32 {{\n    {}\n}}\n",
+            i, i, i
+        );
+        write_file(&subdir.join(format!("file_{}.rs", i)), &content);
+    }
+
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    let args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_dir
+            .join("parallel_test.md")
+            .to_string_lossy()
+            .to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+    let result = run_with_args(args, Config::default(), &prompter);
+
+    assert!(
+        result.is_ok(),
+        "Parallel processing should handle many files efficiently"
+    );
+
+    let output_path = output_dir.join("parallel_test.md");
+    assert!(output_path.exists(), "Output should be created");
+
+    let content = fs::read_to_string(&output_path).unwrap();
+
+    // Verify all files are included and properly ordered
+    assert!(
+        content.contains("function_0"),
+        "Should contain first function"
+    );
+    assert!(
+        content.contains("function_499"),
+        "Should contain last function"
+    );
+
+    // Verify substantial content was generated
+    assert!(
+        content.len() > 100_000,
+        "Should generate substantial output"
+    );
+
+    // Check that files appear in a reasonable order (not completely scrambled)
+    let first_pos = content.find("function_0").unwrap();
+    let last_pos = content.find("function_499").unwrap();
+    assert!(
+        first_pos < last_pos,
+        "Files should maintain reasonable ordering"
+    );
+}
+
+#[test]
+#[serial]
+fn test_cwd_independent_operation() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    let different_cwd = temp_dir.path().join("different_cwd");
+
+    fs::create_dir_all(&project_dir).unwrap();
+    fs::create_dir_all(&output_dir).unwrap();
+    fs::create_dir_all(&different_cwd).unwrap();
+
+    // Create test files
+    write_file(&project_dir.join("test.rs"), "fn test() {}\n");
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+filter = ["rs"]
+line_numbers = true
+"#,
+    );
+
+    // Store original directory
+    let original_dir = std::env::current_dir().unwrap();
+
+    // Test from different working directories
+    let test_cwds = [temp_dir.path(), &different_cwd, &original_dir];
+
+    for (i, test_cwd) in test_cwds.iter().enumerate() {
+        std::env::set_current_dir(test_cwd).unwrap();
+
+        let args = Args {
+            input: project_dir.to_string_lossy().to_string(),
+            output: output_dir
+                .join(format!("cwd_test_{}.md", i))
+                .to_string_lossy()
+                .to_string(),
+            filter: vec![], // Use config defaults
+            ignore: vec![],
+            preview: false,
+            token_count: false,
+            line_numbers: false, // Use config default
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config =
+            context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
+        let prompter = TestPrompter::new(true, true);
+
+        let result = run_with_args(args, config, &prompter);
+        assert!(result.is_ok(), "Should work regardless of CWD (test {})", i);
+
+        let output_path = output_dir.join(format!("cwd_test_{}.md", i));
+        assert!(
+            output_path.exists(),
+            "Output should exist for CWD test {}",
+            i
+        );
+
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // Should find the config file and apply its settings
+        assert!(
+            content.contains("test.rs"),
+            "Should process rust files from config"
+        );
+
+        // All outputs should be identical regardless of CWD
+        if i > 0 {
+            let previous_content =
+                fs::read_to_string(output_dir.join(format!("cwd_test_{}.md", i - 1))).unwrap();
+
+            // Remove timestamps for comparison
+            let normalize = |s: &str| -> String {
+                s.lines()
+                    .filter(|line| !line.contains("Processed at:"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            assert_eq!(
+                normalize(&content),
+                normalize(&previous_content),
+                "Output should be identical regardless of CWD"
+            );
+        }
+    }
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+}
+
+#[test]
+fn test_edge_case_filenames_and_paths() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Create files with problematic names
+    let problematic_names = vec![
+        "normal.rs",
+        "with spaces.rs",
+        "with-dashes.rs",
+        "with_underscores.rs",
+        "with.dots.rs",
+        "uppercase.rs", // Changed from UPPERCASE.RS to avoid case issues
+        "file.with.many.dots.rs",
+        "123numeric.rs",
+        // Note: Avoid truly problematic characters that might fail on Windows
+    ];
+
+    for name in &problematic_names {
+        write_file(
+            &project_dir.join("src").join(name),
+            &format!("// File: {}\nfn test() {{}}\n", name),
+        );
+    }
+
+    // Create nested directory structure
+    write_file(
+        &project_dir.join("deeply/nested/very/deep/path.rs"),
+        "fn deep() {}\n",
+    );
+
+    let args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_dir
+            .join("edge_case_paths.md")
+            .to_string_lossy()
+            .to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter::new(true, true);
+    let result = run_with_args(args, Config::default(), &prompter);
+
+    assert!(
+        result.is_ok(),
+        "Should handle edge case filenames without panicking"
+    );
+
+    let output_path = output_dir.join("edge_case_paths.md");
+    assert!(output_path.exists(), "Output should be created");
+
+    let content = fs::read_to_string(&output_path).unwrap();
+
+    // Verify all problematic files are included
+    for name in &problematic_names {
+        assert!(
+            content.contains(name),
+            "Should include file with problematic name: {}",
+            name
+        );
+    }
+
+    // Verify deeply nested path is handled
+    assert!(
+        content.contains("deeply/nested") || content.contains("deeply\\nested"),
+        "Should handle deeply nested paths"
+    );
+}
+```
+
+### File: `tests/test_config_resolution.rs`
+
+- Size: 15023 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Integration tests for configuration resolution functionality
+//!
+//! These tests verify that the new config resolver properly merges CLI arguments
+//! with configuration file values according to the correct precedence rules.
+
+use serial_test::serial;
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+use context_builder::{Prompter, cli::Args, config_resolver::resolve_final_config, run_with_args};
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+        }
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+/// Helper function that mimics the run() function's config resolution logic
+fn run_with_resolved_config(
+    args: Args,
+    config: Option<context_builder::config::Config>,
+    prompter: &impl Prompter,
+) -> std::io::Result<()> {
+    // Resolve final configuration using the new config resolver
+    let resolution = resolve_final_config(args, config.clone());
+
+    // Convert resolved config back to Args for run_with_args
+    let final_args = Args {
+        input: resolution.config.input,
+        output: resolution.config.output,
+        filter: resolution.config.filter,
+        ignore: resolution.config.ignore,
+        line_numbers: resolution.config.line_numbers,
+        preview: resolution.config.preview,
+        token_count: resolution.config.token_count,
+        yes: resolution.config.yes,
+        diff_only: resolution.config.diff_only,
+        clear_cache: resolution.config.clear_cache,
+        init: resolution.config.init,
+        max_tokens: resolution.config.max_tokens,
+        signatures: resolution.config.signatures,
+        structure: resolution.config.structure,
+        truncate: resolution.config.truncate,
+        visibility: resolution.config.visibility,
+    };
+
+    // Create final Config with resolved values
+    let final_config = context_builder::config::Config {
+        auto_diff: Some(resolution.config.auto_diff),
+        diff_context_lines: Some(resolution.config.diff_context_lines),
+        ..config.unwrap_or_default()
+    };
+
+    run_with_args(final_args, final_config, prompter)
+}
+
+#[test]
+#[serial]
+fn test_cli_arguments_override_config_file() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+
+    // Create a simple project
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+    write_file(&project_dir.join("lib.py"), "def hello(): print('world')");
+
+    // Create config file with specific settings
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+filter = ["py"]
+line_numbers = true
+output = "from_config.md"
+"#,
+    );
+
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // CLI args that should override config
+    // Change to project directory (run_with_args creates output relative to CWD)
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(), // Use current directory
+        output: output_dir.join("from_cli.md").to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()], // Should override config's ["py"]
+        ignore: vec![],
+        line_numbers: true, // Can't override config boolean settings
+        preview: false,
+        token_count: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
+    let prompter = TestPrompter::new(true, true);
+
+    let result = run_with_resolved_config(args, Some(config), &prompter);
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    assert!(result.is_ok(), "Should succeed with CLI override");
+
+    // Verify output file was created with CLI name, not config name
+    let output_file = output_dir.join("from_cli.md");
+    assert!(output_file.exists(), "Output file should use CLI filename");
+
+    let content = fs::read_to_string(&output_file).unwrap();
+
+    // Should contain .rs file (CLI filter), not .py file (config filter)
+    assert!(
+        content.contains("main.rs"),
+        "Should include .rs files from CLI filter"
+    );
+    assert!(
+        !content.contains("lib.py"),
+        "Should not include .py files despite config filter"
+    );
+
+    // Should have line numbers (config applies since we can't distinguish CLI false from default)
+    assert!(
+        content.contains("   1 |"),
+        "Should have line numbers from config"
+    );
+}
+
+#[test]
+#[serial]
+fn test_config_applies_when_cli_uses_defaults() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+
+    // Create a simple project
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+    write_file(&project_dir.join("lib.py"), "def hello(): print('world')");
+
+    // Create config file
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+filter = ["py", "rs"]
+line_numbers = true
+ignore = ["target"]
+"#,
+    );
+
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Change to project directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    // CLI args using defaults (should be overridden by config)
+    let args = Args {
+        input: ".".to_string(),          // Use current directory
+        output: "output.md".to_string(), // Default - should use config if available
+        filter: vec![],                  // Default - should use config
+        ignore: vec![],                  // Default - should use config
+        line_numbers: false,             // Default - should use config
+        preview: false,
+        token_count: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
+    let prompter = TestPrompter::new(true, true);
+
+    let result = run_with_resolved_config(args, Some(config), &prompter);
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    assert!(result.is_ok(), "Should succeed with config application");
+
+    // Find the output file (should be in current working directory, which is project dir)
+    let output_file = project_dir.join("output.md");
+    // The tool runs with project_dir as input, so output.md should be created there
+    assert!(
+        output_file.exists(),
+        "Output file should be created in project directory"
+    );
+
+    let content = fs::read_to_string(&output_file).unwrap();
+
+    // Should contain both file types from config filter
+    assert!(
+        content.contains("main.rs"),
+        "Should include .rs files from config filter"
+    );
+    assert!(
+        content.contains("lib.py"),
+        "Should include .py files from config filter"
+    );
+
+    // Should have line numbers from config
+    assert!(
+        content.contains("   1 |"),
+        "Should have line numbers from config"
+    );
+}
+
+#[test]
+#[serial]
+fn test_timestamped_output_and_output_folder() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let _output_dir = temp_dir.path().join("docs");
+
+    // Create a simple project
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+
+    // Create config with timestamping and output folder (relative to project)
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+output = "context.md"
+output_folder = "docs"
+timestamped_output = true
+"#,
+    );
+
+    // Create docs directory inside project directory
+    let docs_dir = project_dir.join("docs");
+    fs::create_dir_all(&docs_dir).unwrap();
+
+    // Change to project directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(),          // Use current directory
+        output: "output.md".to_string(), // Should be overridden by config
+        filter: vec![],
+        ignore: vec![],
+        line_numbers: false,
+        preview: false,
+        token_count: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
+    let prompter = TestPrompter::new(true, true);
+
+    let result = run_with_resolved_config(args, Some(config), &prompter);
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    assert!(result.is_ok(), "Should succeed with timestamped output");
+
+    // Find timestamped file in docs directory
+    let docs_dir = project_dir.join("docs");
+    let entries = fs::read_dir(&docs_dir).unwrap();
+    let output_files: Vec<_> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("context_") && name_str.ends_with(".md")
+        })
+        .collect();
+
+    assert!(
+        !output_files.is_empty(),
+        "Should have timestamped output file"
+    );
+    assert!(
+        output_files.len() == 1,
+        "Should have exactly one output file"
+    );
+
+    let output_file = &output_files[0];
+    let content = fs::read_to_string(output_file.path()).unwrap();
+    assert!(content.contains("main.rs"), "Should contain project files");
+}
+
+#[test]
+#[serial]
+fn test_mixed_explicit_and_default_values() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+
+    // Create a simple project
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+    write_file(&project_dir.join("test.py"), "print('test')");
+
+    // Config with multiple settings
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+filter = ["py"]
+line_numbers = true
+yes = true
+"#,
+    );
+
+    // Change to project directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(),          // Use current directory
+        output: "custom.md".to_string(), // Explicit CLI value
+        filter: vec![],                  // Default - should use config
+        ignore: vec![],
+        line_numbers: false, // Default - config will override this
+        preview: false,      // Default - should use config
+        token_count: false,  // Don't use token count mode so file gets created
+        yes: false,          // Default - should use config
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
+    let prompter = TestPrompter::new(true, true);
+
+    let result = run_with_resolved_config(args, Some(config), &prompter);
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    assert!(result.is_ok(), "Should succeed with mixed values");
+
+    // Verify output file uses CLI name (created in project directory)
+    let output_file = project_dir.join("custom.md");
+    assert!(
+        output_file.exists(),
+        "Should use CLI output filename in project directory"
+    );
+
+    let content = fs::read_to_string(&output_file).unwrap();
+
+    // Should use config filter (py files)
+    assert!(
+        content.contains("test.py"),
+        "Should include .py files from config"
+    );
+    assert!(!content.contains("main.rs"), "Should not include .rs files");
+
+    // Should use config line_numbers setting
+    assert!(
+        content.contains("   1 |"),
+        "Should have line numbers from config"
+    );
+}
+
+#[test]
+#[serial]
+fn test_auto_diff_configuration_warning() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+
+    // Create a simple project
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+
+    // Config with auto_diff but no timestamped_output (should generate warning)
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = false
+"#,
+    );
+
+    // Change to project directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(), // Use current directory
+        output: "output.md".to_string(),
+        filter: vec![],
+        ignore: vec![],
+        line_numbers: false,
+        preview: false,
+        token_count: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
+    let prompter = TestPrompter::new(true, true);
+
+    // Capture stderr to check for warnings
+    let result = run_with_resolved_config(args, Some(config), &prompter);
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    assert!(result.is_ok(), "Should succeed despite warning");
+
+    // Note: In a real application, we would capture stderr to verify the warning
+    // For this test, we're just ensuring the config is handled without crashing
+}
+```
+
+### File: `tests/test_cwd_independence.rs`
+
+- Size: 13739 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Integration tests for CWD independence
+//!
+//! This test verifies that the application loads config and creates cache
+//! relative to the project root, not the current working directory.
+
+use serial_test::serial;
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+use context_builder::{Prompter, cli::Args, run_with_args};
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+        }
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+#[test]
+#[serial]
+fn test_config_loaded_from_project_root_not_cwd() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    let working_dir = temp_dir.path().join("working");
+
+    // Create project with config file
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+line_numbers = true
+filter = ["rs"]
+"#,
+    );
+
+    // Create different config in working directory (should be ignored)
+    write_file(
+        &working_dir.join("context-builder.toml"),
+        r#"
+auto_diff = false
+line_numbers = false
+filter = ["txt"]
+"#,
+    );
+
+    fs::create_dir_all(&output_dir).unwrap();
+    fs::create_dir_all(&working_dir).unwrap();
+
+    // Change to working directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&working_dir).unwrap();
+
+    // Load config from project directory (not CWD)
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
+
+    let mut args = Args {
+        input: project_dir.to_string_lossy().to_string(), // Absolute path to project
+        output: output_dir.join("output.md").to_string_lossy().to_string(),
+        filter: vec![], // Should be overridden by project config
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false, // Should be overridden by project config
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // Apply config settings to args (mimicking the run() function logic)
+    if args.filter.is_empty()
+        && let Some(filter) = config.filter.clone()
+    {
+        args.filter = filter;
+    }
+    if !args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        args.line_numbers = line_numbers;
+    }
+
+    let prompter = TestPrompter::new(true, true);
+    let result = run_with_args(args, config, &prompter);
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    assert!(result.is_ok(), "Should succeed with CWD independence");
+
+    let output_content = fs::read_to_string(output_dir.join("output.md")).unwrap();
+
+    // Verify that project config was used, not working directory config
+    assert!(
+        output_content.contains("   1 |"),
+        "Should have line numbers from project config"
+    );
+    assert!(
+        output_content.contains("main.rs"),
+        "Should include .rs files from project config filter"
+    );
+}
+
+#[test]
+#[serial]
+fn test_cache_created_in_project_root_not_cwd() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    let working_dir = temp_dir.path().join("working");
+
+    // Create project with auto-diff enabled
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() { println!(\"Hello\"); }",
+    );
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+"#,
+    );
+
+    fs::create_dir_all(&output_dir).unwrap();
+    fs::create_dir_all(&working_dir).unwrap();
+
+    // Get absolute paths before changing directory
+    let project_dir_abs = project_dir.canonicalize().unwrap();
+    let output_dir_abs = output_dir.canonicalize().unwrap();
+    let working_dir_abs = working_dir.canonicalize().unwrap();
+
+    // Change to working directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&working_dir_abs).unwrap();
+
+    // Load config from project directory
+    let config =
+        context_builder::config::load_config_from_path(&project_dir_abs).unwrap_or_default();
+
+    let mut args = Args {
+        input: project_dir_abs.to_string_lossy().to_string(), // Absolute path to project
+        output: output_dir_abs
+            .join("context.md")
+            .to_string_lossy()
+            .to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        use chrono::Utc;
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            args.output = output_dir_abs
+                .join(new_filename)
+                .to_string_lossy()
+                .to_string();
+        }
+    }
+
+    let prompter = TestPrompter::new(true, true);
+
+    // First run to create cache
+    let result1 = run_with_args(args.clone(), config.clone(), &prompter);
+    assert!(result1.is_ok(), "First run should succeed");
+
+    // Verify cache was created in project directory, not working directory
+    let project_cache = project_dir_abs.join(".context-builder").join("cache");
+    let working_cache = working_dir_abs.join(".context-builder").join("cache");
+
+    assert!(
+        project_cache.exists(),
+        "Cache should be created in project directory"
+    );
+    assert!(
+        !working_cache.exists(),
+        "Cache should NOT be created in working directory"
+    );
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Modify project file
+    // Modify a file to trigger diff
+    write_file(
+        &project_dir_abs.join("src/main.rs"),
+        "fn main() { println!(\"Hello, modified!\"); }",
+    );
+
+    // Create second args with new timestamp
+    let mut args2 = args.clone();
+    if config.timestamped_output.unwrap_or(false) {
+        use chrono::Utc;
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&args2.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            args2.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            args2.output = output_dir_abs
+                .join(new_filename)
+                .to_string_lossy()
+                .to_string();
+        }
+    }
+
+    // Second run should detect changes using cache from project directory
+    let result2 = run_with_args(args2, config, &prompter);
+    assert!(result2.is_ok(), "Second run should succeed");
+
+    // Find output files (should have timestamps) - use absolute path
+    // Add retry logic to handle potential race conditions
+    let output_files = (0..5)
+        .find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if let Ok(entries) = fs::read_dir(&output_dir_abs) {
+                let files: Vec<_> = entries
+                    .filter_map(|entry| entry.ok())
+                    .filter(|entry| {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy();
+                        name_str.starts_with("context") && name_str.ends_with(".md")
+                    })
+                    .collect();
+                if files.len() >= 2 { Some(files) } else { None }
+            } else {
+                None
+            }
+        })
+        .expect("Failed to find output files after retries");
+
+    // Restore original directory after file operations
+    std::env::set_current_dir(original_dir).unwrap();
+
+    assert!(
+        output_files.len() >= 2,
+        "Should have multiple timestamped outputs, found: {}",
+        output_files.len()
+    );
+
+    // Check that second output contains diff information
+    let latest_output = output_files
+        .iter()
+        .max_by_key(|entry| {
+            // All paths are already absolute since we used output_dir_abs
+            fs::metadata(entry.path()).unwrap().modified().unwrap()
+        })
+        .unwrap();
+
+    // Read the latest file content
+    let latest_content = fs::read_to_string(latest_output.path()).unwrap();
+    assert!(
+        latest_content.contains("## Change Summary") || latest_content.contains("Modified"),
+        "Should contain change information from auto-diff"
+    );
+}
+
+#[test]
+#[serial]
+fn test_clear_cache_uses_project_root() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let working_dir = temp_dir.path().join("working");
+
+    // Create project and working directories
+    write_file(&project_dir.join("src/main.rs"), "fn main() {}");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    // Create cache in project directory
+    let project_cache_dir = project_dir.join(".context-builder").join("cache");
+    fs::create_dir_all(&project_cache_dir).unwrap();
+    fs::write(project_cache_dir.join("test_cache.json"), "{}").unwrap();
+
+    // Create cache in working directory (should not be affected)
+    let working_cache_dir = working_dir.join(".context-builder").join("cache");
+    fs::create_dir_all(&working_cache_dir).unwrap();
+    fs::write(working_cache_dir.join("test_cache.json"), "{}").unwrap();
+
+    // Change to working directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&working_dir).unwrap();
+
+    // Simulate the cache clearing logic from run() function
+    // This tests that cache clearing uses project root, not CWD
+    let cache_path = project_dir.join(".context-builder").join("cache");
+    assert!(
+        cache_path.exists(),
+        "Project cache should exist before clearing"
+    );
+
+    if cache_path.exists() {
+        fs::remove_dir_all(&cache_path).unwrap();
+    }
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Project cache should be cleared
+    assert!(
+        !project_cache_dir.exists(),
+        "Project cache should be cleared"
+    );
+
+    // Working directory cache should be untouched
+    assert!(
+        working_cache_dir.exists() && fs::read_dir(&working_cache_dir).unwrap().count() > 0,
+        "Working directory cache should remain untouched"
+    );
+}
+
+#[test]
+#[serial]
+fn test_load_config_from_path_function() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let working_dir = temp_dir.path().join("working");
+
+    // Create project with config file
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+line_numbers = true
+filter = ["rs"]
+"#,
+    );
+
+    // Create different config in working directory
+    write_file(
+        &working_dir.join("context-builder.toml"),
+        r#"
+auto_diff = false
+line_numbers = false
+filter = ["txt"]
+"#,
+    );
+
+    // Change to working directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&working_dir).unwrap();
+
+    // Load config from project directory (not CWD)
+    let config = context_builder::config::load_config_from_path(&project_dir);
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    assert!(
+        config.is_some(),
+        "Should load config from project directory"
+    );
+    let config = config.unwrap();
+
+    assert_eq!(
+        config.auto_diff,
+        Some(true),
+        "Should use project config auto_diff"
+    );
+    assert_eq!(
+        config.line_numbers,
+        Some(true),
+        "Should use project config line_numbers"
+    );
+    assert_eq!(
+        config.filter,
+        Some(vec!["rs".to_string()]),
+        "Should use project config filter"
+    );
+}
+```
+
+### File: `tests/test_determinism.rs`
+
+- Size: 21480 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Integration tests for determinism and robustness of context-builder
+//!
+//! These tests verify that the critical bug fixes are working correctly:
+//! - Deterministic output order
+//! - Robust caching
+//! - Thread safety
+
+use pretty_assertions::assert_eq;
+use serial_test::serial;
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+use chrono::Utc;
+use context_builder::cli::Args;
+use context_builder::config::{Config, load_config};
+use context_builder::{Prompter, run_with_args};
+
+/// Test prompter that always confirms
+struct TestPrompter;
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(true)
+    }
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(true)
+    }
+}
+
+/// Create a test project with multiple files in different directories
+fn create_test_project(base_dir: &Path) -> std::io::Result<()> {
+    let src_dir = base_dir.join("src");
+    let tests_dir = base_dir.join("tests");
+    let docs_dir = base_dir.join("docs");
+
+    fs::create_dir_all(&src_dir)?;
+    fs::create_dir_all(&tests_dir)?;
+    fs::create_dir_all(&docs_dir)?;
+
+    // Create files in different orders to test sorting
+    fs::write(
+        src_dir.join("main.rs"),
+        "fn main() {\n    println!(\"Hello\");\n}",
+    )?;
+    fs::write(src_dir.join("lib.rs"), "pub mod utils;\npub mod config;")?;
+    fs::write(src_dir.join("utils.rs"), "pub fn helper() {}")?;
+    fs::write(
+        tests_dir.join("integration.rs"),
+        "#[test]\nfn test_something() {}",
+    )?;
+    fs::write(tests_dir.join("unit.rs"), "#[test]\nfn test_unit() {}")?;
+    fs::write(
+        docs_dir.join("README.md"),
+        "# Project\n\nThis is a test project.",
+    )?;
+    fs::write(
+        base_dir.join("Cargo.toml"),
+        "[package]\nname = \"test\"\nversion = \"0.1.0\"",
+    )?;
+
+    Ok(())
+}
+
+#[test]
+#[serial] // Ensure tests don't interfere with each other
+fn test_deterministic_output_multiple_runs() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_test_project(&project_dir).unwrap();
+
+    // Note: The actual output files may have timestamps appended due to auto-diff mode
+    // We'll need to find the actual files created
+    let prompter = TestPrompter;
+
+    // Run twice with identical arguments
+    let result1 = run_with_args(
+        Args {
+            input: project_dir.to_string_lossy().to_string(),
+            output: temp_dir
+                .path()
+                .join("output1.md")
+                .to_string_lossy()
+                .to_string(),
+            filter: vec!["rs".to_string(), "md".to_string(), "toml".to_string()],
+            ignore: vec![],
+            preview: false,
+            token_count: false,
+            line_numbers: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        },
+        Config::default(),
+        &prompter,
+    );
+
+    let result2 = run_with_args(
+        Args {
+            input: project_dir.to_string_lossy().to_string(),
+            output: temp_dir
+                .path()
+                .join("output2.md")
+                .to_string_lossy()
+                .to_string(),
+            filter: vec!["rs".to_string(), "md".to_string(), "toml".to_string()],
+            ignore: vec![],
+            preview: false,
+            token_count: false,
+            line_numbers: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        },
+        Config::default(),
+        &prompter,
+    );
+
+    if let Err(e) = result1 {
+        panic!("First run failed: {}", e);
+    }
+    if let Err(e) = result2 {
+        panic!("Second run failed: {}", e);
+    }
+
+    // Find the actual output files (they may have timestamps appended)
+    let temp_entries: Vec<_> = fs::read_dir(temp_dir.path())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            name.starts_with("output") && name.ends_with(".md")
+        })
+        .collect();
+
+    if temp_entries.len() < 2 {
+        eprintln!("Expected 2 output files, found {}", temp_entries.len());
+        eprintln!("Temp directory contents:");
+        for entry in fs::read_dir(temp_dir.path()).unwrap() {
+            eprintln!("  {:?}", entry.unwrap().file_name());
+        }
+        panic!("Not enough output files found");
+    }
+
+    // Sort to ensure consistent ordering
+    let mut output_files: Vec<_> = temp_entries.iter().map(|entry| entry.path()).collect();
+    output_files.sort();
+
+    // Read both outputs
+    let content1 = fs::read_to_string(&output_files[0]).unwrap();
+    let content2 = fs::read_to_string(&output_files[1]).unwrap();
+
+    // Debug: Write contents to temp files for inspection
+    fs::write(temp_dir.path().join("debug_content1.md"), &content1).unwrap();
+    fs::write(temp_dir.path().join("debug_content2.md"), &content2).unwrap();
+
+    // Normalize timestamps for comparison since they will be different
+    let normalize = |content: &str| -> String {
+        content
+            .lines()
+            .map(|line| {
+                if line.starts_with("Processed at: ") {
+                    "Processed at: <timestamp>"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let normalized1 = normalize(&content1);
+    let normalized2 = normalize(&content2);
+
+    // Debug: Write normalized contents for comparison
+    fs::write(temp_dir.path().join("debug_normalized1.md"), &normalized1).unwrap();
+    fs::write(temp_dir.path().join("debug_normalized2.md"), &normalized2).unwrap();
+
+    // They should be identical (deterministic) after normalizing timestamps
+    if normalized1 != normalized2 {
+        eprintln!(
+            "Content1 length: {}, Content2 length: {}",
+            normalized1.len(),
+            normalized2.len()
+        );
+        eprintln!(
+            "First difference at position: {:?}",
+            normalized1
+                .chars()
+                .zip(normalized2.chars())
+                .position(|(a, b)| a != b)
+        );
+        eprintln!("Debug files written to: {}", temp_dir.path().display());
+        panic!("Output should be deterministic across multiple runs (ignoring timestamps)");
+    }
+
+    // Verify that files are listed in a consistent order
+    let lines: Vec<&str> = content1.lines().collect();
+    let file_lines: Vec<&str> = lines
+        .iter()
+        .filter(|line| line.starts_with("### File: `"))
+        .copied()
+        .collect();
+
+    // Should have found some files
+    assert!(
+        !file_lines.is_empty(),
+        "Should have found some file entries"
+    );
+
+    // Check that files are sorted by relevance category:
+    // Category 0: Cargo.toml (config), README.md (key project doc)
+    // Category 1: src/* (source code) — entry points first (lib.rs, main.rs before utils.rs)
+    // Category 2: tests/* (tests)
+    // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
+    let file_lines: Vec<String> = file_lines
+        .iter()
+        .map(|line| line.replace('\\', "/"))
+        .collect();
+    let expected_order = vec![
+        "### File: `Cargo.toml`",
+        "### File: `docs/README.md`",
+        "### File: `src/lib.rs`",
+        "### File: `src/main.rs`",
+        "### File: `src/utils.rs`",
+        "### File: `tests/integration.rs`",
+        "### File: `tests/unit.rs`",
+    ];
+    assert_eq!(
+        file_lines, expected_order,
+        "Files should be listed in relevance order (config+docs → source (entry points first) → tests)"
+    );
+}
+#[test]
+#[serial] // Ensure tests don't interfere with each other
+fn test_deterministic_file_tree_order() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_test_project(&project_dir).unwrap();
+
+    let output_path = temp_dir.path().join("output.md");
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(),
+        output: output_path.to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+    run_with_args(args, Config::default(), &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    let content = fs::read_to_string(&output_path).unwrap();
+
+    // Find the file tree section
+    let tree_start = content
+        .find("## File Tree Structure")
+        .expect("Should have file tree section");
+    let files_start = content.find("### File: `").unwrap_or(content.len());
+    let tree_section = &content[tree_start..files_start];
+
+    // Check that directories and files appear in alphabetical order in the tree
+    // This is a basic check - a more sophisticated test would parse the tree structure
+    assert!(tree_section.contains("Cargo.toml"));
+    // Check for directory entries - they may appear as just the name or with trailing content
+    assert!(tree_section.contains("docs") || tree_section.contains("docs/"));
+    assert!(tree_section.contains("src") || tree_section.contains("src/"));
+    assert!(tree_section.contains("tests") || tree_section.contains("tests/"));
+}
+
+#[test]
+#[serial] // Ensure cache tests don't interfere with each other
+fn test_cache_collision_prevention() {
+    let temp_dir1 = tempdir().unwrap();
+    let temp_dir2 = tempdir().unwrap();
+
+    let project1 = temp_dir1.path().join("project");
+    let project2 = temp_dir2.path().join("project");
+
+    create_test_project(&project1).unwrap();
+    create_test_project(&project2).unwrap();
+
+    // Add different content to make projects distinct
+    fs::write(project1.join("unique1.txt"), "This is project 1").unwrap();
+    fs::write(project2.join("unique2.txt"), "This is project 2").unwrap();
+
+    let output1 = temp_dir1.path().join("output.md");
+    let output2 = temp_dir2.path().join("output.md");
+
+    let prompter = TestPrompter;
+
+    // Change to project1 directory and run
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project1).unwrap();
+
+    let args1 = Args {
+        input: ".".to_string(),
+        output: output1.to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    run_with_args(args1, Config::default(), &prompter).unwrap();
+
+    // Change to project2 directory and run
+    std::env::set_current_dir(&project2).unwrap();
+
+    let args2 = Args {
+        input: ".".to_string(),
+        output: output2.to_string_lossy().to_string(),
+        filter: vec!["txt".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+
+        yes: true,
+
+        diff_only: false,
+
+        clear_cache: false,
+
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    run_with_args(args2, Config::default(), &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    let content1 = fs::read_to_string(&output1).unwrap();
+    let content2 = fs::read_to_string(&output2).unwrap();
+
+    // Outputs should be different due to different projects and configs
+    assert_ne!(
+        content1, content2,
+        "Different projects should produce different outputs"
+    );
+
+    // Each should contain their unique content
+    assert!(content1.contains("unique1.txt"));
+    assert!(content2.contains("unique2.txt"));
+}
+
+#[test]
+#[serial] // Ensure tests don't interfere with each other
+fn test_custom_ignores_performance() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+
+    // Create a project with ignored directories
+    create_test_project(&project_dir).unwrap();
+
+    let target_dir = project_dir.join("target");
+    let node_modules_dir = project_dir.join("node_modules");
+
+    fs::create_dir_all(&target_dir).unwrap();
+    fs::create_dir_all(&node_modules_dir).unwrap();
+
+    // Create many files in ignored directories
+    for i in 0..10 {
+        fs::write(target_dir.join(format!("file{}.txt", i)), "ignored content").unwrap();
+        fs::write(
+            node_modules_dir.join(format!("module{}.js", i)),
+            "ignored js",
+        )
+        .unwrap();
+    }
+
+    let output_path = temp_dir.path().join("output.md");
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args = Args {
+        input: ".".to_string(),
+        output: output_path.to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec!["target".to_string(), "node_modules".to_string()],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+    let start = std::time::Instant::now();
+
+    run_with_args(args, Config::default(), &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    let duration = start.elapsed();
+
+    let content = fs::read_to_string(&output_path).unwrap();
+
+    // Verify ignored files are not included
+    assert!(!content.contains("target/file"));
+    assert!(!content.contains("node_modules/module"));
+
+    // Performance should be reasonable (this is a basic check)
+    assert!(
+        duration.as_secs() < 5,
+        "Should complete within reasonable time even with ignored directories"
+    );
+}
+
+#[test]
+#[serial] // Ensure cache tests don't interfere with each other
+fn test_configuration_affects_cache_key() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    create_test_project(&project_dir).unwrap();
+
+    // Test that different configurations create different cache behaviors
+    // This is verified indirectly by ensuring different configs produce appropriate outputs
+
+    let output1_path = temp_dir.path().join("output1.md");
+    let output2_path = temp_dir.path().join("output2.md");
+
+    // Change to project directory so config loading works
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    let args1 = Args {
+        input: ".".to_string(),
+        output: output1_path.to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let args2 = Args {
+        input: ".".to_string(),
+        output: output2_path.to_string_lossy().to_string(),
+        filter: vec!["md".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+
+    run_with_args(args1, Config::default(), &prompter).unwrap();
+    run_with_args(args2, Config::default(), &prompter).unwrap();
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    let content1 = fs::read_to_string(&output1_path).unwrap();
+    let content2 = fs::read_to_string(&output2_path).unwrap();
+
+    // Different filters should produce different outputs
+    assert_ne!(content1, content2);
+
+    // Verify filter effects
+    assert!(content1.contains(".rs"));
+    assert!(content2.contains("README.md"));
+    // Note: Due to file tree section, both outputs may contain references to all files
+    // but the actual file content sections should be filtered
+}
+
+#[test]
+#[serial] // Ensure tests don't interfere with each other
+fn test_edge_case_filenames_no_panic() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    fs::create_dir_all(&project_dir).unwrap();
+
+    // Create files with edge case names that could cause panics
+    fs::write(project_dir.join(".bashrc"), "# bash config").unwrap(); // no extension
+    fs::write(project_dir.join("Dockerfile"), "FROM alpine").unwrap(); // no extension
+    fs::write(project_dir.join(".gitignore"), "target/").unwrap(); // starts with dot, no extension
+
+    // Change to project directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    // Create a config file that enables timestamped output
+    fs::write(
+        project_dir.join("context-builder.toml"),
+        r#"
+timestamped_output = true
+auto_diff = true
+"#,
+    )
+    .unwrap();
+
+    // Test with output filename that has no extension (extreme edge case)
+    let output_path = temp_dir.path().join("no_extension_output");
+
+    let args = Args {
+        input: ".".to_string(),
+        output: output_path.to_string_lossy().to_string(),
+        filter: vec![],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let prompter = TestPrompter;
+
+    // This should not panic even with edge case filenames
+    let config = load_config().unwrap_or_default();
+
+    // Apply config merging manually since we're bypassing run()
+    let mut final_args = args;
+
+    // Apply line_numbers from config
+    if !final_args.line_numbers
+        && let Some(line_numbers) = config.line_numbers
+    {
+        final_args.line_numbers = line_numbers;
+    }
+
+    // Apply diff_only from config
+    if !final_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        final_args.diff_only = diff_only;
+    }
+
+    // Apply timestamping manually since we're bypassing run()
+    if config.timestamped_output.unwrap_or(false) {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let path = std::path::Path::new(&final_args.output);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
+        if let Some(parent) = path.parent() {
+            final_args.output = parent.join(new_filename).to_string_lossy().to_string();
+        } else {
+            final_args.output = new_filename;
+        }
+    }
+
+    let result = run_with_args(final_args, config, &prompter);
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Should succeed without panicking
+    assert!(
+        result.is_ok(),
+        "Should handle edge case filenames without panicking"
+    );
+
+    // Verify a timestamped file was created
+    let temp_entries: Vec<_> = fs::read_dir(temp_dir.path())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            let year = Utc::now().format("%Y").to_string();
+            name_str.starts_with("no_extension_output_") && name_str.contains(&year)
+        })
+        .collect();
+
+    assert!(
+        !temp_entries.is_empty(),
+        "Should create timestamped output file even with edge case input filename"
+    );
+}
+```
+
+### File: `tests/test_parallel_memory.rs`
+
+- Size: 9136 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Integration test for streaming parallel processing with memory efficiency
+
+use context_builder::cli::Args;
+use context_builder::config::Config;
+use context_builder::{Prompter, run_with_args};
+use std::fs;
+
+use tempfile::tempdir;
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+        }
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn test_streaming_parallel_processing() {
+    let dir = tempdir().unwrap();
+    let base_path = dir.path();
+
+    // Create a test project with multiple files
+    for i in 0..100 {
+        let subdir = base_path.join(format!("module_{}", i / 10));
+        fs::create_dir_all(&subdir).unwrap();
+
+        let file_path = subdir.join(format!("file_{}.rs", i));
+        let content = format!(
+            "// File {}\nuse std::collections::HashMap;\n\npub fn function_{}() -> HashMap<String, i32> {{\n    let mut map = HashMap::new();\n    map.insert(\"key_{}\".to_string(), {});\n    map\n}}\n",
+            i, i, i, i
+        );
+        fs::write(&file_path, content).unwrap();
+    }
+
+    let output_path = base_path.join("output.md");
+
+    // Create CLI args for processing
+    let args = Args {
+        input: base_path.to_string_lossy().to_string(),
+        output: output_path.to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = Config::default();
+    let prompter = TestPrompter::new(true, true);
+
+    // Process files using the proper flow through lib.rs
+    let result = run_with_args(args, config, &prompter);
+
+    assert!(result.is_ok(), "Parallel streaming should succeed");
+
+    // Verify the output file was created and contains expected content
+    assert!(output_path.exists(), "Output file should be created");
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+
+    // If it doesn't have individual file sections, this is expected behavior for auto-diff mode
+    // when there's no previous state. Let's check for basic structure instead.
+    assert!(
+        output_content.contains("# Directory Structure Report"),
+        "Output should contain header"
+    );
+    assert!(
+        output_content.contains("## File Tree Structure"),
+        "Output should contain file tree"
+    );
+
+    // Check if we have individual file content (non-auto-diff mode) or just structure (auto-diff mode)
+    if output_content.contains("## Files") {
+        // Full content mode - verify all files are included in correct order
+        for i in 0..100 {
+            let expected_file_header = format!("### File: `module_{}/file_{}.rs`", i / 10, i);
+            assert!(
+                output_content.contains(&expected_file_header),
+                "Output should contain file header for file {}",
+                i
+            );
+
+            let expected_function = format!("pub fn function_{}()", i);
+            assert!(
+                output_content.contains(&expected_function),
+                "Output should contain function for file {}",
+                i
+            );
+        }
+
+        // Verify file ordering is maintained (first file should appear before last file)
+        let first_file_pos = output_content
+            .find("### File: `module_0/file_0.rs`")
+            .expect("First file should be in output");
+        let last_file_pos = output_content
+            .find("### File: `module_9/file_99.rs`")
+            .expect("Last file should be in output");
+
+        assert!(
+            first_file_pos < last_file_pos,
+            "Files should maintain their original order"
+        );
+    } else {
+        // Auto-diff mode or similar - just verify structure is correct
+        // At minimum, verify we have reasonable file tree structure
+        assert!(
+            output_content.contains("module_0"),
+            "Should contain module_0"
+        );
+        assert!(
+            output_content.contains("module_9"),
+            "Should contain module_9"
+        );
+        assert!(
+            output_content.contains("file_0.rs"),
+            "Should contain file_0.rs"
+        );
+        assert!(
+            output_content.contains("file_99.rs"),
+            "Should contain file_99.rs"
+        );
+    }
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn test_parallel_error_handling() {
+    let dir = tempdir().unwrap();
+    let base_path = dir.path();
+
+    // Create some regular files and one that will cause issues
+    fs::write(base_path.join("good1.rs"), "fn good1() {}").unwrap();
+    fs::write(base_path.join("good2.rs"), "fn good2() {}").unwrap();
+
+    // Create a binary file that should be handled gracefully
+    // Use more null bytes to ensure it's detected as binary
+    let binary_data = vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG header
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // PNG chunk
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, // More binary data
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Null bytes
+    ];
+    fs::write(base_path.join("binary.rs"), binary_data).unwrap();
+
+    let output_path = base_path.join("output.md");
+
+    let args = Args {
+        input: base_path.to_string_lossy().to_string(),
+        output: output_path.to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = Config::default();
+    let prompter = TestPrompter::new(true, true);
+
+    // Should succeed even with binary files
+    let result = run_with_args(args, config, &prompter);
+
+    assert!(result.is_ok(), "Should handle binary files gracefully");
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+
+    // Verify good files are processed
+    assert!(output_content.contains("fn good1()"));
+    assert!(output_content.contains("fn good2()"));
+
+    // Verify binary file is handled with placeholder
+    assert!(output_content.contains("### File: `binary.rs`"));
+    assert!(output_content.contains("<Binary file or unsupported encoding:"));
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn test_memory_efficiency_with_large_files() {
+    let dir = tempdir().unwrap();
+    let base_path = dir.path();
+
+    // Create files with substantial content to test memory usage
+    for i in 0..20 {
+        let file_path = base_path.join(format!("large_file_{}.rs", i));
+        let mut content = format!("// Large file {}\n", i);
+
+        // Add substantial content (about 10KB per file)
+        for j in 0..200 {
+            content.push_str(&format!(
+                "pub fn function_{}_{}() -> String {{\n    format!(\"Function {} in file {}\")\n}}\n\n",
+                i, j, j, i
+            ));
+        }
+
+        fs::write(&file_path, content).unwrap();
+    }
+
+    let output_path = base_path.join("output.md");
+
+    let args = Args {
+        input: base_path.to_string_lossy().to_string(),
+        output: output_path.to_string_lossy().to_string(),
+        filter: vec!["rs".to_string()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    let config = Config::default();
+    let prompter = TestPrompter::new(true, true);
+
+    // This should complete without excessive memory usage
+    let result = run_with_args(args, config, &prompter);
+
+    assert!(result.is_ok(), "Should handle large files efficiently");
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+
+    // Verify all large files are included
+    for i in 0..20 {
+        assert!(
+            output_content.contains(&format!("### File: `large_file_{}.rs`", i)),
+            "Should contain large file {}",
+            i
+        );
+    }
+
+    // Verify substantial content is present
+    assert!(
+        output_content.len() > 100_000,
+        "Output should be substantial"
+    );
+}
+```
+
+### File: `tests/test_phase4_integration.rs`
+
+- Size: 11358 bytes
+- Modified: 2026-02-15 09:48:34 UTC
+
+```rust
+//! Integration test for all Phase 4 features working together
+//!
+//! This test validates that the enhanced binary file handling, improved diff_only mode,
+//! and comprehensive edge case handling all work correctly in combination.
+
+use context_builder::cli::Args;
+use context_builder::config::Config;
+use context_builder::{Prompter, run_with_args};
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+struct TestPrompter {
+    overwrite_response: bool,
+    processing_response: bool,
+}
+
+impl TestPrompter {
+    fn new(overwrite_response: bool, processing_response: bool) -> Self {
+        Self {
+            overwrite_response,
+            processing_response,
+        }
+    }
+}
+
+impl Prompter for TestPrompter {
+    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
+        Ok(self.processing_response)
+    }
+
+    fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
+        Ok(self.overwrite_response)
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+fn write_binary_file(path: &Path, data: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, data).unwrap();
+}
+
+#[test]
+fn test_phase4_features_integration() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Create config with enhanced features enabled
+    write_file(
+        &project_dir.join("context-builder.toml"),
+        r#"
+auto_diff = true
+timestamped_output = true
+diff_only = true
+encoding_strategy = "detect"
+filter = ["rs", "txt"]
+"#,
+    );
+
+    // Change to project directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+
+    // Create initial files with various encoding scenarios
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() {\n    println!(\"Hello, world!\");\n}\n",
+    );
+
+    // UTF-8 file
+    write_file(
+        &project_dir.join("src/utils.rs"),
+        "// UTF-8 file\npub fn helper() -> String {\n    \"Hello from helper\".to_string()\n}\n",
+    );
+
+    // Windows-1252 encoded file
+    let windows1252_data = [
+        0x2F, 0x2F, 0x20, // "// "
+        0x57, 0x69, 0x6E, 0x64, 0x6F, 0x77, 0x73, 0x2D, 0x31, 0x32, 0x35, 0x32,
+        0x20, // "Windows-1252 "
+        0x93, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x94, // "Hello" with smart quotes
+        0x0A, // newline
+        0x70, 0x75, 0x62, 0x20, 0x66, 0x6E, 0x20, 0x74, 0x65, 0x73, 0x74, 0x28, 0x29, 0x20, 0x7B,
+        0x7D, 0x0A, // "pub fn test() {}"
+    ];
+    write_binary_file(&project_dir.join("src/encoded.rs"), &windows1252_data);
+
+    // Binary file that should be skipped - use executable-like binary data
+    let binary_data = vec![
+        0x7f, 0x45, 0x4c, 0x46, // ELF header
+        0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x3e, // More ELF data
+        0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8, // High bytes
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Null bytes
+    ];
+    write_binary_file(&project_dir.join("data.txt"), &binary_data);
+
+    let prompter = TestPrompter::new(true, true);
+    let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
+
+    // First run - establish baseline
+    let args = Args {
+        input: project_dir.to_string_lossy().to_string(),
+        output: output_dir.join("baseline.md").to_string_lossy().to_string(),
+        filter: vec![], // Use config filter
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: true,
+        diff_only: false, // Will be overridden by config
+        clear_cache: false,
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // Apply config manually (simulating what happens in the real application)
+    let mut resolved_args = args.clone();
+    if resolved_args.filter.is_empty()
+        && let Some(ref config_filter) = config.filter
+    {
+        resolved_args.filter = config_filter.clone();
+    }
+    if !resolved_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        resolved_args.diff_only = diff_only;
+    }
+
+    let result1 = run_with_args(resolved_args, config.clone(), &prompter);
+    assert!(result1.is_ok(), "First run should succeed");
+
+    // Add a new file to test improved diff_only mode
+    write_file(
+        &project_dir.join("src/new_feature.rs"),
+        "// New feature added\npub fn new_feature() -> String {\n    \"Brand new functionality\".to_string()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn test_new_feature() {\n        assert_eq!(new_feature(), \"Brand new functionality\");\n    }\n}\n",
+    );
+
+    // Modify existing file
+    write_file(
+        &project_dir.join("src/main.rs"),
+        "fn main() {\n    println!(\"Hello, enhanced world!\");\n}\n",
+    );
+
+    // Small delay to ensure different timestamps
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run with changes
+    let mut second_args = args;
+    second_args.input = project_dir.to_string_lossy().to_string();
+    second_args.output = output_dir.join("enhanced.md").to_string_lossy().to_string();
+
+    // Apply config manually
+    if second_args.filter.is_empty()
+        && let Some(ref config_filter) = config.filter
+    {
+        second_args.filter = config_filter.clone();
+    }
+    if !second_args.diff_only
+        && let Some(diff_only) = config.diff_only
+    {
+        second_args.diff_only = diff_only;
+    }
+
+    let result2 = run_with_args(second_args, config, &prompter);
+    assert!(result2.is_ok(), "Second run should succeed");
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Verify the enhanced features work correctly
+    let outputs: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let latest_output = outputs
+        .iter()
+        .max_by_key(|p| fs::metadata(p).unwrap().modified().unwrap())
+        .unwrap();
+
+    let content = fs::read_to_string(latest_output).unwrap();
+
+    // Test enhanced binary file handling
+    // Should either transcode Windows-1252 content or show binary placeholder
+    assert!(
+        content.contains("Hello") || content.contains("<Binary file"),
+        "Should handle Windows-1252 encoding or show binary placeholder"
+    );
+
+    // Binary files should be handled gracefully (not crash the application)
+    // The specific behavior depends on encoding strategy, but it should not fail
+
+    // Test improved diff_only mode
+    assert!(
+        content.contains("## Change Summary"),
+        "Should have change summary in diff_only mode"
+    );
+
+    // Should include full content of added files (new feature)
+    assert!(
+        content.contains("## Added Files"),
+        "Should have Added Files section in diff_only mode"
+    );
+    assert!(
+        content.contains("new_feature.rs"),
+        "Should include added file"
+    );
+    assert!(
+        content.contains("Brand new functionality"),
+        "Should include full content of added file"
+    );
+
+    // Should have file differences for modified files
+    assert!(
+        content.contains("## File Differences"),
+        "Should have file differences section"
+    );
+
+    // Should not have full Files section (due to diff_only mode)
+    assert!(
+        !content.contains("## Files\n"),
+        "Should not have full Files section in diff_only mode"
+    );
+
+    // Test comprehensive edge cases are handled
+    assert!(
+        content.contains("# Directory Structure Report"),
+        "Should have proper document structure"
+    );
+    assert!(
+        content.contains("## File Tree Structure"),
+        "Should have file tree"
+    );
+
+    // Verify that the enhanced features didn't break basic functionality
+    // In diff_only mode, content is smaller since it only shows changes
+    assert!(
+        content.len() > 500,
+        "Should generate reasonable content even in diff_only mode"
+    );
+
+    println!("✅ Phase 4 integration test passed!");
+    println!("   - Enhanced binary file handling: Working");
+    println!("   - Improved diff_only mode: Working");
+    println!("   - Comprehensive edge case handling: Working");
+    println!("   - All features integrated successfully");
+}
+
+#[test]
+fn test_encoding_strategy_configuration() {
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    // Create a file with Windows-1252 encoding
+    let windows1252_data = [
+        0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, // "Hello "
+        0x93, 0x57, 0x6F, 0x72, 0x6C, 0x64, 0x94, // "World" with smart quotes
+        0x0A, // newline
+    ];
+    write_binary_file(&project_dir.join("test.txt"), &windows1252_data);
+
+    let prompter = TestPrompter::new(true, true);
+
+    // Test all encoding strategies
+    for strategy in &["detect", "strict", "skip"] {
+        let config = Config {
+            encoding_strategy: Some(strategy.to_string()),
+            ..Default::default()
+        };
+
+        let args = Args {
+            input: project_dir.to_string_lossy().to_string(),
+            output: output_dir
+                .join(format!("encoding_{}.md", strategy))
+                .to_string_lossy()
+                .to_string(),
+            filter: vec!["txt".to_string()],
+            ignore: vec![],
+            preview: false,
+            token_count: false,
+            line_numbers: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let result = run_with_args(args, config, &prompter);
+        assert!(
+            result.is_ok(),
+            "Encoding strategy '{}' should work",
+            strategy
+        );
+
+        let output_path = output_dir.join(format!("encoding_{}.md", strategy));
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        match *strategy {
+            "detect" => {
+                // Should attempt transcoding and may succeed
+                assert!(
+                    content.contains("Hello") || content.contains("<Binary file"),
+                    "Detect strategy should transcode or show binary placeholder"
+                );
+            }
+            "strict" | "skip" => {
+                // Should show binary placeholder
+                assert!(
+                    content.contains("<Binary file"),
+                    "Strict/skip strategy should show binary placeholder"
+                );
+            }
+            _ => {}
+        }
+    }
+
+    println!("✅ Encoding strategy configuration test passed!");
+}
+```

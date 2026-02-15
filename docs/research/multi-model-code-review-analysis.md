@@ -307,19 +307,20 @@ This has implications for context-builder itself: **if the context file is well-
 
 | Model | Response File |
 |-------|--------------|
-| Gemini 3 Deep Think | [`context_v2_resp-gemini-3-deepthink.md`](../context_v2_resp-gemini-3-deepthink.md) |
-| Gemini 3 Pro | [`context_v2_resp-gemini-3-pro.md`](../context_v2_resp-gemini-3-pro.md) |
-| Grok 4.1 | [`context_v2_resp-grok-4.1.md`](../context_v2_resp-grok-4.1.md) |
-| Qwen-3-Max | [`context_v2_resp-qwen-3-max.md`](../context_v2_resp-qwen-3-max.md) |
-| GLM-5 (run 1) | [`context_v2_resp-glm5.md`](../context_v2_resp-glm5.md) |
-| GLM-5 (run 2) | [`context_v2_resp-glm5-run2.md`](../context_v2_resp-glm5-run2.md) |
-| ChatGPT 5.2 | [`context_v2_resp-chat-gpt-5.2.md`](../context_v2_resp-chat-gpt-5.2.md) |
-| Kimi K2.5 | [`context_v2_resp-kimi-k2.5.md`](../context_v2_resp-kimi-k2.5.md) |
-| Claude Opus 4.6 | [`context_v2_resp-claude-opus-4.6.md`](../context_v2_resp-claude-opus-4.6.md) |
-| MiniMax Agent 2.5 | [`context_v2_resp-minimax-agent.md`](../context_v2_resp-minimax-agent.md) |
+| Gemini 3 Deep Think | [`context_v2_resp-gemini-3-deepthink.md`](v2-responses/context_v2_resp-gemini-3-deepthink.md) |
+| Gemini 3 Pro | [`context_v2_resp-gemini-3-pro.md`](v2-responses/context_v2_resp-gemini-pro.md) |
+| Grok 4.1 | [`context_v2_resp-grok-4.1.md`](v2-responses/context_v2_resp-grok.md) |
+| Qwen-3-Max | [`context_v2_resp-qwen-3-max.md`](v2-responses/context_v2_resp-qwen3-max.md) |
+| GLM-5 (run 1) | [`context_v2_resp-glm5.md`](v2-responses/context_v2_resp-glm5.md) |
+| GLM-5 (run 2) | [`context_v2_resp-glm5-run2.md`](v2-responses/context_v2_resp-glm5-run2.md) |
+| ChatGPT 5.2 | [`context_v2_resp-chat-gpt-5.2.md`](v2-responses/context_v2_resp-chat-gpt-5.2.md) |
+| Kimi K2.5 | [`context_v2_resp-kimi-k2.5.md`](v2-responses/context_v2_resp-kimi-k2.5.md) |
+| Claude Opus 4.6 | [`context_v2_resp-claude-opus-4.6.md`](v2-responses/context_v2_resp-claude-opus-4.6.md) |
+| MiniMax Agent 2.5 | [`context_v2_resp-minimax-agent.md`](v2-responses/context_v2_resp-minimax-agent.md) |
 
 ## Appendix B: Context File Used
 
-- **Pre-fix context**: [`deepthink_context_v2.md`](../deepthink_context_v2.md) (original, Cargo.lock at position 0)
-- **Post-fix context**: [`deepthink_context_v2_fixed.md`](../deepthink_context_v2_fixed.md) (lockfile fix applied, Cargo.lock at position last)
-- **Prompt template**: [`deep_think_prompt_v2.md`](../deep_think_prompt_v2.md)
+- **Pre-fix context**: [`deepthink_context_v2.md`](context-files/deepthink_context_v2.md) (original, Cargo.lock at position 0)
+- **Post-fix context**: [`deepthink_context_v2_fixed.md`](context-files/deepthink_context_v2_fixed.md) (lockfile fix applied, Cargo.lock at position last)
+- **Prompt template**: [`deep_think_prompt_v2.md`](prompts/deepthink_prompt_v2.md)
+
