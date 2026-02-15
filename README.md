@@ -89,26 +89,21 @@ It's a command-line utility that recursively processes directories and creates c
 
 ### Quick Install (Linux/macOS)
 
-Pre-built binaries include full Tree-Sitter AST support (`tree-sitter-all`).
+Pre-built binaries include full Tree-Sitter AST support.
 
 ```bash
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-unknown-linux-gnu.tar.gz | sudo tar xz -C /usr/local/bin
+curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | sh
 ```
 
-<details>
-<summary>macOS / Windows / other platforms</summary>
+### Windows (PowerShell)
 
-```bash
-# macOS (Apple Silicon)
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-aarch64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
-
-# macOS (Intel)
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
+```powershell
+Invoke-WebRequest -Uri "https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-pc-windows-msvc.zip" -OutFile "$env:TEMP\cb.zip"
+Expand-Archive "$env:TEMP\cb.zip" -DestinationPath "$env:LOCALAPPDATA\Programs\context-builder" -Force
+$env:PATH += ";$env:LOCALAPPDATA\Programs\context-builder"
 ```
 
-Windows: download `context-builder-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
-
-</details>
+> Add `%LOCALAPPDATA%\Programs\context-builder` to your PATH permanently via System Settings.
 
 ### From crates.io
 
