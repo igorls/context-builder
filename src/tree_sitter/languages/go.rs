@@ -6,6 +6,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-go")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct GoSupport;
@@ -170,18 +171,23 @@ impl GoSupport {
             .find_child_text(node, "type_identifier", source)
             .or_else(|| self.find_child_text_for_result(node, source));
 
-        let mut full_sig = String::new();
-        full_sig.push_str("func ");
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        } else {
-            full_sig.push_str("()");
-        }
-        if let Some(r) = &result {
-            full_sig.push(' ');
-            full_sig.push_str(r);
-        }
+        // Use byte-slicing to preserve receivers, multiple return values, and named results
+        let full_sig = slice_signature_before_body(source, node, &["block"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                sig.push_str("func ");
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                if let Some(r) = &result {
+                    sig.push(' ');
+                    sig.push_str(r);
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,

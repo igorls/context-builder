@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.1
+
+- **Bug Fixes** (identified by Gemini Deep Think v6 code review — 11 confirmed bugs, 0 false positives)
+  - Fixed cache hash desync — `cache.rs` was missing 4 fields (`signatures`, `structure`, `truncate`, `visibility`), causing stale cache hits when toggling tree-sitter flags
+  - Fixed JavaScript arrow function body leak — `statement_block` is a child of `arrow_function`, not `variable_declarator`, causing full function bodies to leak into signature output
+  - Fixed TypeScript arrow function handling — same root cause as JavaScript
+  - Fixed Python decorator erasure — intercepting `decorated_definition` nodes now preserves `@decorator` lines in signatures
+  - Fixed Python `is_method` for decorated methods — iterative 4-level parent walk replaces fragile 2-level check
+  - Fixed Rust tuple struct erasure — added `ordered_field_declaration_list` to body kinds
+  - Fixed C/C++ header file prototype extraction — added `declaration` node matching for `.h` files
+  - Fixed C++ class inheritance dropped — applied byte-slicing to preserve `template<>` and `: public Base`
+  - Fixed JS/TS exported arrow functions invisible — added `lexical_declaration` to export signature extraction
+  - Added `.jsx` extension support for JavaScript
+
+- **Dependency Updates**
+  - Updated `tree-sitter` core: 0.24 → 0.26
+  - Updated `tree-sitter-rust`: 0.23 → 0.24
+  - Updated `tree-sitter-javascript`: 0.23 → 0.25
+  - Updated `tree-sitter-python`: 0.23 → 0.25
+  - Updated `tree-sitter-go`: 0.23 → 0.25
+  - Updated `tree-sitter-c`: 0.23 → 0.24
+
 ## v0.8.0
 
 - **Tree-Sitter AST Integration** (feature-gated)

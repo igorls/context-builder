@@ -4,6 +4,7 @@ use tree_sitter::{Parser, Tree};
 
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct RustSupport;
@@ -252,21 +253,27 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "identifier", source)?;
         let params = self.find_child_text(node, "parameters", source);
-        let return_type = self.find_child_text(node, "type", source);
+        let return_type = self.find_child_text(node, "return_type", source);
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("fn ");
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        }
-        if let Some(r) = &return_type {
-            full_sig.push_str(" -> ");
-            full_sig.push_str(r);
-        }
+        // Use byte-slicing to preserve generics, return types, and all modifiers
+        let full_sig = slice_signature_before_body(source, node, &["block"])
+            .unwrap_or_else(|| {
+                // Fallback for declarations without a body
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("fn ");
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                }
+                if let Some(r) = &return_type {
+                    sig.push_str(" -> ");
+                    sig.push_str(r);
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
@@ -292,12 +299,19 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("struct ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve generic bounds and where clauses
+        // Include both `field_declaration_list` (regular structs) and
+        // `ordered_field_declaration_list` (tuple structs like `struct Color(u8, u8, u8)`)
+        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list", "ordered_field_declaration_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("struct ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Struct,
@@ -323,12 +337,17 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("enum ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve generic bounds
+        let full_sig = slice_signature_before_body(source, node, &["enum_variant_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("enum ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Enum,
@@ -354,12 +373,17 @@ impl RustSupport {
 
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("pub ");
-        }
-        full_sig.push_str("trait ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve trait bounds and supertraits
+        let full_sig = slice_signature_before_body(source, node, &["declaration_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("pub ");
+                }
+                sig.push_str("trait ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Trait,
@@ -375,9 +399,14 @@ impl RustSupport {
     fn extract_impl_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let mut full_sig = String::new();
-        full_sig.push_str("impl ");
-        full_sig.push_str(&name);
+        // Use byte-slicing to preserve `impl Trait for Type` and generics
+        let full_sig = slice_signature_before_body(source, node, &["declaration_list"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                sig.push_str("impl ");
+                sig.push_str(&name);
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Impl,

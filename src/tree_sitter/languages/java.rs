@@ -6,6 +6,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-java")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct JavaSupport;
@@ -171,20 +172,25 @@ impl JavaSupport {
             .find_child_text(node, "type_identifier", source)
             .or_else(|| self.find_child_text_for_type(node, source));
 
-        let mut full_sig = String::new();
-        if vis == Visibility::Public {
-            full_sig.push_str("public ");
-        }
-        if let Some(r) = &return_type {
-            full_sig.push_str(r);
-            full_sig.push(' ');
-        }
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        } else {
-            full_sig.push_str("()");
-        }
+        // Use byte-slicing to preserve annotations, generics, throws, and modifiers
+        let full_sig = slice_signature_before_body(source, node, &["block"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if vis == Visibility::Public {
+                    sig.push_str("public ");
+                }
+                if let Some(r) = &return_type {
+                    sig.push_str(r);
+                    sig.push(' ');
+                }
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Method,

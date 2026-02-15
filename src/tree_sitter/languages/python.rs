@@ -6,6 +6,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-python")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct PythonSupport;
@@ -91,8 +92,38 @@ impl PythonSupport {
         signatures: &mut Vec<Signature>,
     ) {
         match node.kind() {
+            "decorated_definition" => {
+                // Intercept decorated_definition to preserve decorators.
+                // Find the inner function_definition or class_definition.
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "function_definition" {
+                        if let Some(sig) = self.extract_function_signature_with_context(
+                            source, &child, Some(node),
+                        ) {
+                            signatures.push(sig);
+                        }
+                        // Don't recurse into children — we already handled the inner def
+                        return;
+                    } else if child.kind() == "class_definition" {
+                        if let Some(sig) = self.extract_class_signature(source, &child) {
+                            signatures.push(sig);
+                        }
+                        // Still recurse into class body for methods
+                        let mut inner = child.walk();
+                        for grandchild in child.children(&mut inner) {
+                            self.extract_signatures_from_node(
+                                source, &grandchild, _visibility, signatures,
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
             "function_definition" => {
-                if let Some(sig) = self.extract_function_signature(source, node) {
+                if let Some(sig) = self.extract_function_signature_with_context(
+                    source, node, None,
+                ) {
                     signatures.push(sig);
                 }
             }
@@ -126,44 +157,65 @@ impl PythonSupport {
         }
     }
 
-    fn extract_function_signature(
+    /// Extract function signature, optionally with a decorator context node.
+    /// `context_node` is the `decorated_definition` parent, if any.
+    fn extract_function_signature_with_context(
         &self,
         source: &str,
         node: &tree_sitter::Node,
+        context_node: Option<&tree_sitter::Node>,
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "identifier", source)?;
         let params = self.find_child_text(node, "parameters", source);
 
-        // Check for decorators (to detect @property, @staticmethod, etc.)
-        let is_method = node
-            .parent()
-            .is_some_and(|p| p.kind() == "class_definition");
+        // Walk up parent chain iteratively to detect methods.
+        // Handles: function_definition -> block -> class_definition
+        // And:     function_definition -> decorated_definition -> block -> class_definition
+        let is_method = {
+            let mut current = node.parent();
+            let mut found = false;
+            // Walk up at most 4 levels (enough for decorated methods in nested classes)
+            for _ in 0..4 {
+                match current {
+                    Some(p) if p.kind() == "class_definition" => {
+                        found = true;
+                        break;
+                    }
+                    Some(p) => current = p.parent(),
+                    None => break,
+                }
+            }
+            found
+        };
         let kind = if is_method {
             SignatureKind::Method
         } else {
             SignatureKind::Function
         };
 
-        let mut full_sig = String::new();
-        if let Some(decorators) = self.find_decorators(source, node) {
-            full_sig.push_str(&decorators);
-            full_sig.push('\n');
-        }
-        full_sig.push_str("def ");
-        full_sig.push_str(&name);
-        if let Some(p) = &params {
-            full_sig.push_str(p);
-        } else {
-            full_sig.push_str("()");
-        }
+        // If we have a decorator context, slice from there to preserve decorators.
+        // Otherwise slice from the function_definition node.
+        let slice_node = context_node.unwrap_or(node);
+        let full_sig = slice_signature_before_body(source, slice_node, &["block"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                sig.push_str("def ");
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind,
             name,
             params,
-            return_type: None, // Python uses type hints differently
+            return_type: None, // Captured via byte-slicing in full_sig
             visibility: Visibility::All,
-            line_number: node.start_position().row + 1,
+            line_number: slice_node.start_position().row + 1,
             full_signature: full_sig,
         })
     }

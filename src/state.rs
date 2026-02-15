@@ -225,8 +225,14 @@ impl ProjectState {
         }
         config_str.push('|');
         config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}",
-            config.line_numbers, config.auto_diff, config.diff_context_lines
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            config.line_numbers,
+            config.auto_diff,
+            config.diff_context_lines,
+            config.signatures,
+            config.structure,
+            config.truncate,
+            config.visibility,
         ));
 
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());

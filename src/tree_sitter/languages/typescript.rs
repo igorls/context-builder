@@ -6,6 +6,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-ts")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct TypeScriptSupport;
@@ -173,12 +174,16 @@ impl TypeScriptSupport {
         let params = self.find_child_text(node, "formal_parameters", source);
         let return_type = self.find_child_text(node, "type_annotation", source);
 
-        let full_sig = match (params.as_ref(), return_type.as_ref()) {
-            (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
-            (Some(p), None) => format!("function {}{}", name, p),
-            (None, Some(r)) => format!("function {}() {}", name, r),
-            (None, None) => format!("function {}()", name),
-        };
+        // Use byte-slicing to preserve type params, access modifiers, and return types
+        let full_sig = slice_signature_before_body(source, node, &["statement_block"])
+            .unwrap_or_else(|| {
+                match (params.as_ref(), return_type.as_ref()) {
+                    (Some(p), Some(r)) => format!("function {}{} {}", name, p, r),
+                    (Some(p), None) => format!("function {}{}", name, p),
+                    (None, Some(r)) => format!("function {}() {}", name, r),
+                    (None, None) => format!("function {}()", name),
+                }
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
@@ -278,20 +283,63 @@ impl TypeScriptSupport {
             if child.kind() == "variable_declarator"
                 && let Some(name) = self.find_child_text(&child, "identifier", source)
             {
-                let type_ann = self.find_child_text(&child, "type_annotation", source);
-                let full_sig = match &type_ann {
-                    Some(t) => format!("const {} {}", name, t),
-                    None => format!("const {}", name),
-                };
-                signatures.push(Signature {
-                    kind: SignatureKind::Constant,
-                    name,
-                    params: None,
-                    return_type: type_ann,
-                    visibility: Visibility::All,
-                    line_number: child.start_position().row + 1,
-                    full_signature: full_sig,
+                // Check for arrow function or function assignment
+                let mut inner_cursor = child.walk();
+                let fn_node = child.children(&mut inner_cursor).find(|c| {
+                    c.kind() == "arrow_function" || c.kind() == "function"
                 });
+
+                if let Some(fn_child) = fn_node {
+                    // Navigate INTO the arrow_function to find its body
+                    let body_start = {
+                        let mut fn_cursor = fn_child.walk();
+                        fn_child.children(&mut fn_cursor)
+                            .find(|c| c.kind() == "statement_block")
+                            .map(|body| body.start_byte())
+                    };
+
+                    let full_signature = if let Some(body_start) = body_start {
+                        source[node.start_byte()..body_start].trim_end().to_string()
+                    } else {
+                        // Expression-body arrow
+                        let mut fn_cursor2 = fn_child.walk();
+                        let arrow_end = fn_child.children(&mut fn_cursor2)
+                            .find(|c| c.kind() == "=>")
+                            .map(|arrow| arrow.end_byte());
+
+                        if let Some(end) = arrow_end {
+                            source[node.start_byte()..end].trim_end().to_string()
+                        } else {
+                            source[child.start_byte()..fn_child.start_byte()]
+                                .trim_end().to_string()
+                        }
+                    };
+
+                    signatures.push(Signature {
+                        kind: SignatureKind::Function,
+                        name,
+                        params: None,
+                        return_type: None,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature,
+                    });
+                } else {
+                    let type_ann = self.find_child_text(&child, "type_annotation", source);
+                    let full_sig = match &type_ann {
+                        Some(t) => format!("const {} {}", name, t),
+                        None => format!("const {}", name),
+                    };
+                    signatures.push(Signature {
+                        kind: SignatureKind::Constant,
+                        name,
+                        params: None,
+                        return_type: type_ann,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature: full_sig,
+                    });
+                }
             }
         }
     }
@@ -319,6 +367,10 @@ impl TypeScriptSupport {
                     if let Some(sig) = self.extract_interface_signature(source, &child) {
                         signatures.push(sig);
                     }
+                }
+                "lexical_declaration" | "variable_declaration" => {
+                    // Capture exported arrow functions: export const foo = () => {}
+                    self.extract_variable_declarations(source, &child, signatures);
                 }
                 _ => {}
             }

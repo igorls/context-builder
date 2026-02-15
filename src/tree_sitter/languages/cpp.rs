@@ -6,6 +6,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-cpp")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct CppSupport;
@@ -96,6 +97,12 @@ impl CppSupport {
                     signatures.push(sig);
                 }
             }
+            "declaration" => {
+                // Header file prototypes: `int foo(int x, int y);`
+                if let Some(sig) = self.extract_declaration_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
             "class_specifier" => {
                 if let Some(sig) = self.extract_class_signature(source, node, visibility) {
                     signatures.push(sig);
@@ -164,19 +171,29 @@ impl CppSupport {
     ) -> Option<Signature> {
         let name = self.find_function_name(node, source)?;
         let return_type = self.find_return_type(node, source);
+        let params = self.find_child_text(node, "parameter_list", source);
 
-        let mut full_sig = String::new();
-        if let Some(r) = &return_type {
-            full_sig.push_str(r);
-            full_sig.push(' ');
-        }
-        full_sig.push_str(&name);
-        full_sig.push_str("()");
+        // Use byte-slicing to preserve templates, parameters, and qualifiers
+        let full_sig = slice_signature_before_body(source, node, &["compound_statement"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if let Some(r) = &return_type {
+                    sig.push_str(r);
+                    sig.push(' ');
+                }
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
             name,
-            params: None,
+            params,
             return_type,
             visibility,
             line_number: node.start_position().row + 1,
@@ -184,6 +201,40 @@ impl CppSupport {
         })
     }
 
+    /// Extract function prototype signatures from `declaration` nodes (header files).
+    fn extract_declaration_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        // Only capture declarations that look like function prototypes
+        let mut cursor = node.walk();
+        let has_function_declarator = node.children(&mut cursor).any(|c| {
+            if c.kind() == "function_declarator" {
+                return true;
+            }
+            let mut inner = c.walk();
+            c.children(&mut inner).any(|gc| gc.kind() == "function_declarator")
+        });
+
+        if !has_function_declarator {
+            return None;
+        }
+
+        let name = self.find_function_name(node, source)?;
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None,
+            return_type: None,
+            visibility: Visibility::All,
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
     fn extract_class_signature(
         &self,
         source: &str,
@@ -192,7 +243,10 @@ impl CppSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("class {}", name);
+        // Use byte-slicing to preserve templates and inheritance
+        // e.g., `template<typename T> class Foo : public Base`
+        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list"])
+            .unwrap_or_else(|| format!("class {}", name));
 
         Some(Signature {
             kind: SignatureKind::Class,

@@ -6,6 +6,7 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-c")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct CSupport;
@@ -96,6 +97,12 @@ impl CSupport {
                     signatures.push(sig);
                 }
             }
+            "declaration" => {
+                // Header file prototypes: `int foo(int x, int y);`
+                if let Some(sig) = self.extract_declaration_signature(source, node) {
+                    signatures.push(sig);
+                }
+            }
             "struct_specifier" => {
                 if let Some(sig) = self.extract_struct_signature(source, node) {
                     signatures.push(sig);
@@ -149,21 +156,71 @@ impl CSupport {
     ) -> Option<Signature> {
         let name = self.find_function_name(node, source)?;
         let return_type = self.find_return_type(node, source);
+        let params = self.find_child_text(node, "parameter_list", source);
 
-        let mut full_sig = String::new();
-        if let Some(r) = &return_type {
-            full_sig.push_str(r);
-            full_sig.push(' ');
-        }
-        full_sig.push_str(&name);
-        full_sig.push_str("()");
+        // Use byte-slicing to preserve complete function signatures including parameters
+        let full_sig = slice_signature_before_body(source, node, &["compound_statement"])
+            .unwrap_or_else(|| {
+                let mut sig = String::new();
+                if let Some(r) = &return_type {
+                    sig.push_str(r);
+                    sig.push(' ');
+                }
+                sig.push_str(&name);
+                if let Some(p) = &params {
+                    sig.push_str(p);
+                } else {
+                    sig.push_str("()");
+                }
+                sig
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
             name,
-            params: None,
+            params,
             return_type,
             visibility: Visibility::All, // C has no visibility
+            line_number: node.start_position().row + 1,
+            full_signature: full_sig,
+        })
+    }
+
+    /// Extract function prototype signatures from `declaration` nodes (header files).
+    /// e.g., `int foo(int x, int y);`
+    fn extract_declaration_signature(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+    ) -> Option<Signature> {
+        // Only capture declarations that look like function prototypes
+        // (have a function_declarator child with parameters)
+        let mut cursor = node.walk();
+        let has_function_declarator = node.children(&mut cursor).any(|c| {
+            if c.kind() == "function_declarator" {
+                return true;
+            }
+            // Check one level deeper for pointer declarations
+            let mut inner = c.walk();
+            c.children(&mut inner).any(|gc| gc.kind() == "function_declarator")
+        });
+
+        if !has_function_declarator {
+            return None;
+        }
+
+        let name = self.find_function_name(node, source)?;
+        // For prototypes, the full node text IS the signature (no body to strip)
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        // Remove trailing semicolon for cleaner output
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params: None, // Captured in full_sig
+            return_type: None,
+            visibility: Visibility::All,
             line_number: node.start_position().row + 1,
             full_signature: full_sig,
         })

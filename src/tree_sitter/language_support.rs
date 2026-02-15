@@ -90,6 +90,28 @@ impl fmt::Display for Signature {
     }
 }
 
+/// Slice the source text from a node's start to its body's start, producing
+/// a perfect signature that preserves all modifiers, generics, params, and return types.
+///
+/// `body_kinds` is a list of node kinds that represent the function/class body
+/// (e.g., `"block"`, `"compound_statement"`, `"statement_block"`).
+///
+/// Returns `None` if no body node is found (e.g., forward declarations).
+pub fn slice_signature_before_body(
+    source: &str,
+    node: &tree_sitter::Node,
+    body_kinds: &[&str],
+) -> Option<String> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if body_kinds.contains(&child.kind()) {
+            let sig = &source[node.start_byte()..child.start_byte()];
+            return Some(sig.trim_end().to_string());
+        }
+    }
+    None
+}
+
 /// Structure information extracted from a source file.
 #[derive(Debug, Clone, Default)]
 pub struct CodeStructure {

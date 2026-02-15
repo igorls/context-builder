@@ -441,6 +441,14 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             })
             .collect();
 
+        // Build tree-sitter config for diff path
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: final_args.signatures,
+            structure: final_args.structure,
+            truncate: final_args.truncate.clone(),
+            visibility: final_args.visibility.clone(),
+        };
+
         // 4. Generate markdown with diff annotations
         let mut final_doc = generate_markdown_with_diff(
             &current_state,
@@ -449,6 +457,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             &file_tree,
             diff_cfg,
             &sorted_paths,
+            &ts_config,
         )?;
 
         // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
@@ -620,6 +629,7 @@ fn generate_markdown_with_diff(
     file_tree: &tree::FileTree,
     diff_config: &DiffConfig,
     sorted_paths: &[PathBuf],
+    ts_config: &markdown::TreeSitterConfig,
 ) -> io::Result<String> {
     let mut output = String::new();
 
@@ -739,20 +749,40 @@ fn generate_markdown_with_diff(
                     _ => extension,
                 };
 
-                output.push_str(&format!("```{}\n", language));
+                // When --signatures is active, only suppress content for supported code files
+                let signatures_only = ts_config.signatures
+                    && crate::tree_sitter::is_supported_extension(extension);
 
-                if args.line_numbers {
-                    for (i, line) in file_state.content.lines().enumerate() {
-                        output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                if !signatures_only {
+                    output.push_str(&format!("```{}\n", language));
+
+                    if args.line_numbers {
+                        for (i, line) in file_state.content.lines().enumerate() {
+                            output.push_str(&format!("{:>4} | {}\n", i + 1, line));
+                        }
+                    } else {
+                        output.push_str(&file_state.content);
+                        if !file_state.content.ends_with('\n') {
+                            output.push('\n');
+                        }
                     }
-                } else {
-                    output.push_str(&file_state.content);
-                    if !file_state.content.ends_with('\n') {
-                        output.push('\n');
-                    }
+
+                    output.push_str("```\n");
                 }
 
-                output.push_str("```\n\n");
+                // Tree-sitter enrichment (same as standard path)
+                let mut enrichment_buf = Vec::new();
+                markdown::write_tree_sitter_enrichment(
+                    &mut enrichment_buf,
+                    &file_state.content,
+                    extension,
+                    ts_config,
+                )?;
+                if !enrichment_buf.is_empty() {
+                    output.push_str(&String::from_utf8_lossy(&enrichment_buf));
+                }
+
+                output.push_str("\n");
             }
         }
     }
@@ -1507,6 +1537,13 @@ mod tests {
             })
             .collect();
 
+        let ts_config = markdown::TreeSitterConfig {
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
         let result = generate_markdown_with_diff(
             &state,
             None,
@@ -1514,6 +1551,7 @@ mod tests {
             &file_tree,
             &diff_config,
             &sorted_paths,
+            &ts_config,
         );
         assert!(result.is_ok());
 

@@ -4,6 +4,7 @@ use tree_sitter::{Parser, Tree};
 
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
+    slice_signature_before_body,
 };
 
 pub struct JavaScriptSupport;
@@ -16,7 +17,7 @@ impl JavaScriptSupport {
 
 impl LanguageSupport for JavaScriptSupport {
     fn file_extensions(&self) -> &[&'static str] {
-        &["js", "mjs", "cjs"]
+        &["js", "mjs", "cjs", "jsx"]
     }
 
     fn parse(&self, source: &str) -> Option<Tree> {
@@ -142,16 +143,20 @@ impl JavaScriptSupport {
         let name = self.find_child_text(node, "identifier", source)?;
         let params = self.find_child_text(node, "formal_parameters", source);
 
-        let full_sig = match &params {
-            Some(p) => format!("function {}({})", name, p),
-            None => format!("function {}()", name),
-        };
+        // Use byte-slicing to preserve async, generator*, and complete parameter lists
+        let full_sig = slice_signature_before_body(source, node, &["statement_block"])
+            .unwrap_or_else(|| {
+                match &params {
+                    Some(p) => format!("function {}({})", name, p),
+                    None => format!("function {}()", name),
+                }
+            });
 
         Some(Signature {
             kind: SignatureKind::Function,
             name,
             params,
-            return_type: None, // JS doesn't have explicit return types in syntax
+            return_type: None,
             visibility: Visibility::All,
             line_number: node.start_position().row + 1,
             full_signature: full_sig,
@@ -161,7 +166,9 @@ impl JavaScriptSupport {
     fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "identifier", source)?;
 
-        let full_sig = format!("class {}", name);
+        // Use byte-slicing to preserve `extends` and other modifiers
+        let full_sig = slice_signature_before_body(source, node, &["class_body"])
+            .unwrap_or_else(|| format!("class {}", name));
 
         Some(Signature {
             kind: SignatureKind::Class,
@@ -182,19 +189,68 @@ impl JavaScriptSupport {
     ) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "variable_declarator"
-                && let Some(name) = self.find_child_text(&child, "identifier", source)
-            {
-                let full_signature = format!("const {}", &name);
-                signatures.push(Signature {
-                    kind: SignatureKind::Constant,
-                    name,
-                    params: None,
-                    return_type: None,
-                    visibility: Visibility::All,
-                    line_number: child.start_position().row + 1,
-                    full_signature,
+            if child.kind() == "variable_declarator" {
+                // Check if this is an arrow function or regular function assignment
+                let mut inner_cursor = child.walk();
+                let fn_node = child.children(&mut inner_cursor).find(|c| {
+                    c.kind() == "arrow_function" || c.kind() == "function"
                 });
+
+                if let Some(fn_child) = fn_node {
+                    // Navigate INTO the arrow_function/function to find its body.
+                    // statement_block is a child of arrow_function, NOT of variable_declarator.
+                    let body_start = {
+                        let mut fn_cursor = fn_child.walk();
+                        fn_child.children(&mut fn_cursor)
+                            .find(|c| c.kind() == "statement_block")
+                            .map(|body| body.start_byte())
+                    };
+
+                    let full_signature = if let Some(body_start) = body_start {
+                        // Slice from the parent node (lexical_declaration) to preserve `const`/`export`,
+                        // down to the body start
+                        source[node.start_byte()..body_start].trim_end().to_string()
+                    } else {
+                        // Expression-body arrow: `const add = (a, b) => a + b`
+                        // Slice from parent through the `=>` token
+                        let mut fn_cursor2 = fn_child.walk();
+                        let arrow_end = fn_child.children(&mut fn_cursor2)
+                            .find(|c| c.kind() == "=>")
+                            .map(|arrow| arrow.end_byte());
+
+                        if let Some(end) = arrow_end {
+                            source[node.start_byte()..end].trim_end().to_string()
+                        } else {
+                            // Last resort: use declarator text only (name = params)
+                            source[child.start_byte()..fn_child.start_byte()]
+                                .trim_end().to_string()
+                        }
+                    };
+
+                    let name = self.find_child_text(&child, "identifier", source)
+                        .unwrap_or_default();
+
+                    signatures.push(Signature {
+                        kind: SignatureKind::Function,
+                        name,
+                        params: None, // Captured via byte-slicing
+                        return_type: None,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature,
+                    });
+                } else if let Some(name) = self.find_child_text(&child, "identifier", source) {
+                    let full_signature = format!("const {}", &name);
+                    signatures.push(Signature {
+                        kind: SignatureKind::Constant,
+                        name,
+                        params: None,
+                        return_type: None,
+                        visibility: Visibility::All,
+                        line_number: child.start_position().row + 1,
+                        full_signature,
+                    });
+                }
             }
         }
     }
@@ -215,6 +271,9 @@ impl JavaScriptSupport {
                 && let Some(sig) = self.extract_class_signature(source, &child)
             {
                 signatures.push(sig);
+            } else if child.kind() == "lexical_declaration" || child.kind() == "variable_declaration" {
+                // Capture exported arrow functions: export const foo = () => {}
+                self.extract_variable_declarations(source, &child, signatures);
             }
         }
     }
