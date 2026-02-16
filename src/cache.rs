@@ -104,7 +104,7 @@ impl CacheManager {
         }
         config_str.push('|');
         config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             config.line_numbers,
             config.auto_diff,
             config.diff_context_lines,
@@ -112,6 +112,7 @@ impl CacheManager {
             config.structure,
             config.truncate,
             config.visibility,
+            config.max_tokens,
         ));
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
         format!("{:x}", hash)

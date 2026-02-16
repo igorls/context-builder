@@ -2,7 +2,7 @@
 name: context-builder
 description: Generate LLM-optimized codebase context from any directory using context-builder CLI
 homepage: https://github.com/igorls/context-builder
-version: 0.8.2
+version: 0.8.3
 requires:
   - context-builder
 ---
@@ -13,44 +13,46 @@ Generate a single, structured markdown file from any codebase directory. The out
 
 ## Installation
 
-### Pre-built Binary (recommended)
-
-Download the latest release binary for your platform:
+### From Source (recommended — fully verified)
 
 ```bash
-# Linux (x86_64)
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /usr/local/bin
-
-# macOS (Apple Silicon)
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-aarch64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
-
-# macOS (Intel)
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/context-builder-x86_64-apple-darwin.tar.gz | tar xz -C /usr/local/bin
-```
-
-Windows: download `context-builder-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
-
-### From Source (fallback)
-
-```bash
-# Requires Rust toolchain (cargo)
+# Requires Rust toolchain (cargo). Builds from source with cryptographic verification via crates.io.
 cargo install context-builder --features tree-sitter-all
 ```
 
-Verify: `context-builder --version` (expected: `0.8.2`)
+### Pre-built Binary (with SHA256 verification)
+
+Use the official install script, which downloads from GitHub Releases and verifies the binary checksum before installing:
+
+```bash
+curl -sSL https://github.com/igorls/context-builder/releases/latest/download/install.sh | bash
+```
+
+The install script:
+- Downloads the correct binary for your OS/architecture
+- **Verifies SHA256 checksum** against the published `.sha256` digest
+- Fails and cleans up if verification fails (fail-closed)
+- Installs to `~/.local/bin` (user-local, no sudo required)
+
+For manual download, binaries and their `.sha256` digests are available on the [GitHub Releases](https://github.com/igorls/context-builder/releases/latest) page.
+
+Verify: `context-builder --version` (expected: `0.8.3`)
 
 
 ## Security & Path Scoping
 
 > **IMPORTANT**: This tool reads file contents from the specified directory. Agents MUST follow these rules:
 
-- **Only target project directories** — never point at home directories, system paths, or credential stores (`~/.ssh`, `~/.aws`, `/etc`)
-- **Use explicit paths** — always pass the exact project root, not `/` or `~`
-- **Prefer scoped filters** — use `-f` to limit to known source extensions (e.g., `-f rs,toml,md`)
-- **Output to temp or docs** — write output to the project's `docs/` folder or `/tmp/`, never to shared or public locations
-- **Review before sharing** — the output may contain API keys, secrets, or credentials embedded in source files; always review or use `.gitignore` patterns
+- **Only target explicit project directories** — always pass the exact project root (e.g., `/home/user/projects/myapp`). Never point at home directories, system paths, or credential stores (`~/.ssh`, `~/.aws`, `/etc`, `~`, `/`)
+- **Use scoped filters** — use `-f` to limit to known source extensions (e.g., `-f rs,toml,md`), reducing exposure surface
+- **Output to project-local paths** — write output to the project's `docs/` folder or `/tmp/`, never to shared or public locations
+- **Review before sharing** — the output may contain API keys, secrets, or credentials embedded in source files; always review or use `.gitignore` patterns to exclude sensitive files
 
-The tool automatically excludes `.git/`, `node_modules/`, and 19 other heavy/sensitive directories at any depth. It also respects `.gitignore` rules when a `.git` directory is present.
+**Built-in protections** (always active, no configuration needed):
+- Excludes `.git/`, `node_modules/`, and 19 other heavy/sensitive directories at any depth
+- Respects `.gitignore` rules when a `.git` directory is present
+- Binary files are auto-detected and skipped via UTF-8 sniffing
+- Output file and cache directory are auto-excluded to prevent self-ingestion
 
 ## When to Use
 
@@ -68,7 +70,7 @@ The tool automatically excludes `.git/`, `node_modules/`, and 19 other heavy/sen
 context-builder -d /path/to/project -y -o context.md
 ```
 
-- `-y` skips confirmation prompts (essential for non-interactive agent use)
+- `-y` skips confirmation prompts (recommended for agent workflows when path is explicitly scoped)
 - Output includes: header → file tree → files sorted by relevance (config → source → tests → docs)
 
 ### 2. Scoped Context (specific file types)
@@ -165,7 +167,7 @@ These behaviors require no configuration:
 | `-i <NAME>` | Ignore dirs/files | Comma-separated: `-i tests,docs,assets` |
 | `--max-tokens <N>` | Token budget cap | Use `100000` for most models, `200000` for Gemini |
 | `--token-count` | Dry-run token estimate | Run first to check if filtering is needed |
-| `-y` | Skip all prompts | **Always use in agent workflows** |
+| `-y` | Skip all prompts | **Use only with explicit, scoped project paths** |
 | `--preview` | Show file tree only | Quick exploration without generating output |
 | `--diff-only` | Output only diffs | Minimizes tokens for incremental updates |
 | `--signatures` | AST signature extraction | Requires `tree-sitter-all` feature at install |

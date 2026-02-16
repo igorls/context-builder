@@ -101,7 +101,11 @@ impl JavaScriptSupport {
                 self.extract_variable_declarations(source, node, signatures);
             }
             "export_statement" => {
+                // Extract signatures from exported declarations.
+                // Return early — do NOT recurse into children of export_statement,
+                // because extract_export_signatures already walks them.
                 self.extract_export_signatures(source, node, signatures);
+                return;
             }
             _ => {}
         }

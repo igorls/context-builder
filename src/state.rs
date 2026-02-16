@@ -147,7 +147,7 @@ impl ProjectState {
     }
 
     /// Compare this state with a previous state
-    pub fn compare_with(&self, previous: &ProjectState) -> StateComparison {
+    pub fn compare_with(&self, previous: &ProjectState, diff_context_lines: Option<usize>) -> StateComparison {
         // Convert file states to content maps for diff_file_contents
         let previous_content: std::collections::HashMap<String, String> = previous
             .files
@@ -162,7 +162,7 @@ impl ProjectState {
             .collect();
 
         // Generate per-file diffs
-        let file_diffs = diff_file_contents(&previous_content, &current_content, true, None);
+        let file_diffs = diff_file_contents(&previous_content, &current_content, true, diff_context_lines);
 
         // Generate summary
         let mut added = Vec::new();
@@ -225,7 +225,7 @@ impl ProjectState {
         }
         config_str.push('|');
         config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             config.line_numbers,
             config.auto_diff,
             config.diff_context_lines,
@@ -233,6 +233,7 @@ impl ProjectState {
             config.structure,
             config.truncate,
             config.visibility,
+            config.max_tokens,
         ));
 
         let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
@@ -384,7 +385,7 @@ mod tests {
             },
         };
 
-        let comparison = state2.compare_with(&state1);
+        let comparison = state2.compare_with(&state1, None);
 
         assert_eq!(comparison.summary.added.len(), 1);
         assert_eq!(comparison.summary.modified.len(), 1);
@@ -787,7 +788,7 @@ mod tests {
             },
         };
 
-        let comparison = state2.compare_with(&state1);
+        let comparison = state2.compare_with(&state1, None);
         assert_eq!(comparison.summary.removed.len(), 1);
     }
 

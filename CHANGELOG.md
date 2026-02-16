@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.3
+
+- **Bug Fixes** (identified by Gemini Deep Think v6 — clean benchmark prompt, zero historical bias)
+  - Fixed `output_folder` auto-ignore silently excluding all user content in the folder — now only ignores `*.md` context files within it
+  - Fixed `diff_context_lines` config being ignored in auto-diff mode — the value was never passed through `compare_with` to `diff_file_contents`
+  - Fixed double file I/O in `process_file` — `seek(0)` was followed by `fs::read_to_string` which opens a new file descriptor, wasting the seek. Now reuses the already-open handle
+
+- **Security Hardening**
+  - `install.sh` now defaults to `~/.local/bin` (user-local, no sudo required) instead of `/usr/local/bin`
+  - Supports `CONTEXT_BUILDER_INSTALL_DIR` env var for custom install paths
+  - SKILL.md rewritten: `cargo install` promoted as primary method (fully verified via crates.io), `-y` flag guidance softened to require explicit path scoping
+
 ## v0.8.2
 
 - **Documentation**

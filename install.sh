@@ -4,7 +4,7 @@
 set -e
 
 REPO="igorls/context-builder"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${CONTEXT_BUILDER_INSTALL_DIR:-$HOME/.local/bin}"
 
 # Detect OS and architecture
 OS="$(uname -s)"
@@ -28,52 +28,52 @@ BASE_URL="https://github.com/${REPO}/releases/latest/download"
 
 echo "Installing context-builder for ${TARGET}..."
 
-# Check write permissions
-if [ ! -w "$INSTALL_DIR" ]; then
-  echo "Note: $INSTALL_DIR requires elevated permissions."
-  SUDO="sudo"
-else
-  SUDO=""
-fi
+# Ensure install directory exists (user-local, no sudo needed)
+mkdir -p "$INSTALL_DIR"
+SUDO=""
 
 # Download binary and checksums
 TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
 echo "Downloading ${ARCHIVE}..."
 curl -sSL "${BASE_URL}/${ARCHIVE}" -o "$TMP/$ARCHIVE"
 curl -sSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
 
-# Verify SHA256 checksum
+# Verify SHA256 checksum (fail closed — never install unverified binaries)
 echo "Verifying checksum..."
 EXPECTED="$(grep "$ARCHIVE" "$TMP/SHA256SUMS" | awk '{print $1}')"
 if [ -z "$EXPECTED" ]; then
-  echo "Warning: Could not find checksum for $ARCHIVE in SHA256SUMS"
-  echo "Proceeding without verification..."
-else
-  if command -v sha256sum >/dev/null 2>&1; then
-    ACTUAL="$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    ACTUAL="$(shasum -a 256 "$TMP/$ARCHIVE" | awk '{print $1}')"
-  else
-    echo "Warning: No SHA256 tool found, skipping verification"
-    ACTUAL="$EXPECTED"
-  fi
-
-  if [ "$ACTUAL" != "$EXPECTED" ]; then
-    echo "Error: Checksum verification failed!"
-    echo "  Expected: $EXPECTED"
-    echo "  Got:      $ACTUAL"
-    echo "The download may be corrupted or tampered with."
-    rm -rf "$TMP"
-    exit 1
-  fi
-  echo "✓ Checksum verified"
+  echo "Error: Could not find checksum for $ARCHIVE in SHA256SUMS"
+  echo "Aborting installation. Download the binary manually from:"
+  echo "  https://github.com/$REPO/releases/latest"
+  exit 1
 fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL="$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL="$(shasum -a 256 "$TMP/$ARCHIVE" | awk '{print $1}')"
+else
+  echo "Error: No SHA256 verification tool found (need sha256sum or shasum)"
+  echo "Aborting installation. Install one of these tools or download manually:"
+  echo "  https://github.com/$REPO/releases/latest"
+  exit 1
+fi
+
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "Error: Checksum verification failed!"
+  echo "  Expected: $EXPECTED"
+  echo "  Got:      $ACTUAL"
+  echo "The download may be corrupted or tampered with."
+  exit 1
+fi
+echo "✓ Checksum verified"
 
 # Extract and install
 tar xzf "$TMP/$ARCHIVE" -C "$TMP"
 $SUDO mv "$TMP/context-builder" "$INSTALL_DIR/context-builder"
 $SUDO chmod +x "$INSTALL_DIR/context-builder"
-rm -rf "$TMP"
+# $TMP is cleaned up automatically by the EXIT trap
 
 # Verify
 VERSION="$(context-builder --version 2>/dev/null || true)"

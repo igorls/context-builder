@@ -89,10 +89,10 @@ It's a command-line utility that recursively processes directories and creates c
 
 ### Quick Install (Linux/macOS)
 
-Pre-built binaries include full Tree-Sitter AST support.
+Pre-built binaries include full Tree-Sitter AST support. The installer verifies SHA256 checksums before installing.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | bash
 ```
 
 ### Windows (PowerShell)

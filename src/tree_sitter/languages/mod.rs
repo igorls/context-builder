@@ -38,6 +38,9 @@ static JS_SUPPORT: javascript::JavaScriptSupport = javascript::JavaScriptSupport
 #[cfg(feature = "tree-sitter-ts")]
 static TS_SUPPORT: typescript::TypeScriptSupport = typescript::TypeScriptSupport;
 
+#[cfg(feature = "tree-sitter-ts")]
+static TSX_SUPPORT: typescript::TsxSupport = typescript::TsxSupport;
+
 #[cfg(feature = "tree-sitter-python")]
 static PYTHON_SUPPORT: python::PythonSupport = python::PythonSupport;
 
@@ -60,10 +63,13 @@ pub fn get_language_support(ext: &str) -> Option<&'static dyn LanguageSupport> {
         "rs" => Some(&RUST_SUPPORT),
 
         #[cfg(feature = "tree-sitter-js")]
-        "js" | "mjs" | "cjs" => Some(&JS_SUPPORT),
+        "js" | "mjs" | "cjs" | "jsx" => Some(&JS_SUPPORT),
 
         #[cfg(feature = "tree-sitter-ts")]
-        "ts" | "tsx" | "mts" | "cts" => Some(&TS_SUPPORT),
+        "ts" | "mts" | "cts" => Some(&TS_SUPPORT),
+
+        #[cfg(feature = "tree-sitter-ts")]
+        "tsx" => Some(&TSX_SUPPORT),
 
         #[cfg(feature = "tree-sitter-python")]
         "py" | "pyw" => Some(&PYTHON_SUPPORT),
@@ -101,6 +107,9 @@ pub fn supported_extensions() -> Vec<&'static str> {
 
     #[cfg(feature = "tree-sitter-ts")]
     extensions.extend(TS_SUPPORT.file_extensions());
+
+    #[cfg(feature = "tree-sitter-ts")]
+    extensions.extend(TSX_SUPPORT.file_extensions());
 
     #[cfg(feature = "tree-sitter-python")]
     extensions.extend(PYTHON_SUPPORT.file_extensions());

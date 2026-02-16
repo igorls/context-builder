@@ -200,9 +200,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
     }
 
-    // Also exclude the output folder itself if configured
+    // Also exclude context output files within the output_folder (not the folder itself,
+    // which would silently hide all user content in that directory)
     if let Some(ref output_folder) = config.output_folder {
-        auto_ignores.push(output_folder.clone());
+        auto_ignores.push(format!("{}/*.md", output_folder));
     }
 
     let files = collect_files(
@@ -382,7 +383,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         };
 
         // 4. Compare states and generate diff if an effective previous state exists
-        let comparison = effective_previous.map(|prev| current_state.compare_with(prev));
+        let comparison = effective_previous.map(|prev| current_state.compare_with(prev, config.diff_context_lines));
 
         let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
         if debug_autodiff {
@@ -1967,7 +1968,7 @@ mod tests {
         };
 
         let previous = state.clone();
-        let comparison = state.compare_with(&previous);
+        let comparison = state.compare_with(&previous, None);
 
         let result = generate_markdown_with_diff(
             &state,
@@ -2027,7 +2028,7 @@ mod tests {
             diff_only: false,
         };
 
-        let comparison = current_state.compare_with(&initial_state);
+        let comparison = current_state.compare_with(&initial_state, None);
 
         let sorted_paths: Vec<PathBuf> = new_files
             .iter()

@@ -502,7 +502,8 @@ pub fn process_file(
                 return Ok(());
             }
 
-            // Reset cursor and stream the content
+            // Reset cursor and stream the content from the already-open file handle.
+            // (Previously opened a second fd via fs::read_to_string — wasting the seek)
             if let Err(e) = file.seek(SeekFrom::Start(0)) {
                 warn!(
                     "Could not reset file cursor for {}: {}. Skipping content.",
@@ -518,9 +519,10 @@ pub fn process_file(
                 return Ok(());
             }
 
-            // Stream UTF-8 content
-            let content = match std::fs::read_to_string(file_path) {
-                Ok(content) => content,
+            // Read UTF-8 content from the same file descriptor
+            let mut content = String::new();
+            let content = match file.read_to_string(&mut content) {
+                Ok(_) => content,
                 Err(e) => {
                     warn!(
                         "Error reading file {}: {}. Output may be truncated.",

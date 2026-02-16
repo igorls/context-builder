@@ -97,6 +97,43 @@ impl CppSupport {
                     signatures.push(sig);
                 }
             }
+            "template_declaration" => {
+                // Walk into template_declaration to find the inner class/struct/function
+                // while preserving the template<...> prefix via slice_signature_before_body
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "function_definition" => {
+                            // Extract using the template_declaration node for full signature
+                            if let Some(mut sig) = self.extract_function_signature(source, &child, visibility) {
+                                // Replace signature with one that includes template<...> prefix
+                                if let Some(full) = slice_signature_before_body(source, node, &["compound_statement", "function_body"]) {
+                                    sig.full_signature = full;
+                                }
+                                signatures.push(sig);
+                            }
+                        }
+                        "class_specifier" => {
+                            if let Some(mut sig) = self.extract_class_signature(source, &child, visibility) {
+                                if let Some(full) = slice_signature_before_body(source, node, &["field_declaration_list"]) {
+                                    sig.full_signature = full;
+                                }
+                                signatures.push(sig);
+                            }
+                        }
+                        "struct_specifier" => {
+                            if let Some(mut sig) = self.extract_struct_signature(source, &child) {
+                                if let Some(full) = slice_signature_before_body(source, node, &["field_declaration_list"]) {
+                                    sig.full_signature = full;
+                                }
+                                signatures.push(sig);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return; // Don't recurse into template children again
+            }
             "declaration" => {
                 // Header file prototypes: `int foo(int x, int y);`
                 if let Some(sig) = self.extract_declaration_signature(source, node) {
