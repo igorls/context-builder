@@ -13,28 +13,12 @@ Generate a single, structured markdown file from any codebase directory. The out
 
 ## Installation
 
-### From Source (recommended — fully verified)
-
 ```bash
-# Requires Rust toolchain (cargo). Builds from source with cryptographic verification via crates.io.
+# Requires Rust toolchain. Builds from source with cryptographic verification via crates.io.
 cargo install context-builder --features tree-sitter-all
 ```
 
-### Pre-built Binary (with SHA256 verification)
-
-Use the official install script, which downloads from GitHub Releases and verifies the binary checksum before installing:
-
-```bash
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/install.sh | bash
-```
-
-The install script:
-- Downloads the correct binary for your OS/architecture
-- **Verifies SHA256 checksum** against the published `.sha256` digest
-- Fails and cleans up if verification fails (fail-closed)
-- Installs to `~/.local/bin` (user-local, no sudo required)
-
-For manual download, binaries and their `.sha256` digests are available on the [GitHub Releases](https://github.com/igorls/context-builder/releases/latest) page.
+Pre-built binaries with SHA256 checksums are also available for manual download from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
 
 Verify: `context-builder --version` (expected: `0.8.3`)
 
