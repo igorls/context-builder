@@ -383,7 +383,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         };
 
         // 4. Compare states and generate diff if an effective previous state exists
-        let comparison = effective_previous.map(|prev| current_state.compare_with(prev, config.diff_context_lines));
+        let comparison = effective_previous
+            .map(|prev| current_state.compare_with(prev, config.diff_context_lines));
 
         let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
         if debug_autodiff {

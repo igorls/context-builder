@@ -147,7 +147,11 @@ impl ProjectState {
     }
 
     /// Compare this state with a previous state
-    pub fn compare_with(&self, previous: &ProjectState, diff_context_lines: Option<usize>) -> StateComparison {
+    pub fn compare_with(
+        &self,
+        previous: &ProjectState,
+        diff_context_lines: Option<usize>,
+    ) -> StateComparison {
         // Convert file states to content maps for diff_file_contents
         let previous_content: std::collections::HashMap<String, String> = previous
             .files
@@ -162,7 +166,12 @@ impl ProjectState {
             .collect();
 
         // Generate per-file diffs
-        let file_diffs = diff_file_contents(&previous_content, &current_content, true, diff_context_lines);
+        let file_diffs = diff_file_contents(
+            &previous_content,
+            &current_content,
+            true,
+            diff_context_lines,
+        );
 
         // Generate summary
         let mut added = Vec::new();

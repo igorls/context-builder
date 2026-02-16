@@ -105,17 +105,29 @@ impl CppSupport {
                     match child.kind() {
                         "function_definition" => {
                             // Extract using the template_declaration node for full signature
-                            if let Some(mut sig) = self.extract_function_signature(source, &child, visibility) {
+                            if let Some(mut sig) =
+                                self.extract_function_signature(source, &child, visibility)
+                            {
                                 // Replace signature with one that includes template<...> prefix
-                                if let Some(full) = slice_signature_before_body(source, node, &["compound_statement", "function_body"]) {
+                                if let Some(full) = slice_signature_before_body(
+                                    source,
+                                    node,
+                                    &["compound_statement", "function_body"],
+                                ) {
                                     sig.full_signature = full;
                                 }
                                 signatures.push(sig);
                             }
                         }
                         "class_specifier" => {
-                            if let Some(mut sig) = self.extract_class_signature(source, &child, visibility) {
-                                if let Some(full) = slice_signature_before_body(source, node, &["field_declaration_list"]) {
+                            if let Some(mut sig) =
+                                self.extract_class_signature(source, &child, visibility)
+                            {
+                                if let Some(full) = slice_signature_before_body(
+                                    source,
+                                    node,
+                                    &["field_declaration_list"],
+                                ) {
                                     sig.full_signature = full;
                                 }
                                 signatures.push(sig);
@@ -123,7 +135,11 @@ impl CppSupport {
                         }
                         "struct_specifier" => {
                             if let Some(mut sig) = self.extract_struct_signature(source, &child) {
-                                if let Some(full) = slice_signature_before_body(source, node, &["field_declaration_list"]) {
+                                if let Some(full) = slice_signature_before_body(
+                                    source,
+                                    node,
+                                    &["field_declaration_list"],
+                                ) {
                                     sig.full_signature = full;
                                 }
                                 signatures.push(sig);

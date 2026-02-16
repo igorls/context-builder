@@ -149,7 +149,11 @@ macro_rules! impl_ts_language_support {
                 }
             }
 
-            fn extract_structure_from_node(&self, node: &tree_sitter::Node, structure: &mut CodeStructure) {
+            fn extract_structure_from_node(
+                &self,
+                node: &tree_sitter::Node,
+                structure: &mut CodeStructure,
+            ) {
                 match node.kind() {
                     "function_declaration" | "function_expression" | "arrow_function" => {
                         structure.functions += 1;
@@ -210,7 +214,11 @@ macro_rules! impl_ts_language_support {
                 })
             }
 
-            fn extract_class_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+            fn extract_class_signature(
+                &self,
+                source: &str,
+                node: &tree_sitter::Node,
+            ) -> Option<Signature> {
                 let name = self
                     .find_child_text(node, "type_identifier", source)
                     .or_else(|| self.find_child_text(node, "identifier", source))?;
@@ -238,8 +246,9 @@ macro_rules! impl_ts_language_support {
                 let name = self.find_child_text(node, "type_identifier", source)?;
 
                 // Use byte-slicing to preserve extends and generics
-                let full_sig = slice_signature_before_body(source, node, &["object_type", "interface_body"])
-                    .unwrap_or_else(|| format!("interface {}", name));
+                let full_sig =
+                    slice_signature_before_body(source, node, &["object_type", "interface_body"])
+                        .unwrap_or_else(|| format!("interface {}", name));
 
                 Some(Signature {
                     kind: SignatureKind::Interface,
@@ -272,7 +281,11 @@ macro_rules! impl_ts_language_support {
                 })
             }
 
-            fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
+            fn extract_enum_signature(
+                &self,
+                source: &str,
+                node: &tree_sitter::Node,
+            ) -> Option<Signature> {
                 let name = self
                     .find_child_text(node, "identifier", source)
                     .or_else(|| self.find_child_text(node, "type_identifier", source))?;
@@ -412,7 +425,9 @@ macro_rules! impl_ts_language_support {
                     let mut nested_cursor = child.walk();
                     for nested in child.children(&mut nested_cursor) {
                         if nested.kind() == kind {
-                            return Some(source[nested.start_byte()..nested.end_byte()].to_string());
+                            return Some(
+                                source[nested.start_byte()..nested.end_byte()].to_string(),
+                            );
                         }
                     }
                 }
@@ -548,8 +563,18 @@ mod tests {
         let sigs = TypeScriptSupport.extract_signatures(source, Visibility::All);
         let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
         // Each should appear exactly once, not duplicated
-        assert_eq!(names.iter().filter(|&&n| n == "foo").count(), 1, "foo should appear once, got: {:?}", names);
-        assert_eq!(names.iter().filter(|&&n| n == "Bar").count(), 1, "Bar should appear once, got: {:?}", names);
+        assert_eq!(
+            names.iter().filter(|&&n| n == "foo").count(),
+            1,
+            "foo should appear once, got: {:?}",
+            names
+        );
+        assert_eq!(
+            names.iter().filter(|&&n| n == "Bar").count(),
+            1,
+            "Bar should appear once, got: {:?}",
+            names
+        );
     }
 
     #[test]
@@ -600,7 +625,10 @@ mod tests {
         // It may parse but with errors — the important thing is TsxSupport handles it correctly
         if let Some(t) = tree {
             // TS parser should flag JSX as an error
-            assert!(t.root_node().has_error(), "TS parser should flag JSX as error");
+            assert!(
+                t.root_node().has_error(),
+                "TS parser should flag JSX as error"
+            );
         }
     }
 }
