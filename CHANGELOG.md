@@ -13,6 +13,13 @@ All notable changes to this project will be documented in this file.
 - **CLI validation — invalid values are now rejected (F7)**
   - `--truncate`, `--visibility`, and `--encoding` are constrained to their allowed sets via clap `value_parser`, so invalid values produce a clear `error: ... [possible values: ...]` instead of being silently coerced (fixes B3 `--visibility` and B4 `--truncate` silent-acceptance) and `--help` now lists the valid values
 
+- **Trustworthy token budget — `--max-tokens` uses the real tokenizer (F4, B1, B2)**
+  - `--max-tokens` now counts the real tokenizer (per `--encoding`) on each file's rendered output, replacing the crude `buf.len()/4` (parallel) and `metadata().len()/4` (serial) byte heuristics. Both code paths now estimate identically, restoring byte-for-byte determinism between parallel and non-parallel builds
+  - Fixed the budget bypass where the first file was always emitted in full regardless of `--max-tokens` (the `tokens_used > 0` guard). The budget now applies to every file, including the first (B1)
+  - The document header + file tree are debited from the budget, so `--max-tokens` accounts for the whole document, not just file bodies
+  - Tokenization is skipped entirely when no budget is set — no overhead on normal runs
+  - The deterministic content hash now folds in every output-affecting option (`line_numbers`, `max_tokens`, `encoding`, tree-sitter flags, `encoding_strategy`). Previously, toggling e.g. `--line-numbers` produced a different document under the **same** hash, silently breaking LLM prompt caching. The hash still fingerprints raw file content (not the rendered output, which embeds volatile mtimes), so it stays stable across checkouts (B2)
+
 - **Tree-Sitter correctness — honest `--signatures` / `--visibility`**
   - Fixed Java `--visibility` filter being completely non-functional — `get_visibility` returned `Visibility::All` unconditionally, so `--visibility public` dropped *every* Java symbol and `--visibility private` leaked *all* of them. It now inspects the declaration's `modifiers` node (B12)
   - Fixed C/C++ functions returning a pointer or reference being silently dropped — `find_function_name` now descends through `pointer_declarator` / `reference_declarator` / `parenthesized_declarator` to locate the `function_declarator` (B13)

@@ -581,6 +581,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         final_args.line_numbers,
         config.encoding_strategy.as_deref(),
         final_args.max_tokens,
+        final_args.encoding.parse::<Encoding>().unwrap_or_default(),
         &ts_config,
     )?;
 
