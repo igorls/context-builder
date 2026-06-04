@@ -221,32 +221,11 @@ impl ProjectState {
         false
     }
 
-    /// Generate a configuration hash for cache validation
+    /// Generate a configuration hash for cache validation.
+    /// Delegates to the single shared `config_fingerprint` (see `config.rs`) so
+    /// this hash and the cache key in `cache.rs` always agree.
     fn compute_config_hash(config: &Config) -> String {
-        // Build a stable string representation for hashing
-        let mut config_str = String::new();
-        if let Some(ref filters) = config.filter {
-            config_str.push_str(&filters.join(","));
-        }
-        config_str.push('|');
-        if let Some(ref ignores) = config.ignore {
-            config_str.push_str(&ignores.join(","));
-        }
-        config_str.push('|');
-        config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-            config.line_numbers,
-            config.auto_diff,
-            config.diff_context_lines,
-            config.signatures,
-            config.structure,
-            config.truncate,
-            config.visibility,
-            config.max_tokens,
-        ));
-
-        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
-        format!("{:x}", hash)
+        crate::config::config_fingerprint(config)
     }
 }
 

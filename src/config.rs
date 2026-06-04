@@ -91,6 +91,44 @@ pub struct Config {
     pub encoding: Option<String>,
 }
 
+/// Stable fingerprint of all configuration that affects auto-diff output and the
+/// cache baseline. Shared by the cache key (`cache.rs`) and the project-state
+/// config hash (`state.rs`) so the two can never drift out of sync. Every
+/// output-affecting option must be included here, otherwise toggling it reuses a
+/// stale cached diff baseline.
+pub(crate) fn config_fingerprint(config: &Config) -> String {
+    let mut s = String::new();
+    if let Some(ref filters) = config.filter {
+        s.push_str(&filters.join(","));
+    }
+    s.push('|');
+    if let Some(ref ignores) = config.ignore {
+        s.push_str(&ignores.join(","));
+    }
+    s.push('|');
+    // Only include options that change WHICH files are captured or HOW their
+    // content is read into the diff baseline. `encoding_strategy` is new here
+    // (it transcodes non-UTF-8 content, so it genuinely affects the captured
+    // state). Pure output-rendering options (diff_only, encoding/tokenizer,
+    // timestamped_output, output_folder) are deliberately EXCLUDED: users toggle
+    // them — especially `--diff-only` — against an existing baseline, and they do
+    // not change the diffed content, so they must not invalidate the cache.
+    s.push_str(&format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        config.line_numbers,
+        config.auto_diff,
+        config.diff_context_lines,
+        config.signatures,
+        config.structure,
+        config.truncate,
+        config.visibility,
+        config.max_tokens,
+        config.encoding_strategy,
+    ));
+    let hash = xxhash_rust::xxh3::xxh3_64(s.as_bytes());
+    format!("{:x}", hash)
+}
+
 /// Load configuration from `context-builder.toml` in the current working directory.
 /// Returns `None` if the file does not exist or cannot be parsed.
 pub fn load_config() -> Option<Config> {
@@ -275,6 +313,48 @@ invalid_toml [
         assert!(config.truncate.is_none());
         assert!(config.visibility.is_none());
         assert!(config.encoding.is_none());
+    }
+
+    #[test]
+    fn config_fingerprint_sensitivity() {
+        // The cache/diff fingerprint must change for options that affect which
+        // files are captured or how their content is read, but must stay stable
+        // for pure output-rendering options that users toggle against an existing
+        // baseline (notably --diff-only).
+        let base = Config::default();
+        let base_h = config_fingerprint(&base);
+
+        let mut c = base.clone();
+        c.signatures = Some(true);
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "signatures should affect the fingerprint"
+        );
+
+        let mut c = base.clone();
+        c.encoding_strategy = Some("strict".to_string());
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "encoding_strategy should affect the fingerprint"
+        );
+
+        let mut c = base.clone();
+        c.diff_only = Some(true);
+        assert_eq!(
+            config_fingerprint(&c),
+            base_h,
+            "diff_only must NOT invalidate the diff baseline"
+        );
+
+        let mut c = base.clone();
+        c.encoding = Some("cl100k_base".to_string());
+        assert_eq!(
+            config_fingerprint(&c),
+            base_h,
+            "tokenizer encoding must NOT invalidate the diff baseline"
+        );
     }
 
     #[test]

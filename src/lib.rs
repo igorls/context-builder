@@ -340,6 +340,15 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // by config_resolver.rs with proper CLI-takes-precedence semantics.
     // Do NOT re-apply them here as that would silently overwrite CLI flags.
 
+    // B8: --diff-only only takes effect together with auto_diff (+ timestamped
+    // output). Warn instead of silently emitting full file contents.
+    if final_args.diff_only && !config.auto_diff.unwrap_or(false) && !silent {
+        eprintln!(
+            "⚠️  --diff-only has no effect without auto_diff (it also needs timestamped_output). \
+             Full file contents will be emitted. Enable auto_diff = true + timestamped_output = true to use diff-only mode."
+        );
+    }
+
     if config.auto_diff.unwrap_or(false) {
         // Build an effective config that mirrors the *actual* operational settings coming
         // from resolved CLI args (filters/ignores/line_numbers). This ensures the
@@ -354,6 +363,17 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             effective_config.ignore = Some(final_args.ignore.clone());
         }
         effective_config.line_numbers = Some(final_args.line_numbers);
+        // Propagate the *resolved* CLI values so the cache/diff config hash sees
+        // them too (B7) — these arrive from CLI args, not the config file, so
+        // without this, toggling e.g. --signatures/--visibility would reuse a
+        // stale diff baseline. Only fields that are part of the fingerprint are
+        // set here; pure output-rendering flags (diff_only, encoding) are
+        // intentionally NOT propagated so they don't invalidate the baseline.
+        effective_config.signatures = Some(final_args.signatures);
+        effective_config.structure = Some(final_args.structure);
+        effective_config.truncate = Some(final_args.truncate.clone());
+        effective_config.visibility = Some(final_args.visibility.clone());
+        effective_config.max_tokens = final_args.max_tokens;
 
         // 1. Create current project state
         let current_state = ProjectState::from_files(

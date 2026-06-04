@@ -90,32 +90,11 @@ impl CacheManager {
         }
     }
 
-    /// Generate a hash from the configuration
+    /// Generate a hash from the configuration.
+    /// Delegates to the single shared `config_fingerprint` so the cache key and
+    /// `state.rs`'s config hash can never drift apart.
     fn hash_config(config: &Config) -> String {
-        // Build a stable string representation of config for hashing.
-        // IMPORTANT: Must stay in sync with state.rs::compute_config_hash
-        let mut config_str = String::new();
-        if let Some(ref filters) = config.filter {
-            config_str.push_str(&filters.join(","));
-        }
-        config_str.push('|');
-        if let Some(ref ignores) = config.ignore {
-            config_str.push_str(&ignores.join(","));
-        }
-        config_str.push('|');
-        config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-            config.line_numbers,
-            config.auto_diff,
-            config.diff_context_lines,
-            config.signatures,
-            config.structure,
-            config.truncate,
-            config.visibility,
-            config.max_tokens,
-        ));
-        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
-        format!("{:x}", hash)
+        crate::config::config_fingerprint(config)
     }
 
     /// Get the cache file path for this specific project and configuration

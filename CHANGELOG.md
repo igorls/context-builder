@@ -20,6 +20,11 @@ All notable changes to this project will be documented in this file.
   - Tokenization is skipped entirely when no budget is set — no overhead on normal runs
   - The deterministic content hash now folds in every output-affecting option (`line_numbers`, `max_tokens`, `encoding`, tree-sitter flags, `encoding_strategy`). Previously, toggling e.g. `--line-numbers` produced a different document under the **same** hash, silently breaking LLM prompt caching. The hash still fingerprints raw file content (not the rendered output, which embeds volatile mtimes), so it stays stable across checkouts (B2)
 
+- **Reliable auto-diff cache invalidation (B6, B7, B8)**
+  - Unified the two duplicated config-hash functions (`cache.rs::hash_config` and `state.rs::compute_config_hash`) into one shared `config::config_fingerprint`, removing the "must stay in sync" drift hazard (B6)
+  - The auto-diff cache hash now reflects the **resolved CLI values** for `--signatures` / `--structure` / `--truncate` / `--visibility` — previously these arrived from CLI args while the hash only saw the (often empty) config-file values, so toggling them reused a stale diff baseline. `encoding_strategy` is now included too (it transcodes non-UTF-8 content). Pure output-rendering options (`--diff-only`, `--encoding` tokenizer) are deliberately **excluded** so toggling them against an existing baseline doesn't discard it (B7)
+  - `--diff-only` now warns when used without `auto_diff` instead of silently emitting full file contents (B8)
+
 - **Tree-Sitter correctness — honest `--signatures` / `--visibility`**
   - Fixed Java `--visibility` filter being completely non-functional — `get_visibility` returned `Visibility::All` unconditionally, so `--visibility public` dropped *every* Java symbol and `--visibility private` leaked *all* of them. It now inspects the declaration's `modifiers` node (B12)
   - Fixed C/C++ functions returning a pointer or reference being silently dropped — `find_function_name` now descends through `pointer_declarator` / `reference_declarator` / `parenthesized_declarator` to locate the `function_declarator` (B13)
