@@ -270,7 +270,10 @@ impl CSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("typedef {}", name);
+        // Preserve the aliased type, e.g. `typedef unsigned int uint` instead of
+        // dropping it to a bare `typedef uint`.
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
 
         Some(Signature {
             kind: SignatureKind::TypeAlias,

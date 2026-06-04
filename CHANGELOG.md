@@ -23,6 +23,13 @@ All notable changes to this project will be documented in this file.
   - Tokenization is skipped entirely when no budget is set — no overhead on normal runs
   - The deterministic content hash now folds in every output-affecting option (`line_numbers`, `max_tokens`, `encoding`, tree-sitter flags, `encoding_strategy`). Previously, toggling e.g. `--line-numbers` produced a different document under the **same** hash, silently breaking LLM prompt caching. The hash still fingerprints raw file content (not the rendered output, which embeds volatile mtimes), so it stays stable across checkouts (B2)
 
+- **Robustness & accuracy — low-severity mop-up (B5, B9, B17, B19, B20)**
+  - Auto-diff cache is now written atomically (temp file + rename) instead of truncate-then-write, so a crash mid-write can't leave a corrupt, baseline-dropping cache (B20). The `fs2` dependency was dropped — `std::fs::File` provides advisory locking natively since Rust 1.89 (MSRV is now 1.89)
+  - `find_smart_truncation_point` clamps its result to a UTF-8 char boundary, preventing a panic when the byte-budget fallback lands mid-character (B19)
+  - `--token-count` renders each file through the **same path as the document**, so the preview matches the produced output (including encoding transcoding and tree-sitter signature/structure enrichment) instead of diverging via a separate raw-byte read (B9)
+  - C++ struct inheritance, `enum` underlying types, and `using`/`typedef` alias targets — plus C `typedef` aliased types — are preserved in extracted signatures instead of being reduced to a bare name (B17)
+  - An unrecognized `encoding_strategy` in config now warns instead of silently falling back to `detect` (B5)
+
 - **Reliable auto-diff cache invalidation (B6, B7, B8)**
   - Unified the two duplicated config-hash functions (`cache.rs::hash_config` and `state.rs::compute_config_hash`) into one shared `config::config_fingerprint`, removing the "must stay in sync" drift hazard (B6)
   - The auto-diff cache hash now reflects the **resolved CLI values** for `--signatures` / `--structure` / `--truncate` / `--visibility` — previously these arrived from CLI args while the hash only saw the (often empty) config-file values, so toggling them reused a stale diff baseline. `encoding_strategy` is now included too (it transcodes non-UTF-8 content). Pure output-rendering options (`--diff-only`, `--encoding` tokenizer) are deliberately **excluded** so toggling them against an existing baseline doesn't discard it (B7)

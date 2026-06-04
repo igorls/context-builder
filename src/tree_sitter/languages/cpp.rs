@@ -320,7 +320,9 @@ impl CppSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("struct {}", name);
+        // Byte-slice to preserve inheritance/templates (e.g. `struct Foo : public Base`).
+        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list"])
+            .unwrap_or_else(|| format!("struct {}", name));
 
         Some(Signature {
             kind: SignatureKind::Struct,
@@ -336,7 +338,9 @@ impl CppSupport {
     fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("enum {}", name);
+        // Byte-slice to preserve `enum class` and the underlying type (e.g. `: int`).
+        let full_sig = slice_signature_before_body(source, node, &["enumerator_list"])
+            .unwrap_or_else(|| format!("enum {}", name));
 
         Some(Signature {
             kind: SignatureKind::Enum,
@@ -352,7 +356,10 @@ impl CppSupport {
     fn extract_alias_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("using/typedef {}", name);
+        // Preserve the full alias target, e.g. `using StringVec = std::vector<std::string>`
+        // or `typedef unsigned int uint`, instead of a bare `using/typedef X`.
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
 
         Some(Signature {
             kind: SignatureKind::TypeAlias,
@@ -618,6 +625,53 @@ enum class Direction {
             .collect();
         assert!(!enums.is_empty());
         assert_eq!(enums[0].name, "Direction");
+    }
+
+    #[test]
+    fn test_struct_enum_alias_preserve_details() {
+        // Regression (B17): struct inheritance, enum underlying type, and alias
+        // targets were dropped by `format!`-based signatures.
+        let source = r#"
+struct Derived : public Base {
+    int x;
+};
+
+enum class Color : int {
+    Red,
+    Green
+};
+
+using StringVec = std::vector<std::string>;
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let s = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Struct && s.name == "Derived")
+            .expect("struct extracted");
+        assert!(
+            s.full_signature.contains(": public Base"),
+            "struct inheritance dropped: {}",
+            s.full_signature
+        );
+        let e = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Enum)
+            .expect("enum extracted");
+        assert!(
+            e.full_signature.contains(": int"),
+            "enum underlying type dropped: {}",
+            e.full_signature
+        );
+        let a = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::TypeAlias)
+            .expect("alias extracted");
+        assert!(
+            a.full_signature.contains("std::vector"),
+            "alias target dropped: {}",
+            a.full_signature
+        );
     }
 
     #[test]

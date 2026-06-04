@@ -294,6 +294,15 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if final_args.token_count {
         if !silent {
             let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
+            // Render each file through the same path as the document so the
+            // preview matches what would actually be produced (B9).
+            let ts_config = markdown::TreeSitterConfig {
+                signatures: final_args.signatures,
+                structure: final_args.structure,
+                truncate: final_args.truncate.clone(),
+                visibility: final_args.visibility.clone(),
+            };
+            let enc_strategy = config.encoding_strategy.as_deref();
             println!("\n# Token Count Estimation\n");
             let mut total_tokens = 0;
             total_tokens += estimate_tokens(encoding, "# Directory Structure Report\n\n");
@@ -330,7 +339,16 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             total_tokens += tree_tokens;
             let file_tokens: usize = files
                 .iter()
-                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers, encoding))
+                .map(|entry| {
+                    count_file_tokens(
+                        base_path,
+                        entry,
+                        final_args.line_numbers,
+                        encoding,
+                        enc_strategy,
+                        &ts_config,
+                    )
+                })
                 .sum();
             total_tokens += file_tokens;
             println!("Estimated total tokens: {}", total_tokens);

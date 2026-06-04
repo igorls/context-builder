@@ -1,7 +1,6 @@
 use ignore::DirEntry;
 use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 /// Token counting utilities for estimating LLM token usage
@@ -48,46 +47,35 @@ pub fn estimate_tokens(encoding: Encoding, text: &str) -> usize {
     encoding.bpe().encode_with_special_tokens(text).len()
 }
 
-/// Counts the tokens that would be generated for a file
+/// Counts the tokens that would be generated for a file.
+///
+/// Renders the file through the same `process_file` path the document uses, then
+/// tokenizes the result — so the `--token-count` preview matches the produced
+/// document, including encoding transcoding and tree-sitter signature/structure
+/// enrichment, instead of re-reading raw bytes through a divergent code path (B9).
 pub fn count_file_tokens(
     base_path: &Path,
     entry: &DirEntry,
     line_numbers: bool,
     encoding: Encoding,
+    encoding_strategy: Option<&str>,
+    ts_config: &crate::markdown::TreeSitterConfig,
 ) -> usize {
-    let file_path = entry.path();
-    let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
-
-    // Start with tokens for the file header (path, size, modified time)
-    let mut token_count = estimate_tokens(
-        encoding,
-        &format!(
-            "\n### File: `{}`\n\n- Size: {} bytes\n- Modified: {}\n\n",
-            relative_path.display(),
-            entry.metadata().map(|m| m.len()).unwrap_or(0),
-            "Unknown"
-        ),
-    ); // Using "Unknown" as placeholder for modified time in estimation
-
-    // Add tokens for the code fences
-    token_count += estimate_tokens(encoding, "```\n```");
-
-    // Try to read file content
-    if let Ok(content) = fs::read_to_string(file_path) {
-        if line_numbers {
-            // When line numbers are enabled, we add the line number prefix to each line
-            let lines_with_numbers: String = content
-                .lines()
-                .enumerate()
-                .map(|(i, line)| format!("{:>4} | {}\n", i + 1, line))
-                .collect();
-            token_count += estimate_tokens(encoding, &lines_with_numbers);
-        } else {
-            token_count += estimate_tokens(encoding, &content);
-        }
+    let mut buf: Vec<u8> = Vec::new();
+    if crate::markdown::process_file(
+        base_path,
+        entry.path(),
+        &mut buf,
+        line_numbers,
+        encoding_strategy,
+        ts_config,
+    )
+    .is_err()
+    {
+        // A file that fails to render contributes nothing to the document.
+        return 0;
     }
-
-    token_count
+    estimate_tokens(encoding, &String::from_utf8_lossy(&buf))
 }
 
 /// Counts the tokens that would be generated for the entire file tree section
@@ -181,7 +169,14 @@ mod tests {
             .unwrap();
 
         // Estimate tokens for the file
-        let estimated_tokens = count_file_tokens(dir.path(), &entry, false, Encoding::Cl100kBase);
+        let estimated_tokens = count_file_tokens(
+            dir.path(),
+            &entry,
+            false,
+            Encoding::Cl100kBase,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        );
 
         // Generate actual markdown content
         let mut actual_content = Vec::new();
@@ -249,10 +244,22 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let tokens_without_line_numbers =
-            count_file_tokens(dir.path(), &entry, false, Encoding::Cl100kBase);
-        let tokens_with_line_numbers =
-            count_file_tokens(dir.path(), &entry, true, Encoding::Cl100kBase);
+        let tokens_without_line_numbers = count_file_tokens(
+            dir.path(),
+            &entry,
+            false,
+            Encoding::Cl100kBase,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        );
+        let tokens_with_line_numbers = count_file_tokens(
+            dir.path(),
+            &entry,
+            true,
+            Encoding::Cl100kBase,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        );
 
         // With line numbers should have more tokens due to line number prefixes
         assert!(tokens_with_line_numbers > tokens_without_line_numbers);
@@ -285,9 +292,17 @@ mod tests {
         std::fs::remove_file(&test_file).unwrap();
 
         if let Some(entry) = found_entry {
-            let tokens = count_file_tokens(dir.path(), &entry, false, Encoding::Cl100kBase);
-            // Should still return some tokens for the file header even if content can't be read
-            assert!(tokens > 0);
+            let tokens = count_file_tokens(
+                dir.path(),
+                &entry,
+                false,
+                Encoding::Cl100kBase,
+                None,
+                &crate::markdown::TreeSitterConfig::default(),
+            );
+            // A file that cannot be read renders to nothing, so it contributes 0
+            // tokens — matching what the produced document would actually contain.
+            assert_eq!(tokens, 0);
         }
     }
 
