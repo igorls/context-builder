@@ -13,6 +13,18 @@ repository = "https://github.com/igorls/context-builder"
 license = "MIT"
 keywords = ["cli", "markdown", "documentation", "llm", "context"]
 categories = ["command-line-utilities", "development-tools"]
+# Keep the published crate lean: exclude the 16 MB test fixture, research dumps,
+# demo media, CI config, and packaging manifests — none are needed to build or
+# use the crate. (src, benches, scripts, tests, README, LICENSE, CHANGELOG stay.)
+exclude = [
+    "/test.md",
+    "/docs",
+    "/winget",
+    "/.github",
+    "/.agent",
+    "/install.sh",
+    "/tarpaulin.toml",
+]
 
 [dependencies]
 clap = { version = "4.5.58", features = ["derive"] }
