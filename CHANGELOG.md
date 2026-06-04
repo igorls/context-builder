@@ -7,11 +7,14 @@ All notable changes to this project will be documented in this file.
 > Planned per `docs/research/next-release-roadmap.md`. This section tracks work as it lands.
 
 - **Accurate token counting — selectable tokenizer (F1)**
-  - New `--encoding {o200k_base|cl100k_base}` flag (and `encoding` config option), defaulting to **`o200k_base`** (GPT-4o / o-series). The previous hardcoded `cl100k_base` under-counts every modern OpenAI model. The selected encoding flows through `--token-count` (and, once F4 lands, `--max-tokens`)
+  - New `--encoding {o200k_base|cl100k_base}` flag (and `encoding` config option), defaulting to **`o200k_base`** (GPT-4o / o-series). The previous hardcoded `cl100k_base` under-counts every modern OpenAI model. The selected encoding flows through both `--token-count` and `--max-tokens` budgeting
   - `--token-count` now reports counts using the chosen encoding
 
 - **CLI validation — invalid values are now rejected (F7)**
   - `--truncate`, `--visibility`, and `--encoding` are constrained to their allowed sets via clap `value_parser`, so invalid values produce a clear `error: ... [possible values: ...]` instead of being silently coerced (fixes B3 `--visibility` and B4 `--truncate` silent-acceptance) and `--help` now lists the valid values
+
+- **CLI precedence — explicit flags override config even at their default value**
+  - `--encoding`, `--truncate`, and `--visibility` are now honored when passed explicitly even if the value equals the clap default — e.g. `--encoding o200k_base` overriding a config that sets `cl100k_base`. Resolution uses clap's `ValueSource` to tell an explicitly-passed flag from an omitted one, instead of treating "value == default" as "not provided", which previously left the default value un-selectable from the CLI whenever the config set a non-default
 
 - **Pipe-friendly output — stream to stdout (F2)**
   - `-o -` streams the generated document to **stdout** instead of a file, enabling `context-builder -f rs -o - | llm`. All progress/status chatter is suppressed (or already on stderr) in this mode so the pipe stays clean, and `-` is never folded into an output folder or timestamped name. Works for the auto-diff path too (the composed diff document is written to stdout)
@@ -33,7 +36,7 @@ All notable changes to this project will be documented in this file.
 
 - **Reliable auto-diff cache invalidation (B6, B7, B8)**
   - Unified the two duplicated config-hash functions (`cache.rs::hash_config` and `state.rs::compute_config_hash`) into one shared `config::config_fingerprint`, removing the "must stay in sync" drift hazard (B6)
-  - The auto-diff cache hash now reflects the **resolved CLI values** for `--signatures` / `--structure` / `--truncate` / `--visibility` — previously these arrived from CLI args while the hash only saw the (often empty) config-file values, so toggling them reused a stale diff baseline. `encoding_strategy` is now included too (it transcodes non-UTF-8 content). Pure output-rendering options (`--diff-only`, `--encoding` tokenizer) are deliberately **excluded** so toggling them against an existing baseline doesn't discard it (B7)
+  - The auto-diff cache fingerprint now keys on **only the file-selection inputs** (`filter` / `ignore`) — the options that decide which files form the comparable baseline. The diff compares each file's **raw captured content** (`ProjectState` stores the bytes), which no rendering option changes, so `--signatures` / `--structure` / `--truncate` / `--visibility` / `--max-tokens` / `--line-numbers` / `--encoding` / `encoding_strategy` are all **excluded**: toggling one against an existing baseline no longer silently discards the diff (which would hide real content changes on that run). The resolved CLI `filter`/`ignore` are folded in so the key reflects real behavior even when they come from flags rather than the config file (B7). _(This supersedes an earlier B7 approach that included the rendering options; per PR review, those caused exactly the spurious baseline resets described above.)_
   - `--diff-only` now warns when used without `auto_diff` instead of silently emitting full file contents (B8)
 
 - **Tree-Sitter correctness — honest `--signatures` / `--visibility`**

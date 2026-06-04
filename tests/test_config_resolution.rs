@@ -48,7 +48,11 @@ fn run_with_resolved_config(
     prompter: &impl Prompter,
 ) -> std::io::Result<()> {
     // Resolve final configuration using the new config resolver
-    let resolution = resolve_final_config(args, config.clone());
+    let resolution = resolve_final_config(
+        args,
+        config.clone(),
+        context_builder::config_resolver::ExplicitCli::default(),
+    );
 
     // Convert resolved config back to Args for run_with_args
     let final_args = Args {

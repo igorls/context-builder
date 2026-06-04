@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches};
 
 use std::fs;
 use std::io::{self, Write};
@@ -386,30 +386,21 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     }
 
     if config.auto_diff.unwrap_or(false) {
-        // Build an effective config that mirrors the *actual* operational settings coming
-        // from resolved CLI args (filters/ignores/line_numbers). This ensures the
-        // configuration hash used for cache invalidation reflects real behavior and
-        // stays consistent across runs even when values originate from CLI not file.
+        // Build an effective config that mirrors the *actual* file selection coming
+        // from resolved CLI args, so the cache/diff fingerprint reflects real
+        // behavior even when filter/ignore originate from the CLI, not the config
+        // file. Only `filter`/`ignore` matter: they decide which files form the
+        // diff baseline. Rendering options (signatures/structure/truncate/
+        // visibility/max_tokens/line_numbers/encoding) deliberately do NOT feed the
+        // fingerprint — they don't change the captured raw content — so propagating
+        // them here would only risk spurious baseline resets (see `config_fingerprint`).
         let mut effective_config = config.clone();
-        // Normalize filter/ignore/line_numbers into config so hashing sees them
         if !final_args.filter.is_empty() {
             effective_config.filter = Some(final_args.filter.clone());
         }
         if !final_args.ignore.is_empty() {
             effective_config.ignore = Some(final_args.ignore.clone());
         }
-        effective_config.line_numbers = Some(final_args.line_numbers);
-        // Propagate the *resolved* CLI values so the cache/diff config hash sees
-        // them too (B7) — these arrive from CLI args, not the config file, so
-        // without this, toggling e.g. --signatures/--visibility would reuse a
-        // stale diff baseline. Only fields that are part of the fingerprint are
-        // set here; pure output-rendering flags (diff_only, encoding) are
-        // intentionally NOT propagated so they don't invalidate the baseline.
-        effective_config.signatures = Some(final_args.signatures);
-        effective_config.structure = Some(final_args.structure);
-        effective_config.truncate = Some(final_args.truncate.clone());
-        effective_config.visibility = Some(final_args.visibility.clone());
-        effective_config.max_tokens = final_args.max_tokens;
 
         // 1. Create current project state
         let current_state = ProjectState::from_files(
@@ -865,7 +856,19 @@ fn generate_markdown_with_diff(
 
 pub fn run() -> io::Result<()> {
     env_logger::init();
-    let args = Args::parse();
+    // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
+    // value-bearing flags were *explicitly* passed or left at their clap default.
+    // `--encoding o200k_base` carries the same value as the default, so the value
+    // alone can't reveal an intent to override a non-default config (see resolver).
+    let matches = Args::command().get_matches();
+    let explicit = crate::config_resolver::ExplicitCli {
+        truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
+        visibility: matches.value_source("visibility")
+            == Some(clap::parser::ValueSource::CommandLine),
+        encoding: matches.value_source("encoding") == Some(clap::parser::ValueSource::CommandLine),
+    };
+    let args = Args::from_arg_matches(&matches)
+        .expect("arguments were already validated by get_matches()");
 
     // Handle init command first
     if args.init {
@@ -896,7 +899,7 @@ pub fn run() -> io::Result<()> {
     }
 
     // Resolve final configuration using the new config resolver
-    let resolution = crate::config_resolver::resolve_final_config(args, config.clone());
+    let resolution = crate::config_resolver::resolve_final_config(args, config.clone(), explicit);
 
     // Print warnings if any
     let silent = std::env::var("CB_SILENT")

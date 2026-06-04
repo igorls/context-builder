@@ -41,10 +41,25 @@ pub struct ConfigResolution {
     pub warnings: Vec<String>,
 }
 
+/// Which value-bearing CLI flags the user explicitly passed (as opposed to
+/// leaving at their clap default). These flags carry a default *value*, so the
+/// value alone can't tell us whether the user typed e.g. `--encoding o200k_base`
+/// to override a non-default config or simply omitted the flag. `run()` fills
+/// this from clap's `ValueSource`; `Default` (all `false`) means "treat the
+/// value as a default", which preserves the value-based precedence for callers
+/// (e.g. tests) that build `Args` directly.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExplicitCli {
+    pub truncate: bool,
+    pub visibility: bool,
+    pub encoding: bool,
+}
+
 /// Resolves final configuration by merging CLI arguments with config file values.
 ///
 /// Precedence rules (highest to lowest):
-/// 1. Explicit CLI arguments (non-default values)
+/// 1. Explicit CLI arguments — a non-default value, or (for the value-bearing
+///    flags in `ExplicitCli`) a flag the user passed even at its default value
 /// 2. Configuration file values
 /// 3. CLI default values
 ///
@@ -52,7 +67,11 @@ pub struct ConfigResolution {
 /// - `output` field supports timestamping and output folder resolution
 /// - Boolean flags respect explicit CLI usage vs defaults
 /// - Arrays (filter, ignore) use CLI if non-empty, otherwise config file
-pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigResolution {
+pub fn resolve_final_config(
+    mut args: Args,
+    config: Option<Config>,
+    explicit: ExplicitCli,
+) -> ConfigResolution {
     let mut warnings = Vec::new();
 
     // Start with CLI defaults, then apply config file, then explicit CLI overrides
@@ -81,7 +100,10 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
         init: args.init,
         signatures: args.signatures || final_config.signatures.unwrap_or(false),
         structure: args.structure || final_config.structure.unwrap_or(false),
-        truncate: if args.truncate != "smart" {
+        // CLI explicit (even when the value equals the default) > config > default.
+        // The `|| value != default` keeps value-based precedence for callers that
+        // build Args directly without an explicitness signal (e.g. tests).
+        truncate: if explicit.truncate || args.truncate != "smart" {
             args.truncate.clone()
         } else {
             final_config
@@ -89,7 +111,7 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
                 .clone()
                 .unwrap_or_else(|| args.truncate.clone())
         },
-        visibility: if args.visibility != "all" {
+        visibility: if explicit.visibility || args.visibility != "all" {
             args.visibility.clone()
         } else {
             final_config
@@ -97,7 +119,7 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
                 .clone()
                 .unwrap_or_else(|| args.visibility.clone())
         },
-        encoding: if args.encoding != "o200k_base" {
+        encoding: if explicit.encoding || args.encoding != "o200k_base" {
             args.encoding.clone()
         } else {
             final_config
@@ -270,7 +292,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args.clone(), Some(config));
+        let resolution = resolve_final_config(args.clone(), Some(config), ExplicitCli::default());
 
         assert_eq!(resolution.config.output, "custom.md"); // CLI wins
         assert_eq!(resolution.config.filter, vec!["rs"]); // CLI wins
@@ -312,7 +334,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert_eq!(resolution.config.output, "from_config.md");
         assert_eq!(
@@ -354,7 +376,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         // Output should have timestamp format: test_YYYYMMDDHHMMSS.md
         assert!(resolution.config.output.starts_with("test_"));
@@ -389,7 +411,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert!(resolution.config.output.contains("docs"));
         assert!(resolution.config.output.ends_with("test.md"));
@@ -423,7 +445,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert!(resolution.config.output.contains("docs"));
         assert!(resolution.config.output.contains("test_"));
@@ -458,7 +480,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
         // `-` must survive untouched — not folded into docs/ nor timestamped.
         assert_eq!(resolution.config.output, "-");
     }
@@ -491,7 +513,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert!(!resolution.warnings.is_empty());
         assert!(resolution.warnings[0].contains("auto_diff"));
@@ -520,7 +542,7 @@ mod tests {
             visibility: "all".to_string(),
         };
 
-        let resolution = resolve_final_config(args.clone(), None);
+        let resolution = resolve_final_config(args.clone(), None, ExplicitCli::default());
 
         assert_eq!(resolution.config.input, args.input);
         assert_eq!(resolution.config.output, args.output);
@@ -534,5 +556,59 @@ mod tests {
         assert!(!resolution.config.auto_diff);
         assert_eq!(resolution.config.diff_context_lines, 3);
         assert!(resolution.warnings.is_empty());
+    }
+
+    #[test]
+    fn explicit_cli_default_value_overrides_config() {
+        // Regression: `--encoding o200k_base` (the clap default value) must still
+        // override a non-default config encoding. The value looks like the default,
+        // so resolution must rely on the explicit-flag signal, not the value.
+        // Same for `--truncate smart` and `--visibility all`.
+        let make_args = || Args {
+            input: ".".to_string(),
+            output: "output.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            encoding: Some("cl100k_base".to_string()),
+            truncate: Some("byte".to_string()),
+            visibility: Some("public".to_string()),
+            ..Default::default()
+        };
+
+        // Flags NOT explicitly passed → config wins (the value equals the default).
+        let implicit =
+            resolve_final_config(make_args(), Some(config.clone()), ExplicitCli::default());
+        assert_eq!(implicit.config.encoding, "cl100k_base");
+        assert_eq!(implicit.config.truncate, "byte");
+        assert_eq!(implicit.config.visibility, "public");
+
+        // Flags explicitly passed at their default value → CLI wins over config.
+        let explicit = resolve_final_config(
+            make_args(),
+            Some(config),
+            ExplicitCli {
+                truncate: true,
+                visibility: true,
+                encoding: true,
+            },
+        );
+        assert_eq!(explicit.config.encoding, "o200k_base");
+        assert_eq!(explicit.config.truncate, "smart");
+        assert_eq!(explicit.config.visibility, "all");
     }
 }
