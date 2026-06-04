@@ -2,7 +2,7 @@
 name: context-builder
 description: Generate LLM-optimized codebase context from any directory using context-builder CLI
 homepage: https://github.com/igorls/context-builder
-version: 0.8.3
+version: 0.9.0
 requires:
   - context-builder
 ---
@@ -20,7 +20,7 @@ cargo install context-builder --features tree-sitter-all
 
 Pre-built binaries with SHA256 checksums are also available for manual download from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
 
-Verify: `context-builder --version` (expected: `0.8.3`)
+Verify: `context-builder --version` (expected: `0.9.0`)
 
 
 ## Security & Path Scoping

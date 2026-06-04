@@ -2,9 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
-## v0.9.0 (in progress) — "Trustworthy Output"
+## v0.9.0 (2026-06-04) — "Trustworthy Output"
 
-> Planned per `docs/research/next-release-roadmap.md`. This section tracks work as it lands.
+> Delivered per `docs/research/next-release-roadmap.md`: accurate token counting, honest tree-sitter signatures, pipe-friendly output, and a reliable auto-diff cache.
 
 - **Accurate token counting — selectable tokenizer (F1)**
   - New `--encoding {o200k_base|cl100k_base}` flag (and `encoding` config option), defaulting to **`o200k_base`** (GPT-4o / o-series). The previous hardcoded `cl100k_base` under-counts every modern OpenAI model. The selected encoding flows through both `--token-count` and `--max-tokens` budgeting
