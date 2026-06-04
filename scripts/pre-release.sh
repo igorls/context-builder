@@ -88,11 +88,15 @@ fi
 # ═══════════════════════════════════════
 header "4. Tests"
 # ═══════════════════════════════════════
-if cargo test --features tree-sitter-all 2>&1; then
-    TEST_SUMMARY=$(cargo test --features tree-sitter-all 2>&1 | grep "^test result:" | tail -1)
+# Tests share process-wide state (cwd, env), so they must run single-threaded —
+# matching how CI runs them. Running parallel produces spurious failures.
+# Capture the output once (in the `if` so `set -e` doesn't abort on test failure).
+if TEST_OUTPUT=$(cargo test --features tree-sitter-all -- --test-threads=1 2>&1); then
+    TEST_SUMMARY=$(echo "$TEST_OUTPUT" | grep "^test result:" | tail -1)
     pass "Tests passed — $TEST_SUMMARY"
 else
     fail "Tests failed"
+    echo "$TEST_OUTPUT" | grep -E "FAILED|^error" | head -20 | sed 's/^/    /'
 fi
 
 # ═══════════════════════════════════════
