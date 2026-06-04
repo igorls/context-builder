@@ -3,32 +3,74 @@ use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 /// Token counting utilities for estimating LLM token usage
-use tiktoken_rs::{CoreBPE, cl100k_base};
+use tiktoken_rs::{CoreBPE, cl100k_base, o200k_base};
 
-// Initialize the tokenizer once and reuse it
-static TOKENIZER: Lazy<CoreBPE> = Lazy::new(|| cl100k_base().unwrap());
+/// Tokenizer encoding used for token estimation and budgeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Encoding {
+    /// `o200k_base` — GPT-4o / o-series, and the closest match for current
+    /// frontier models. Default, because `cl100k_base` under-counts these.
+    #[default]
+    O200kBase,
+    /// `cl100k_base` — GPT-4 / GPT-3.5-turbo.
+    Cl100kBase,
+}
 
-/// Estimates the number of tokens in a text string using a real tokenizer
-pub fn estimate_tokens(text: &str) -> usize {
-    TOKENIZER.encode_with_special_tokens(text).len()
+impl FromStr for Encoding {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "o200k_base" | "o200k" => Ok(Encoding::O200kBase),
+            "cl100k_base" | "cl100k" => Ok(Encoding::Cl100kBase),
+            _ => Err(()),
+        }
+    }
+}
+
+// Initialize each tokenizer once and reuse it.
+static O200K_BASE: Lazy<CoreBPE> = Lazy::new(|| o200k_base().unwrap());
+static CL100K_BASE: Lazy<CoreBPE> = Lazy::new(|| cl100k_base().unwrap());
+
+impl Encoding {
+    fn bpe(self) -> &'static CoreBPE {
+        match self {
+            Encoding::O200kBase => &O200K_BASE,
+            Encoding::Cl100kBase => &CL100K_BASE,
+        }
+    }
+}
+
+/// Estimates the number of tokens in a text string using the given encoding.
+pub fn estimate_tokens(encoding: Encoding, text: &str) -> usize {
+    encoding.bpe().encode_with_special_tokens(text).len()
 }
 
 /// Counts the tokens that would be generated for a file
-pub fn count_file_tokens(base_path: &Path, entry: &DirEntry, line_numbers: bool) -> usize {
+pub fn count_file_tokens(
+    base_path: &Path,
+    entry: &DirEntry,
+    line_numbers: bool,
+    encoding: Encoding,
+) -> usize {
     let file_path = entry.path();
     let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
 
     // Start with tokens for the file header (path, size, modified time)
-    let mut token_count = estimate_tokens(&format!(
-        "\n### File: `{}`\n\n- Size: {} bytes\n- Modified: {}\n\n",
-        relative_path.display(),
-        entry.metadata().map(|m| m.len()).unwrap_or(0),
-        "Unknown"
-    )); // Using "Unknown" as placeholder for modified time in estimation
+    let mut token_count = estimate_tokens(
+        encoding,
+        &format!(
+            "\n### File: `{}`\n\n- Size: {} bytes\n- Modified: {}\n\n",
+            relative_path.display(),
+            entry.metadata().map(|m| m.len()).unwrap_or(0),
+            "Unknown"
+        ),
+    ); // Using "Unknown" as placeholder for modified time in estimation
 
     // Add tokens for the code fences
-    token_count += estimate_tokens("```\n```");
+    token_count += estimate_tokens(encoding, "```\n```");
 
     // Try to read file content
     if let Ok(content) = fs::read_to_string(file_path) {
@@ -39,9 +81,9 @@ pub fn count_file_tokens(base_path: &Path, entry: &DirEntry, line_numbers: bool)
                 .enumerate()
                 .map(|(i, line)| format!("{:>4} | {}\n", i + 1, line))
                 .collect();
-            token_count += estimate_tokens(&lines_with_numbers);
+            token_count += estimate_tokens(encoding, &lines_with_numbers);
         } else {
-            token_count += estimate_tokens(&content);
+            token_count += estimate_tokens(encoding, &content);
         }
     }
 
@@ -49,7 +91,11 @@ pub fn count_file_tokens(base_path: &Path, entry: &DirEntry, line_numbers: bool)
 }
 
 /// Counts the tokens that would be generated for the entire file tree section
-pub fn count_tree_tokens(tree: &BTreeMap<String, crate::tree::FileNode>, depth: usize) -> usize {
+pub fn count_tree_tokens(
+    tree: &BTreeMap<String, crate::tree::FileNode>,
+    depth: usize,
+    encoding: Encoding,
+) -> usize {
     let mut token_count = 0;
 
     // Add tokens for indentation
@@ -58,11 +104,11 @@ pub fn count_tree_tokens(tree: &BTreeMap<String, crate::tree::FileNode>, depth: 
     for (name, node) in tree {
         match node {
             crate::tree::FileNode::File => {
-                token_count += estimate_tokens(&format!("{}- 📄 {}\n", indent, name));
+                token_count += estimate_tokens(encoding, &format!("{}- 📄 {}\n", indent, name));
             }
             crate::tree::FileNode::Directory(children) => {
-                token_count += estimate_tokens(&format!("{}- 📁 {}\n", indent, name));
-                token_count += count_tree_tokens(children, depth + 1);
+                token_count += estimate_tokens(encoding, &format!("{}- 📁 {}\n", indent, name));
+                token_count += count_tree_tokens(children, depth + 1, encoding);
             }
         }
     }
@@ -79,15 +125,27 @@ mod tests {
     fn test_estimate_tokens() {
         // Test with a simple string
         let text = "Hello, world!";
-        let tokens = estimate_tokens(text);
+        let tokens = estimate_tokens(Encoding::Cl100kBase, text);
         // "Hello, world!" is 4 tokens with cl100k_base
         assert_eq!(tokens, 4);
 
         // Test with code-like content
         let code_text = "fn main() {\n    println!(\"Hello, world!\");\n}";
-        let tokens = estimate_tokens(code_text);
+        let tokens = estimate_tokens(Encoding::Cl100kBase, code_text);
         // This specific code snippet is 12 tokens with cl100k_base
         assert_eq!(tokens, 12);
+    }
+
+    #[test]
+    fn test_encoding_default_and_parse() {
+        assert_eq!(Encoding::default(), Encoding::O200kBase);
+        assert_eq!("o200k_base".parse::<Encoding>(), Ok(Encoding::O200kBase));
+        assert_eq!("cl100k_base".parse::<Encoding>(), Ok(Encoding::Cl100kBase));
+        assert_eq!("O200K".parse::<Encoding>(), Ok(Encoding::O200kBase));
+        assert!("bogus".parse::<Encoding>().is_err());
+        // Both encodings tokenize non-empty text to a non-zero count.
+        assert!(estimate_tokens(Encoding::O200kBase, "hello world") > 0);
+        assert!(estimate_tokens(Encoding::Cl100kBase, "hello world") > 0);
     }
 
     #[test]
@@ -100,7 +158,7 @@ mod tests {
         subdir.insert("file2.md".to_string(), crate::tree::FileNode::File);
         tree.insert("src".to_string(), crate::tree::FileNode::Directory(subdir));
 
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         // "- 📄 file1.rs\n" -> 8 tokens
         // "- 📁 src\n" -> 6 tokens
         // "  - 📄 file2.md\n" -> 9 tokens
@@ -123,7 +181,7 @@ mod tests {
             .unwrap();
 
         // Estimate tokens for the file
-        let estimated_tokens = count_file_tokens(dir.path(), &entry, false);
+        let estimated_tokens = count_file_tokens(dir.path(), &entry, false, Encoding::Cl100kBase);
 
         // Generate actual markdown content
         let mut actual_content = Vec::new();
@@ -139,7 +197,7 @@ mod tests {
         let actual_content_str = String::from_utf8(actual_content).unwrap();
 
         // Count actual tokens
-        let actual_tokens = estimate_tokens(&actual_content_str);
+        let actual_tokens = estimate_tokens(Encoding::Cl100kBase, &actual_content_str);
 
         // The estimation should be close to actual (within a reasonable margin)
         // Allow for some variance due to timestamp differences and minor formatting
@@ -159,19 +217,19 @@ mod tests {
 
     #[test]
     fn test_estimate_tokens_empty_string() {
-        let tokens = estimate_tokens("");
+        let tokens = estimate_tokens(Encoding::Cl100kBase, "");
         assert_eq!(tokens, 0);
     }
 
     #[test]
     fn test_estimate_tokens_whitespace_only() {
-        let tokens = estimate_tokens("   \n\t  ");
+        let tokens = estimate_tokens(Encoding::Cl100kBase, "   \n\t  ");
         assert!(tokens > 0); // Whitespace still counts as tokens
     }
 
     #[test]
     fn test_estimate_tokens_unicode() {
-        let tokens = estimate_tokens("Hello 世界! 🌍");
+        let tokens = estimate_tokens(Encoding::Cl100kBase, "Hello 世界! 🌍");
         assert!(tokens > 0);
         // Unicode characters may be encoded as multiple tokens
         assert!(tokens >= 4);
@@ -191,8 +249,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let tokens_without_line_numbers = count_file_tokens(dir.path(), &entry, false);
-        let tokens_with_line_numbers = count_file_tokens(dir.path(), &entry, true);
+        let tokens_without_line_numbers =
+            count_file_tokens(dir.path(), &entry, false, Encoding::Cl100kBase);
+        let tokens_with_line_numbers =
+            count_file_tokens(dir.path(), &entry, true, Encoding::Cl100kBase);
 
         // With line numbers should have more tokens due to line number prefixes
         assert!(tokens_with_line_numbers > tokens_without_line_numbers);
@@ -225,7 +285,7 @@ mod tests {
         std::fs::remove_file(&test_file).unwrap();
 
         if let Some(entry) = found_entry {
-            let tokens = count_file_tokens(dir.path(), &entry, false);
+            let tokens = count_file_tokens(dir.path(), &entry, false, Encoding::Cl100kBase);
             // Should still return some tokens for the file header even if content can't be read
             assert!(tokens > 0);
         }
@@ -234,7 +294,7 @@ mod tests {
     #[test]
     fn test_count_tree_tokens_empty_tree() {
         let tree = BTreeMap::new();
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         assert_eq!(tokens, 0);
     }
 
@@ -263,11 +323,11 @@ mod tests {
             crate::tree::FileNode::Directory(level1),
         );
 
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         assert!(tokens > 0);
 
         // Should account for indentation at different levels
-        let tokens_with_depth = count_tree_tokens(&tree, 2);
+        let tokens_with_depth = count_tree_tokens(&tree, 2, Encoding::Cl100kBase);
         assert!(tokens_with_depth > tokens); // More indentation = more tokens
     }
 
@@ -290,7 +350,7 @@ mod tests {
             crate::tree::FileNode::Directory(subdir),
         );
 
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         assert!(tokens > 0);
 
         // Verify it handles unicode filenames without crashing

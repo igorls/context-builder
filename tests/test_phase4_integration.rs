@@ -120,6 +120,7 @@ filter = ["rs", "txt"]
         yes: true,
         diff_only: false, // Will be overridden by config
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -298,6 +299,7 @@ fn test_encoding_strategy_configuration() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,

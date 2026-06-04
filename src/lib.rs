@@ -26,7 +26,7 @@ use diff::render_per_file_diffs;
 use file_utils::{collect_files, confirm_overwrite, confirm_processing};
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
-use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
+use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
 use tree::{build_file_tree, print_tree};
 
 /// Configuration for diff operations
@@ -279,34 +279,44 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     if final_args.token_count {
         if !silent {
+            let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
             println!("\n# Token Count Estimation\n");
             let mut total_tokens = 0;
-            total_tokens += estimate_tokens("# Directory Structure Report\n\n");
+            total_tokens += estimate_tokens(encoding, "# Directory Structure Report\n\n");
             if !final_args.filter.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains files from the `{}` directory with extensions: {} \n",
-                    final_args.input,
-                    final_args.filter.join(", ")
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "This document contains files from the `{}` directory with extensions: {} \n",
+                        final_args.input,
+                        final_args.filter.join(", ")
+                    ),
+                );
             } else {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
-                    final_args.input
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
+                        final_args.input
+                    ),
+                );
             }
             if !final_args.ignore.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "Custom ignored patterns: {} \n",
-                    final_args.ignore.join(", ")
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "Custom ignored patterns: {} \n",
+                        final_args.ignore.join(", ")
+                    ),
+                );
             }
-            total_tokens += estimate_tokens("Content hash: 0000000000000000\n\n");
-            total_tokens += estimate_tokens("## File Tree Structure\n\n");
-            let tree_tokens = count_tree_tokens(&file_tree, 0);
+            total_tokens += estimate_tokens(encoding, "Content hash: 0000000000000000\n\n");
+            total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
+            let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
             let file_tokens: usize = files
                 .iter()
-                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers))
+                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers, encoding))
                 .sum();
             total_tokens += file_tokens;
             println!("Estimated total tokens: {}", total_tokens);
@@ -856,6 +866,7 @@ pub fn run() -> io::Result<()> {
         structure: resolution.config.structure,
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
+        encoding: resolution.config.encoding,
     };
 
     // Create final Config with resolved values
@@ -1041,6 +1052,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1077,6 +1089,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1118,6 +1131,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1157,6 +1171,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1199,6 +1214,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1242,6 +1258,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1284,6 +1301,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1332,6 +1350,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1379,6 +1398,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1425,6 +1445,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1474,6 +1495,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1520,6 +1542,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1623,6 +1646,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1663,6 +1687,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1703,6 +1728,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1747,6 +1773,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1779,6 +1806,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1816,6 +1844,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: Some(100),
             signatures: false,
@@ -1861,6 +1890,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1892,6 +1922,7 @@ mod tests {
             yes: true,
             diff_only: true,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1937,6 +1968,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2015,6 +2047,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2184,6 +2217,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2225,6 +2259,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2267,6 +2302,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2307,6 +2343,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2336,6 +2373,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2384,6 +2422,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2457,6 +2496,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,

@@ -31,6 +31,7 @@ pub struct ResolvedConfig {
     pub structure: bool,
     pub truncate: String,
     pub visibility: String,
+    pub encoding: String,
 }
 
 /// Result of configuration resolution including the final config and any warnings
@@ -95,6 +96,14 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
                 .visibility
                 .clone()
                 .unwrap_or_else(|| args.visibility.clone())
+        },
+        encoding: if args.encoding != "o200k_base" {
+            args.encoding.clone()
+        } else {
+            final_config
+                .encoding
+                .clone()
+                .unwrap_or_else(|| args.encoding.clone())
         },
     };
 
@@ -239,6 +248,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -276,6 +286,7 @@ mod tests {
             yes: false,                      // Default value
             diff_only: false,                // Default value
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -324,6 +335,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -358,6 +370,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -390,6 +403,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -424,6 +438,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -458,6 +473,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,

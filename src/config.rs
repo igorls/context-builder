@@ -84,6 +84,11 @@ pub struct Config {
 
     /// Filter signatures by visibility: "all", "public", or "private"
     pub visibility: Option<String>,
+
+    /// Tokenizer encoding for token counting/budgeting.
+    /// - "o200k_base": GPT-4o / o-series (default)
+    /// - "cl100k_base": GPT-4 / GPT-3.5
+    pub encoding: Option<String>,
 }
 
 /// Load configuration from `context-builder.toml` in the current working directory.
@@ -269,6 +274,7 @@ invalid_toml [
         assert!(config.structure.is_none());
         assert!(config.truncate.is_none());
         assert!(config.visibility.is_none());
+        assert!(config.encoding.is_none());
     }
 
     #[test]

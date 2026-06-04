@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 > Planned per `docs/research/next-release-roadmap.md`. This section tracks work as it lands.
 
+- **Accurate token counting — selectable tokenizer (F1)**
+  - New `--encoding {o200k_base|cl100k_base}` flag (and `encoding` config option), defaulting to **`o200k_base`** (GPT-4o / o-series). The previous hardcoded `cl100k_base` under-counts every modern OpenAI model. The selected encoding flows through `--token-count` (and, once F4 lands, `--max-tokens`)
+  - `--token-count` now reports counts using the chosen encoding
+
+- **CLI validation — invalid values are now rejected (F7)**
+  - `--truncate`, `--visibility`, and `--encoding` are constrained to their allowed sets via clap `value_parser`, so invalid values produce a clear `error: ... [possible values: ...]` instead of being silently coerced (fixes B3 `--visibility` and B4 `--truncate` silent-acceptance) and `--help` now lists the valid values
+
 - **Tree-Sitter correctness — honest `--signatures` / `--visibility`**
   - Fixed Java `--visibility` filter being completely non-functional — `get_visibility` returned `Visibility::All` unconditionally, so `--visibility public` dropped *every* Java symbol and `--visibility private` leaked *all* of them. It now inspects the declaration's `modifiers` node (B12)
   - Fixed C/C++ functions returning a pointer or reference being silently dropped — `find_function_name` now descends through `pointer_declarator` / `reference_declarator` / `parenthesized_declarator` to locate the `function_declarator` (B13)

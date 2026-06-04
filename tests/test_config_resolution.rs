@@ -68,6 +68,7 @@ fn run_with_resolved_config(
         structure: resolution.config.structure,
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
+        encoding: resolution.config.encoding,
     };
 
     // Create final Config with resolved values
@@ -122,6 +123,7 @@ output = "from_config.md"
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -204,6 +206,7 @@ ignore = ["target"]
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -290,6 +293,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -371,6 +375,7 @@ yes = true
         yes: false,          // Default - should use config
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -447,6 +452,7 @@ timestamped_output = false
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
