@@ -184,6 +184,11 @@ fn apply_config_to_args(args: &mut Args, config: &Config, warnings: &mut Vec<Str
 
 /// Resolve output path including timestamping and output folder logic
 fn resolve_output_path(args: &mut Args, config: &Config, warnings: &mut Vec<String>) {
+    // `-` means stdout: never fold in an output folder or a timestamp.
+    if args.output == "-" {
+        return;
+    }
+
     let mut output_folder_path: Option<PathBuf> = None;
 
     // Apply output folder first
@@ -423,6 +428,39 @@ mod tests {
         assert!(resolution.config.output.contains("docs"));
         assert!(resolution.config.output.contains("test_"));
         assert!(resolution.config.output.ends_with(".md"));
+    }
+
+    #[test]
+    fn stdout_output_bypasses_folder_and_timestamp() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "-".to_string(), // stdout
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            output_folder: Some("docs".to_string()),
+            timestamped_output: Some(true),
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args, Some(config));
+        // `-` must survive untouched — not folded into docs/ nor timestamped.
+        assert_eq!(resolution.config.output, "-");
     }
 
     #[test]

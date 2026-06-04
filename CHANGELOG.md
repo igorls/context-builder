@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
 - **CLI validation — invalid values are now rejected (F7)**
   - `--truncate`, `--visibility`, and `--encoding` are constrained to their allowed sets via clap `value_parser`, so invalid values produce a clear `error: ... [possible values: ...]` instead of being silently coerced (fixes B3 `--visibility` and B4 `--truncate` silent-acceptance) and `--help` now lists the valid values
 
+- **Pipe-friendly output — stream to stdout (F2)**
+  - `-o -` streams the generated document to **stdout** instead of a file, enabling `context-builder -f rs -o - | llm`. All progress/status chatter is suppressed (or already on stderr) in this mode so the pipe stays clean, and `-` is never folded into an output folder or timestamped name. Works for the auto-diff path too (the composed diff document is written to stdout)
+
 - **Trustworthy token budget — `--max-tokens` uses the real tokenizer (F4, B1, B2)**
   - `--max-tokens` now counts the real tokenizer (per `--encoding`) on each file's rendered output, replacing the crude `buf.len()/4` (parallel) and `metadata().len()/4` (serial) byte heuristics. Both code paths now estimate identically, restoring byte-for-byte determinism between parallel and non-parallel builds
   - Fixed the budget bypass where the first file was always emitted in full regardless of `--max-tokens` (the `tokens_used > 0` guard). The budget now applies to every file, including the first (B1)

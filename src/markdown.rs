@@ -43,13 +43,18 @@ pub fn generate_markdown(
     token_encoding: TokenEncoding,
     ts_config: &TreeSitterConfig,
 ) -> io::Result<()> {
-    if let Some(parent) = Path::new(output_path).parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut output = fs::File::create(output_path)?;
+    // `-` selects stdout (pipe mode, e.g. `context-builder -o - | llm`);
+    // otherwise create/truncate the file path (creating parent dirs as needed).
+    let mut output: Box<dyn Write + Send> = if output_path == "-" {
+        Box::new(io::stdout())
+    } else {
+        if let Some(parent) = Path::new(output_path).parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        Box::new(fs::File::create(output_path)?)
+    };
 
     let input_dir_name = if input_dir == "." {
         let current_dir = std::env::current_dir()?;

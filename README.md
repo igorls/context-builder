@@ -160,6 +160,9 @@ context-builder --token-count
 # Add line numbers to all code blocks
 context-builder --line-numbers
 
+# Stream the document to stdout and pipe it straight into an LLM tool
+context-builder -f rs -o - | llm
+
 # Skip all confirmation prompts (auto-answer yes)
 context-builder --yes
 
@@ -259,7 +262,7 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 ### Command Line Options
 
 - `-d, --input <PATH>` - Directory path to process (default: current directory).
-- `-o, --output <FILE>` - Output file path (default: `output.md`).
+- `-o, --output <FILE>` - Output file path (default: `output.md`). Use `-` to stream the document to **stdout** (e.g. `context-builder -o - | llm`); progress messages then go to stderr so the pipe stays clean.
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
 - `--max-tokens <N>` - Maximum token budget for the output. Files are truncated/skipped when exceeded.

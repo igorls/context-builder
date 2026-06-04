@@ -72,6 +72,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     // Use the finalized args passed in from run()
     let final_args = args;
+    // `-o -` streams the document to stdout (pipe mode). In this mode all
+    // human-facing chatter must go to stderr so it doesn't corrupt the pipe.
+    let to_stdout = final_args.output == "-";
     // Resolve base path. If input is '.' but current working directory lost the project context
     // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
     let mut resolved_base = PathBuf::from(&final_args.input);
@@ -520,20 +523,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             }
         }
 
-        // 5. Write output
-        let output_path = Path::new(&final_args.output);
-        if let Some(parent) = output_path.parent()
-            && !parent.exists()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            return Err(io::Error::other(format!(
-                "Failed to create output directory {}: {}",
-                parent.display(),
-                e
-            )));
+        // 5. Write output — to stdout in pipe mode, otherwise to the file.
+        if to_stdout {
+            io::stdout().write_all(final_doc.as_bytes())?;
+        } else {
+            let output_path = Path::new(&final_args.output);
+            if let Some(parent) = output_path.parent()
+                && !parent.exists()
+                && let Err(e) = fs::create_dir_all(parent)
+            {
+                return Err(io::Error::other(format!(
+                    "Failed to create output directory {}: {}",
+                    parent.display(),
+                    e
+                )));
+            }
+            let mut final_output = fs::File::create(output_path)?;
+            final_output.write_all(final_doc.as_bytes())?;
         }
-        let mut final_output = fs::File::create(output_path)?;
-        final_output.write_all(final_doc.as_bytes())?;
 
         // 6. Update cache with current state
         if let Err(e) = cache_manager.write_cache(&current_state)
@@ -543,7 +550,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
 
         let duration = start_time.elapsed();
-        if !silent {
+        if !silent && !to_stdout {
             if let Some(comp) = &comparison {
                 if comp.summary.has_changes() {
                     println!(
@@ -606,7 +613,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     )?;
 
     let duration = start_time.elapsed();
-    if !silent {
+    if !silent && !to_stdout {
         println!("Documentation created successfully: {}", final_args.output);
         println!("Processing time: {:.2?}", duration);
 
