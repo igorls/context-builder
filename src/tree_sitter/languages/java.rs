@@ -144,23 +144,60 @@ impl JavaSupport {
         }
     }
 
-    /// Determine a Java declaration's visibility from its `modifiers` child.
-    /// `public` → Public; `private`/`protected` and package-private (no modifier)
-    /// → Private. This keeps `--visibility public` scoped to the true public API
-    /// surface and `--visibility private` to everything else.
-    fn get_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
+    /// Text of the declaration's `modifiers` child, if present.
+    fn modifiers_text<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<&'a str> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "modifiers" {
-                let text = &source[child.start_byte()..child.end_byte()];
-                if text.split_whitespace().any(|t| t == "public") {
-                    return Visibility::Public;
-                }
-                return Visibility::Private;
+                return Some(&source[child.start_byte()..child.end_byte()]);
             }
         }
-        // No modifiers node → package-private, treated as non-public.
-        Visibility::Private
+        None
+    }
+
+    /// True when the declaration's nearest enclosing type is an interface or
+    /// annotation type — whose members are implicitly `public`.
+    fn is_interface_member(&self, node: &tree_sitter::Node) -> bool {
+        let mut current = node.parent();
+        while let Some(n) = current {
+            match n.kind() {
+                "interface_declaration" | "annotation_type_declaration" => return true,
+                // The nearest enclosing type is a class/enum/record, whose
+                // members are package-private by default — stop here.
+                "class_declaration" | "enum_declaration" | "record_declaration" => return false,
+                _ => {}
+            }
+            current = n.parent();
+        }
+        false
+    }
+
+    /// Determine a Java declaration's *effective* visibility, honoring Java's
+    /// implicit rules. An explicit `public` always wins, and an explicit
+    /// `private`/`protected` is respected even inside an interface. Otherwise a
+    /// declaration with no access modifier is **package-private** in a class/enum
+    /// but **implicitly public** as an interface/annotation member — without that
+    /// distinction, a public interface's methods (which carry no `modifiers`
+    /// node) would be classified non-public and dropped under `--visibility public`.
+    fn get_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
+        if let Some(text) = self.modifiers_text(node, source) {
+            if text.split_whitespace().any(|t| t == "public") {
+                return Visibility::Public;
+            }
+            if text
+                .split_whitespace()
+                .any(|t| t == "private" || t == "protected")
+            {
+                return Visibility::Private;
+            }
+            // Only non-access modifiers (e.g. `default`, `static`, `final`,
+            // `abstract`) — fall through to the implicit rule below.
+        }
+        if self.is_interface_member(node) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        }
     }
 
     fn extract_method_signature(
@@ -551,6 +588,35 @@ public class Api {
         assert!(
             !private_only.iter().any(|s| s.name == "Api"),
             "public class leaked into `private` filter"
+        );
+    }
+
+    #[test]
+    fn test_interface_methods_survive_public_filter() {
+        // Regression: interface methods are implicitly public but carry no
+        // `modifiers` node, so they were classified package-private and dropped
+        // under `--visibility public`, hiding a public interface's API. An
+        // explicitly `private` interface method (Java 9+) must still be filtered.
+        let source = r#"
+public interface Service {
+    void start();
+    String name();
+    private void internalHelper() {}
+}
+"#;
+
+        let public_only = JavaSupport.extract_signatures(source, Visibility::Public);
+        assert!(
+            public_only.iter().any(|s| s.name == "start"),
+            "implicitly-public interface method must pass the `public` filter"
+        );
+        assert!(
+            public_only.iter().any(|s| s.name == "name"),
+            "implicitly-public interface method must pass the `public` filter"
+        );
+        assert!(
+            !public_only.iter().any(|s| s.name == "internalHelper"),
+            "explicitly-private interface method must NOT pass the `public` filter"
         );
     }
 

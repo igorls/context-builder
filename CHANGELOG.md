@@ -44,6 +44,7 @@ All notable changes to this project will be documented in this file.
   - Fixed Python class base lists being double-parenthesized (`class User((Base))`) — `argument_list` already includes the surrounding parentheses (B16)
   - Fixed Rust restricted visibility (`pub(crate)` / `pub(super)` / `pub(in ...)`) being reported as fully public; restricted forms are no longer matched by `--visibility public` (B18)
   - Fixed a public trait's required methods being dropped under `--visibility public` — a `function_signature_item` carries no visibility modifier (Rust forbids one on trait items), so it now inherits the enclosing trait's visibility instead of defaulting to private; a public trait's required methods are part of its public API and are kept, while a private trait's are still filtered out
+  - Fixed the Java analog: a `public interface`'s methods are implicitly public but carry no `modifiers` node, so they were classified package-private and dropped under `--visibility public`. Java members with no access modifier are now resolved by context — implicitly public as interface/annotation members, package-private in a class/enum — while an explicit `private`/`protected` (incl. Java 9+ private interface methods) is still respected
   - Added regression tests covering each of the above
 
 - **Maintenance**
