@@ -320,7 +320,9 @@ impl CppSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("struct {}", name);
+        // Byte-slice to preserve inheritance/templates (e.g. `struct Foo : public Base`).
+        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list"])
+            .unwrap_or_else(|| format!("struct {}", name));
 
         Some(Signature {
             kind: SignatureKind::Struct,
@@ -336,7 +338,9 @@ impl CppSupport {
     fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("enum {}", name);
+        // Byte-slice to preserve `enum class` and the underlying type (e.g. `: int`).
+        let full_sig = slice_signature_before_body(source, node, &["enumerator_list"])
+            .unwrap_or_else(|| format!("enum {}", name));
 
         Some(Signature {
             kind: SignatureKind::Enum,
@@ -352,7 +356,10 @@ impl CppSupport {
     fn extract_alias_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("using/typedef {}", name);
+        // Preserve the full alias target, e.g. `using StringVec = std::vector<std::string>`
+        // or `typedef unsigned int uint`, instead of a bare `using/typedef X`.
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
 
         Some(Signature {
             kind: SignatureKind::TypeAlias,
@@ -382,18 +389,56 @@ impl CppSupport {
     }
 
     fn find_function_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        // Resolve the name strictly from inside the `function_declarator`,
+        // descending through pointer/reference/parenthesized wrappers so that
+        // pointer- and reference-returning functions are not dropped. We do NOT
+        // fall back to a sibling identifier — doing so would misread a qualified
+        // return type like `std::string` as the function name.
+        let decl = self.find_function_declarator(node)?;
+        self.declarator_name(&decl, source)
+    }
+
+    fn find_function_declarator<'a>(
+        &self,
+        node: &tree_sitter::Node<'a>,
+    ) -> Option<tree_sitter::Node<'a>> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "function_declarator" || child.kind() == "reference_declarator" {
-                let mut inner_cursor = child.walk();
-                for inner in child.children(&mut inner_cursor) {
-                    if inner.kind() == "identifier" || inner.kind() == "qualified_identifier" {
-                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+            match child.kind() {
+                "function_declarator" => return Some(child),
+                "pointer_declarator" | "reference_declarator" | "parenthesized_declarator" => {
+                    if let Some(found) = self.find_function_declarator(&child) {
+                        return Some(found);
                     }
                 }
+                _ => {}
             }
-            if child.kind() == "identifier" || child.kind() == "qualified_identifier" {
-                return Some(source[child.start_byte()..child.end_byte()].to_string());
+        }
+        None
+    }
+
+    /// Resolve the declared name inside a `function_declarator`, skipping the
+    /// parameter list and descending through nested declarators.
+    fn declarator_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "identifier"
+                | "qualified_identifier"
+                | "field_identifier"
+                | "destructor_name"
+                | "operator_name" => {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                "pointer_declarator"
+                | "reference_declarator"
+                | "parenthesized_declarator"
+                | "function_declarator" => {
+                    if let Some(name) = self.declarator_name(&child, source) {
+                        return Some(name);
+                    }
+                }
+                _ => {}
             }
         }
         None
@@ -509,6 +554,43 @@ void greet(const std::string& name) {
     }
 
     #[test]
+    fn test_pointer_and_qualified_return_functions() {
+        // Regression: pointer-returning functions were dropped, and a qualified
+        // return type (`std::string`) was misread as the function name.
+        let source = r#"
+int* makeArray(int n) {
+    return nullptr;
+}
+
+std::string greet(const std::string& who) {
+    return who;
+}
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let names: Vec<&str> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"makeArray"),
+            "pointer-returning function dropped; got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"greet"),
+            "function with qualified return type dropped; got {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"std::string"),
+            "qualified return type misread as function name; got {:?}",
+            names
+        );
+    }
+
+    #[test]
     fn test_extract_struct_signature() {
         let source = r#"
 struct Vec3 {
@@ -543,6 +625,53 @@ enum class Direction {
             .collect();
         assert!(!enums.is_empty());
         assert_eq!(enums[0].name, "Direction");
+    }
+
+    #[test]
+    fn test_struct_enum_alias_preserve_details() {
+        // Regression (B17): struct inheritance, enum underlying type, and alias
+        // targets were dropped by `format!`-based signatures.
+        let source = r#"
+struct Derived : public Base {
+    int x;
+};
+
+enum class Color : int {
+    Red,
+    Green
+};
+
+using StringVec = std::vector<std::string>;
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let s = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Struct && s.name == "Derived")
+            .expect("struct extracted");
+        assert!(
+            s.full_signature.contains(": public Base"),
+            "struct inheritance dropped: {}",
+            s.full_signature
+        );
+        let e = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Enum)
+            .expect("enum extracted");
+        assert!(
+            e.full_signature.contains(": int"),
+            "enum underlying type dropped: {}",
+            e.full_signature
+        );
+        let a = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::TypeAlias)
+            .expect("alias extracted");
+        assert!(
+            a.full_signature.contains("std::vector"),
+            "alias target dropped: {}",
+            a.full_signature
+        );
     }
 
     #[test]

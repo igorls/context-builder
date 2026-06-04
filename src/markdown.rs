@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use crate::token_count::{Encoding as TokenEncoding, estimate_tokens};
 use crate::tree::{FileTree, write_tree_to_file};
 use encoding_rs::{Encoding, UTF_8};
 
@@ -39,15 +40,21 @@ pub fn generate_markdown(
     line_numbers: bool,
     encoding_strategy: Option<&str>,
     max_tokens: Option<usize>,
+    token_encoding: TokenEncoding,
     ts_config: &TreeSitterConfig,
 ) -> io::Result<()> {
-    if let Some(parent) = Path::new(output_path).parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut output = fs::File::create(output_path)?;
+    // `-` selects stdout (pipe mode, e.g. `context-builder -o - | llm`);
+    // otherwise create/truncate the file path (creating parent dirs as needed).
+    let mut output: Box<dyn Write + Send> = if output_path == "-" {
+        Box::new(io::stdout())
+    } else {
+        if let Some(parent) = Path::new(output_path).parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        Box::new(fs::File::create(output_path)?)
+    };
 
     let input_dir_name = if input_dir == "." {
         let current_dir = std::env::current_dir()?;
@@ -60,32 +67,55 @@ pub fn generate_markdown(
         input_dir.to_string()
     };
 
-    // --- Header --- //
-    writeln!(output, "# Directory Structure Report\n")?;
+    // --- Header + file tree (buffered) --- //
+    // Build the header and tree into a buffer first so we can (a) write them in
+    // one shot and (b) debit their token cost from the `--max-tokens` budget.
+    let mut head_buf: Vec<u8> = Vec::new();
+    writeln!(head_buf, "# Directory Structure Report\n")?;
 
     if !filters.is_empty() {
         writeln!(
-            output,
+            head_buf,
             "This document contains files from the `{}` directory with extensions: {}",
             input_dir_name,
             filters.join(", ")
         )?;
     } else {
         writeln!(
-            output,
+            head_buf,
             "This document contains all files from the `{}` directory, optimized for LLM consumption.",
             input_dir_name
         )?;
     }
 
     if !ignores.is_empty() {
-        writeln!(output, "Custom ignored patterns: {}", ignores.join(", "))?;
+        writeln!(head_buf, "Custom ignored patterns: {}", ignores.join(", "))?;
     }
 
-    // Deterministic content hash (enables LLM prompt caching across runs)
-    // Uses xxh3 over file content bytes — stable across Rust versions and machines.
-    // Previous implementation hashed mtime (broken by git checkout, cp, etc.)
+    // Deterministic content hash (enables LLM prompt caching across runs).
+    // Hashes raw file content (NOT mtime — see v0.7.0; the rendered output embeds
+    // each file's mtime, so hashing emitted bytes would be volatile) PLUS every
+    // option that changes the rendered output. The hash is therefore a complete
+    // fingerprint: two runs share a hash iff they produce identical output.
+    // Folding in line_numbers / max_tokens / encoding / tree-sitter flags fixes
+    // the bug where toggling those yielded a different document under the same
+    // hash, and keeps the hash honest when `--max-tokens` truncates the file set.
     let mut content_hasher = xxhash_rust::xxh3::Xxh3::new();
+    content_hasher.update(b"line_numbers\0");
+    content_hasher.update(&[line_numbers as u8]);
+    // u64::MAX sentinel distinguishes "no budget" from any real value.
+    content_hasher.update(b"max_tokens\0");
+    content_hasher.update(&max_tokens.map_or(u64::MAX, |v| v as u64).to_le_bytes());
+    content_hasher.update(b"encoding\0");
+    content_hasher.update(format!("{token_encoding:?}").as_bytes());
+    content_hasher.update(b"\0ts\0");
+    content_hasher.update(&[ts_config.signatures as u8, ts_config.structure as u8]);
+    content_hasher.update(ts_config.truncate.as_bytes());
+    content_hasher.update(b"\0");
+    content_hasher.update(ts_config.visibility.as_bytes());
+    content_hasher.update(b"\0encoding_strategy\0");
+    content_hasher.update(encoding_strategy.unwrap_or("").as_bytes());
+    content_hasher.update(b"\0files\0");
     for entry in files {
         // Hash relative unix-style path for cross-OS determinism.
         // Using absolute or OS-native paths would produce different hashes
@@ -101,16 +131,22 @@ pub fn generate_markdown(
         }
         content_hasher.update(b"\0");
     }
-    writeln!(output, "Content hash: {:016x}", content_hasher.digest())?;
-    writeln!(output)?;
+    writeln!(head_buf, "Content hash: {:016x}", content_hasher.digest())?;
+    writeln!(head_buf)?;
 
-    // --- File Tree --- //
+    writeln!(head_buf, "## File Tree Structure\n")?;
+    write_tree_to_file(&mut head_buf, file_tree, 0)?;
+    writeln!(head_buf)?;
 
-    writeln!(output, "## File Tree Structure\n")?;
+    // Debit the header + tree token cost so `--max-tokens` budgets the whole
+    // document, not just file bodies. Only computed when a budget is set
+    // (the tokenizer call is not free).
+    let header_tokens = match max_tokens {
+        Some(_) => estimate_tokens(token_encoding, &String::from_utf8_lossy(&head_buf)),
+        None => 0,
+    };
 
-    write_tree_to_file(&mut output, file_tree, 0)?;
-
-    writeln!(output)?;
+    output.write_all(&head_buf)?;
 
     // (No '## Files' heading here; it will be injected later only once during final composition)
     // (Diff section will be conditionally inserted later by the auto_diff logic in lib.rs)
@@ -133,7 +169,7 @@ pub fn generate_markdown(
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
-                let mut tokens_used: usize = 0;
+                let mut tokens_used: usize = header_tokens;
                 let mut budget_exceeded = false;
 
                 // Receive chunks and write them in order
@@ -152,12 +188,24 @@ pub fn generate_markdown(
 
                                 match chunk_result {
                                     Ok(buf) => {
-                                        // Estimate tokens for this chunk (~4 bytes per token)
-                                        let chunk_tokens = buf.len() / 4;
+                                        // Count tokens of the rendered chunk with the real
+                                        // tokenizer (same as the serial path, so both builds
+                                        // truncate identically and the hash stays stable).
+                                        // Only pay for tokenization when a budget is set.
+                                        let chunk_tokens = if budget.is_some() {
+                                            estimate_tokens(
+                                                token_encoding,
+                                                &String::from_utf8_lossy(&buf),
+                                            )
+                                        } else {
+                                            0
+                                        };
 
+                                        // Budget applies to every file, including the first
+                                        // (no `tokens_used > 0` bypass): a single oversized
+                                        // file no longer slips through in full.
                                         if let Some(max) = budget
                                             && tokens_used + chunk_tokens > max
-                                            && tokens_used > 0
                                         {
                                             let remaining = total_files - next_index;
                                             let notice = format!(
@@ -245,37 +293,58 @@ pub fn generate_markdown(
 
     #[cfg(not(feature = "parallel"))]
     {
-        let mut tokens_used: usize = 0;
-
-        for (idx, entry) in files.iter().enumerate() {
-            // Estimate tokens for this file (~4 bytes per token)
-            let file_size = std::fs::metadata(entry.path())
-                .map(|m| m.len())
-                .unwrap_or(0);
-            let estimated_file_tokens = (file_size as usize) / 4;
-
-            if let Some(budget) = max_tokens {
-                if tokens_used + estimated_file_tokens > budget && tokens_used > 0 {
-                    let remaining = files.len() - idx;
-                    writeln!(output, "---\n")?;
-                    writeln!(
-                        output,
-                        "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
-                        budget, remaining
+        match max_tokens {
+            // No budget: stream each file straight to the output (as the serial
+            // path did before v0.9.0). Buffering would only be needed to count
+            // tokens, so without a budget it just inflates peak memory by the
+            // size of the largest file for no benefit.
+            None => {
+                for entry in files.iter() {
+                    process_file(
+                        base_path,
+                        entry.path(),
+                        &mut output,
+                        line_numbers,
+                        encoding_strategy,
+                        ts_config,
                     )?;
-                    break;
                 }
             }
+            // Budget set: render each file into a buffer first so the rendered
+            // chunk can be tokenized before we decide to emit it — identical to
+            // the parallel path, so both builds truncate at the same boundary.
+            Some(budget) => {
+                let mut tokens_used: usize = header_tokens;
 
-            tokens_used += estimated_file_tokens;
-            process_file(
-                base_path,
-                entry.path(),
-                &mut output,
-                line_numbers,
-                encoding_strategy,
-                ts_config,
-            )?;
+                for (idx, entry) in files.iter().enumerate() {
+                    let mut buf: Vec<u8> = Vec::new();
+                    process_file(
+                        base_path,
+                        entry.path(),
+                        &mut buf,
+                        line_numbers,
+                        encoding_strategy,
+                        ts_config,
+                    )?;
+                    let chunk_tokens =
+                        estimate_tokens(token_encoding, &String::from_utf8_lossy(&buf));
+
+                    // Budget applies to every file, including the first (no bypass).
+                    if tokens_used + chunk_tokens > budget {
+                        let remaining = files.len() - idx;
+                        writeln!(output, "---\n")?;
+                        writeln!(
+                            output,
+                            "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
+                            budget, remaining
+                        )?;
+                        break;
+                    }
+
+                    tokens_used += chunk_tokens;
+                    output.write_all(&buf)?;
+                }
+            }
         }
     }
 
@@ -1040,6 +1109,7 @@ mod tests {
             false,
             None,
             None, // max_tokens
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
@@ -1074,6 +1144,7 @@ mod tests {
             false,
             None,
             None, // max_tokens
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
@@ -1106,6 +1177,7 @@ mod tests {
             true,
             Some("strict"),
             None, // max_tokens
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
@@ -1474,8 +1546,18 @@ mod tests {
         let base_path = dir.path();
         let output_path = base_path.join("output.md");
 
-        fs::write(base_path.join("file1.txt"), "x".repeat(50000)).unwrap();
-        fs::write(base_path.join("file2.txt"), "y".repeat(50000)).unwrap();
+        // Whitespace-separated words so the tokenizer pre-splits cheaply (a long
+        // run of a single char with no whitespace is a pathological BPE case).
+        fs::write(
+            base_path.join("file1.txt"),
+            "alpha beta gamma delta ".repeat(1000),
+        )
+        .unwrap();
+        fs::write(
+            base_path.join("file2.txt"),
+            "epsilon zeta eta theta ".repeat(1000),
+        )
+        .unwrap();
 
         let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
         let file_tree = crate::tree::build_file_tree(&files, base_path);
@@ -1491,12 +1573,106 @@ mod tests {
             false,
             None,
             Some(100),
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
         assert!(result.is_ok());
         let content = fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("Token budget") || content.len() < 1000);
+    }
+
+    #[test]
+    fn test_max_tokens_truncates_single_oversized_first_file() {
+        // Regression (B1): the first file used to bypass the budget and was always
+        // emitted in full. A single oversized file is now omitted with a notice.
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        // ~17 KB of whitespace-separated text (well over a 100-token budget) with a
+        // unique marker we can assert is absent. Avoid a single-char run (slow BPE).
+        let body = "UNIQUE_BODY_MARKER alpha beta gamma ".repeat(500);
+        fs::write(base_path.join("huge.txt"), &body).unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            "project",
+            &[],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            Some(100), // tiny budget — smaller than the single file
+            TokenEncoding::default(),
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(
+            content.contains("Token budget"),
+            "expected the budget notice"
+        );
+        assert!(
+            !content.contains("UNIQUE_BODY_MARKER"),
+            "oversized first file body leaked despite the budget"
+        );
+    }
+
+    #[test]
+    fn test_content_hash_reflects_output_options() {
+        // Regression (B2): the hash must change when an output-affecting option
+        // changes (else prompt caching reuses a stale document), and must be
+        // identical for identical inputs (deterministic / cacheable).
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(base_path.join("a.txt"), "hello world").unwrap();
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let render = |line_numbers: bool, out: &std::path::Path| {
+            generate_markdown(
+                &out.to_string_lossy(),
+                "p",
+                &[],
+                &[],
+                &file_tree,
+                &files,
+                base_path,
+                line_numbers,
+                None,
+                None,
+                TokenEncoding::default(),
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+        };
+        let hash_of = |p: &std::path::Path| {
+            fs::read_to_string(p)
+                .unwrap()
+                .lines()
+                .find(|l| l.starts_with("Content hash:"))
+                .unwrap()
+                .to_string()
+        };
+
+        let o1 = base_path.join("o1.md");
+        let o2 = base_path.join("o2.md");
+        let o3 = base_path.join("o3.md");
+        render(false, &o1);
+        render(true, &o2);
+        render(false, &o3);
+
+        // Toggling line_numbers changes the rendered output → hash must change.
+        assert_ne!(hash_of(&o1), hash_of(&o2));
+        // Same options → identical hash.
+        assert_eq!(hash_of(&o1), hash_of(&o3));
     }
 
     #[test]
@@ -1572,6 +1748,7 @@ mod tests {
             false,
             None,
             None,
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 

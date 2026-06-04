@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches};
 
 use std::fs;
 use std::io::{self, Write};
@@ -26,7 +26,7 @@ use diff::render_per_file_diffs;
 use file_utils::{collect_files, confirm_overwrite, confirm_processing};
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
-use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
+use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
 use tree::{build_file_tree, print_tree};
 
 /// Configuration for diff operations
@@ -72,6 +72,20 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     // Use the finalized args passed in from run()
     let final_args = args;
+    // `-o -` streams the document to stdout (pipe mode). In this mode all
+    // human-facing chatter must go to stderr so it doesn't corrupt the pipe.
+    let to_stdout = final_args.output == "-";
+
+    // B5: warn on an unrecognized encoding_strategy instead of silently using
+    // "detect". Validates the config value against the supported set.
+    if let Some(ref strat) = config.encoding_strategy
+        && !matches!(strat.as_str(), "detect" | "strict" | "skip")
+        && !silent
+    {
+        eprintln!(
+            "⚠️  Unknown encoding_strategy '{strat}' in config; expected one of: detect, strict, skip. Falling back to 'detect'."
+        );
+    }
     // Resolve base path. If input is '.' but current working directory lost the project context
     // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
     let mut resolved_base = PathBuf::from(&final_args.input);
@@ -246,7 +260,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
 
         if !large_files.is_empty() {
-            large_files.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by size descending
+            large_files.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by size descending
             eprintln!(
                 "\n⚠  {} large file(s) detected (>{} KB):",
                 large_files.len(),
@@ -279,34 +293,62 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     if final_args.token_count {
         if !silent {
+            let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
+            // Render each file through the same path as the document so the
+            // preview matches what would actually be produced (B9).
+            let ts_config = markdown::TreeSitterConfig {
+                signatures: final_args.signatures,
+                structure: final_args.structure,
+                truncate: final_args.truncate.clone(),
+                visibility: final_args.visibility.clone(),
+            };
+            let enc_strategy = config.encoding_strategy.as_deref();
             println!("\n# Token Count Estimation\n");
             let mut total_tokens = 0;
-            total_tokens += estimate_tokens("# Directory Structure Report\n\n");
+            total_tokens += estimate_tokens(encoding, "# Directory Structure Report\n\n");
             if !final_args.filter.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains files from the `{}` directory with extensions: {} \n",
-                    final_args.input,
-                    final_args.filter.join(", ")
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "This document contains files from the `{}` directory with extensions: {} \n",
+                        final_args.input,
+                        final_args.filter.join(", ")
+                    ),
+                );
             } else {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
-                    final_args.input
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
+                        final_args.input
+                    ),
+                );
             }
             if !final_args.ignore.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "Custom ignored patterns: {} \n",
-                    final_args.ignore.join(", ")
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "Custom ignored patterns: {} \n",
+                        final_args.ignore.join(", ")
+                    ),
+                );
             }
-            total_tokens += estimate_tokens("Content hash: 0000000000000000\n\n");
-            total_tokens += estimate_tokens("## File Tree Structure\n\n");
-            let tree_tokens = count_tree_tokens(&file_tree, 0);
+            total_tokens += estimate_tokens(encoding, "Content hash: 0000000000000000\n\n");
+            total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
+            let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
             let file_tokens: usize = files
                 .iter()
-                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers))
+                .map(|entry| {
+                    count_file_tokens(
+                        base_path,
+                        entry,
+                        final_args.line_numbers,
+                        encoding,
+                        enc_strategy,
+                        &ts_config,
+                    )
+                })
                 .sum();
             total_tokens += file_tokens;
             println!("Estimated total tokens: {}", total_tokens);
@@ -316,7 +358,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         return Ok(());
     }
 
-    if !final_args.yes && !prompter.confirm_processing(files.len())? {
+    // In pipe mode (`-o -`) there is no interactive terminal to answer a prompt,
+    // and `confirm_processing` would `print!` to stdout — corrupting the piped
+    // document and blocking on stdin. Skip the >100-file confirmation and proceed,
+    // exactly as `--yes` would.
+    if !final_args.yes && !to_stdout && !prompter.confirm_processing(files.len())? {
         if !silent {
             println!("Operation cancelled.");
         }
@@ -330,20 +376,31 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // by config_resolver.rs with proper CLI-takes-precedence semantics.
     // Do NOT re-apply them here as that would silently overwrite CLI flags.
 
+    // B8: --diff-only only takes effect together with auto_diff (+ timestamped
+    // output). Warn instead of silently emitting full file contents.
+    if final_args.diff_only && !config.auto_diff.unwrap_or(false) && !silent {
+        eprintln!(
+            "⚠️  --diff-only has no effect without auto_diff (it also needs timestamped_output). \
+             Full file contents will be emitted. Enable auto_diff = true + timestamped_output = true to use diff-only mode."
+        );
+    }
+
     if config.auto_diff.unwrap_or(false) {
-        // Build an effective config that mirrors the *actual* operational settings coming
-        // from resolved CLI args (filters/ignores/line_numbers). This ensures the
-        // configuration hash used for cache invalidation reflects real behavior and
-        // stays consistent across runs even when values originate from CLI not file.
+        // Build an effective config that mirrors the *actual* file selection coming
+        // from resolved CLI args, so the cache/diff fingerprint reflects real
+        // behavior even when filter/ignore originate from the CLI, not the config
+        // file. Only `filter`/`ignore` matter: they decide which files form the
+        // diff baseline. Rendering options (signatures/structure/truncate/
+        // visibility/max_tokens/line_numbers/encoding) deliberately do NOT feed the
+        // fingerprint — they don't change the captured raw content — so propagating
+        // them here would only risk spurious baseline resets (see `config_fingerprint`).
         let mut effective_config = config.clone();
-        // Normalize filter/ignore/line_numbers into config so hashing sees them
         if !final_args.filter.is_empty() {
             effective_config.filter = Some(final_args.filter.clone());
         }
         if !final_args.ignore.is_empty() {
             effective_config.ignore = Some(final_args.ignore.clone());
         }
-        effective_config.line_numbers = Some(final_args.line_numbers);
 
         // 1. Create current project state
         let current_state = ProjectState::from_files(
@@ -490,20 +547,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             }
         }
 
-        // 5. Write output
-        let output_path = Path::new(&final_args.output);
-        if let Some(parent) = output_path.parent()
-            && !parent.exists()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            return Err(io::Error::other(format!(
-                "Failed to create output directory {}: {}",
-                parent.display(),
-                e
-            )));
+        // 5. Write output — to stdout in pipe mode, otherwise to the file.
+        if to_stdout {
+            io::stdout().write_all(final_doc.as_bytes())?;
+        } else {
+            let output_path = Path::new(&final_args.output);
+            if let Some(parent) = output_path.parent()
+                && !parent.exists()
+                && let Err(e) = fs::create_dir_all(parent)
+            {
+                return Err(io::Error::other(format!(
+                    "Failed to create output directory {}: {}",
+                    parent.display(),
+                    e
+                )));
+            }
+            let mut final_output = fs::File::create(output_path)?;
+            final_output.write_all(final_doc.as_bytes())?;
         }
-        let mut final_output = fs::File::create(output_path)?;
-        final_output.write_all(final_doc.as_bytes())?;
 
         // 6. Update cache with current state
         if let Err(e) = cache_manager.write_cache(&current_state)
@@ -513,7 +574,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
 
         let duration = start_time.elapsed();
-        if !silent {
+        if !silent && !to_stdout {
             if let Some(comp) = &comparison {
                 if comp.summary.has_changes() {
                     println!(
@@ -571,11 +632,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         final_args.line_numbers,
         config.encoding_strategy.as_deref(),
         final_args.max_tokens,
+        final_args.encoding.parse::<Encoding>().unwrap_or_default(),
         &ts_config,
     )?;
 
     let duration = start_time.elapsed();
-    if !silent {
+    if !silent && !to_stdout {
         println!("Documentation created successfully: {}", final_args.output);
         println!("Processing time: {:.2?}", duration);
 
@@ -794,7 +856,19 @@ fn generate_markdown_with_diff(
 
 pub fn run() -> io::Result<()> {
     env_logger::init();
-    let args = Args::parse();
+    // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
+    // value-bearing flags were *explicitly* passed or left at their clap default.
+    // `--encoding o200k_base` carries the same value as the default, so the value
+    // alone can't reveal an intent to override a non-default config (see resolver).
+    let matches = Args::command().get_matches();
+    let explicit = crate::config_resolver::ExplicitCli {
+        truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
+        visibility: matches.value_source("visibility")
+            == Some(clap::parser::ValueSource::CommandLine),
+        encoding: matches.value_source("encoding") == Some(clap::parser::ValueSource::CommandLine),
+    };
+    let args = Args::from_arg_matches(&matches)
+        .expect("arguments were already validated by get_matches()");
 
     // Handle init command first
     if args.init {
@@ -825,7 +899,7 @@ pub fn run() -> io::Result<()> {
     }
 
     // Resolve final configuration using the new config resolver
-    let resolution = crate::config_resolver::resolve_final_config(args, config.clone());
+    let resolution = crate::config_resolver::resolve_final_config(args, config.clone(), explicit);
 
     // Print warnings if any
     let silent = std::env::var("CB_SILENT")
@@ -856,6 +930,7 @@ pub fn run() -> io::Result<()> {
         structure: resolution.config.structure,
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
+        encoding: resolution.config.encoding,
     };
 
     // Create final Config with resolved values
@@ -895,7 +970,7 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
 
     // Convert to vector of (extension, count) pairs and sort by count
     let mut extensions: Vec<(String, usize)> = extension_counts.into_iter().collect();
-    extensions.sort_by(|a, b| b.1.cmp(&a.1));
+    extensions.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Take the top 5 extensions or all if less than 5
     let top_extensions: Vec<String> = extensions.into_iter().take(5).map(|(ext, _)| ext).collect();
@@ -1041,6 +1116,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1077,6 +1153,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1118,6 +1195,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1157,6 +1235,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1199,6 +1278,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1242,6 +1322,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1284,6 +1365,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1332,6 +1414,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1379,6 +1462,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1425,6 +1509,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1474,6 +1559,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1520,6 +1606,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1623,6 +1710,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1663,6 +1751,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1703,6 +1792,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1747,6 +1837,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1779,6 +1870,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1816,6 +1908,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: Some(100),
             signatures: false,
@@ -1861,6 +1954,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1892,6 +1986,7 @@ mod tests {
             yes: true,
             diff_only: true,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -1937,6 +2032,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2015,6 +2111,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2184,6 +2281,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2225,6 +2323,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2267,6 +2366,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2307,6 +2407,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2336,6 +2437,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2384,6 +2486,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2457,6 +2560,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,

@@ -102,6 +102,7 @@ impl RustSupport {
                 let is_item = matches!(
                     node.kind(),
                     "function_item"
+                        | "function_signature_item"
                         | "struct_item"
                         | "enum_item"
                         | "trait_item"
@@ -181,6 +182,11 @@ impl RustSupport {
                     signatures.push(sig);
                 }
             }
+            "function_signature_item" => {
+                if let Some(sig) = self.extract_function_sig_item(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
             _ => {}
         }
 
@@ -204,6 +210,7 @@ impl RustSupport {
             "const_item" => structure.constants += 1,
             "type_item" => structure.type_aliases += 1,
             "macro_definition" => structure.macros += 1,
+            "function_signature_item" => structure.functions += 1,
             "use_declaration" => {
                 structure
                     .imports
@@ -218,22 +225,51 @@ impl RustSupport {
         }
     }
 
-    fn is_public(&self, node: &tree_sitter::Node) -> bool {
+    /// Determine a Rust item's visibility. Only a bare `pub` counts as Public;
+    /// restricted forms (`pub(crate)`, `pub(super)`, `pub(in path)`) are not part
+    /// of the crate's public API, so they are treated as Private for filtering.
+    fn get_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "visibility_modifier" {
-                return true;
+                let text = self.node_text(source, &child).trim();
+                return if text == "pub" {
+                    Visibility::Public
+                } else {
+                    // pub(crate) / pub(super) / pub(self) / pub(in ...) → restricted
+                    Visibility::Private
+                };
             }
         }
-        false
+        Visibility::Private
     }
 
-    fn get_visibility(&self, node: &tree_sitter::Node) -> Visibility {
-        if self.is_public(node) {
-            Visibility::Public
-        } else {
-            Visibility::Private
+    /// Effective visibility of a bodiless `fn` declaration (`function_signature_item`).
+    /// Rust forbids a `visibility_modifier` on a required trait method, so such a
+    /// method's real visibility is the enclosing trait's — without this, a public
+    /// trait's required methods would be classified `Private` and dropped under
+    /// `--visibility public`. A declaration that carries its own modifier (e.g.
+    /// `extern "C" { pub fn .. }`) keeps it; `extern` declarations with no modifier
+    /// stay module-private, as they should.
+    fn sig_item_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
+        // An explicit `pub` on the declaration itself always wins.
+        let own = self.get_visibility(node, source);
+        if own == Visibility::Public {
+            return own;
         }
+        // Otherwise inherit from the nearest enclosing trait, if any.
+        let mut current = node.parent();
+        while let Some(n) = current {
+            match n.kind() {
+                "trait_item" => return self.get_visibility(&n, source),
+                // Stop once we leave the trait body without finding a trait
+                // (e.g. an `extern` block, an impl, or the file root).
+                "impl_item" | "function_item" | "mod_item" | "source_file" => break,
+                _ => {}
+            }
+            current = n.parent();
+        }
+        own
     }
 
     fn node_text<'a>(&self, source: &'a str, node: &tree_sitter::Node) -> &'a str {
@@ -246,7 +282,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -285,13 +321,51 @@ impl RustSupport {
         })
     }
 
+    /// Extract a bodiless function declaration (`function_signature_item`), e.g. a
+    /// required trait method `fn draw(&self);` or an `extern` block declaration.
+    /// These have no `block`, so the slice-before-body path finds no body; we
+    /// slice the whole node and drop the trailing `;` to preserve generics,
+    /// return types, and where-clauses.
+    fn extract_function_sig_item(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.sig_item_visibility(node, source);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "parameters", source);
+        let return_type = self.find_child_text(node, "return_type", source);
+
+        let text = self.node_text(source, node).trim_end();
+        let full_signature = text
+            .strip_suffix(';')
+            .unwrap_or(text)
+            .trim_end()
+            .to_string();
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature,
+        })
+    }
+
     fn extract_struct_signature(
         &self,
         source: &str,
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -333,7 +407,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -369,7 +443,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -428,7 +502,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -459,7 +533,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -490,7 +564,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -521,7 +595,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -605,6 +679,78 @@ fn private_fn() {}
         let signatures = RustSupport.extract_signatures(source, Visibility::Public);
         assert_eq!(signatures.len(), 1);
         assert_eq!(signatures[0].name, "public_fn");
+    }
+
+    #[test]
+    fn test_extract_trait_method_signatures() {
+        // Regression: bodiless trait methods (`function_signature_item`) were
+        // dropped entirely, leaving trait views incomplete.
+        let source = r#"
+pub trait Drawable {
+    fn draw(&self);
+    fn area(&self) -> f64;
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        assert!(
+            signatures.iter().any(|s| s.name == "draw"),
+            "bodiless trait method `draw` should be extracted"
+        );
+        let area = signatures
+            .iter()
+            .find(|s| s.name == "area")
+            .expect("bodiless trait method `area` should be extracted");
+        assert!(area.full_signature.contains("-> f64"));
+        assert!(!area.full_signature.ends_with(';'));
+    }
+
+    #[test]
+    fn test_public_trait_methods_survive_public_filter() {
+        // Regression: required trait methods carry no `visibility_modifier`
+        // (Rust forbids one), so they were classified Private and dropped under
+        // `--visibility public` — hiding a public trait's API. They must inherit
+        // the trait's visibility instead.
+        let source = r#"
+pub trait Drawable {
+    fn draw(&self);
+    fn area(&self) -> f64;
+}
+
+trait Hidden {
+    fn secret(&self);
+}
+"#;
+
+        let public_only = RustSupport.extract_signatures(source, Visibility::Public);
+        assert!(
+            public_only.iter().any(|s| s.name == "draw"),
+            "a public trait's required methods must pass the `public` filter"
+        );
+        assert!(
+            public_only.iter().any(|s| s.name == "area"),
+            "a public trait's required methods must pass the `public` filter"
+        );
+        assert!(
+            !public_only.iter().any(|s| s.name == "secret"),
+            "a private trait's methods must NOT pass the `public` filter"
+        );
+    }
+
+    #[test]
+    fn test_pub_crate_is_not_public() {
+        // Regression: pub(crate)/pub(super) were reported as fully public.
+        let source = r#"
+pub fn fully_public() {}
+pub(crate) fn crate_only() {}
+"#;
+
+        let public_only = RustSupport.extract_signatures(source, Visibility::Public);
+        assert!(public_only.iter().any(|s| s.name == "fully_public"));
+        assert!(
+            !public_only.iter().any(|s| s.name == "crate_only"),
+            "pub(crate) must not pass the `public` visibility filter"
+        );
     }
 
     #[test]

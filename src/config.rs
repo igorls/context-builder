@@ -84,6 +84,40 @@ pub struct Config {
 
     /// Filter signatures by visibility: "all", "public", or "private"
     pub visibility: Option<String>,
+
+    /// Tokenizer encoding for token counting/budgeting.
+    /// - "o200k_base": GPT-4o / o-series (default)
+    /// - "cl100k_base": GPT-4 / GPT-3.5
+    pub encoding: Option<String>,
+}
+
+/// Stable fingerprint of the configuration that determines the auto-diff
+/// *baseline* — i.e. which files are captured and compared between runs. Shared
+/// by the cache key (`cache.rs`) and the project-state config hash (`state.rs`)
+/// so the two can never drift out of sync.
+///
+/// The baseline is the **raw content** of the selected files (`ProjectState`
+/// stores each file's bytes via `read_to_string`; the diff compares those). The
+/// only inputs that change that baseline are the file-selection options:
+/// `filter` and `ignore`. Everything else is pure *rendering* — `line_numbers`,
+/// `signatures`, `structure`, `truncate`, `visibility`, `max_tokens`,
+/// `encoding`/`encoding_strategy`, `diff_context_lines`, `diff_only`,
+/// `timestamped_output`, `output_folder` — and does **not** affect the captured
+/// content. Such options are deliberately EXCLUDED: including them would reset
+/// the diff baseline whenever a user toggles one (e.g. adding `--signatures`),
+/// silently hiding real content changes on that run. (The project *path* is
+/// keyed separately in `cache.rs`, so it isn't part of this fingerprint.)
+pub(crate) fn config_fingerprint(config: &Config) -> String {
+    let mut s = String::new();
+    if let Some(ref filters) = config.filter {
+        s.push_str(&filters.join(","));
+    }
+    s.push('|');
+    if let Some(ref ignores) = config.ignore {
+        s.push_str(&ignores.join(","));
+    }
+    let hash = xxhash_rust::xxh3::xxh3_64(s.as_bytes());
+    format!("{:x}", hash)
 }
 
 /// Load configuration from `context-builder.toml` in the current working directory.
@@ -269,6 +303,61 @@ invalid_toml [
         assert!(config.structure.is_none());
         assert!(config.truncate.is_none());
         assert!(config.visibility.is_none());
+        assert!(config.encoding.is_none());
+    }
+
+    #[test]
+    fn config_fingerprint_sensitivity() {
+        // The cache/diff fingerprint must change ONLY for the file-selection
+        // options (filter, ignore) that determine which files form the comparable
+        // baseline. Every pure output-rendering option must leave it untouched, so
+        // toggling one against an existing baseline never discards the diff.
+        let base = Config::default();
+        let base_h = config_fingerprint(&base);
+
+        // --- File selection: MUST change the fingerprint ---
+        let mut c = base.clone();
+        c.filter = Some(vec!["rs".to_string()]);
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "filter changes which files are captured, so it must change the fingerprint"
+        );
+
+        let mut c = base.clone();
+        c.ignore = Some(vec!["target".to_string()]);
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "ignore changes which files are captured, so it must change the fingerprint"
+        );
+
+        // --- Rendering options: MUST NOT change the fingerprint ---
+        // (none of these affect the raw content captured into the diff baseline)
+        type Mutate = fn(&mut Config);
+        let render_only: Vec<(&str, Mutate)> = vec![
+            ("line_numbers", |c| c.line_numbers = Some(true)),
+            ("signatures", |c| c.signatures = Some(true)),
+            ("structure", |c| c.structure = Some(true)),
+            ("truncate", |c| c.truncate = Some("byte".to_string())),
+            ("visibility", |c| c.visibility = Some("public".to_string())),
+            ("max_tokens", |c| c.max_tokens = Some(1000)),
+            ("encoding", |c| c.encoding = Some("cl100k_base".to_string())),
+            ("encoding_strategy", |c| {
+                c.encoding_strategy = Some("strict".to_string())
+            }),
+            ("diff_only", |c| c.diff_only = Some(true)),
+            ("diff_context_lines", |c| c.diff_context_lines = Some(9)),
+        ];
+        for (name, mutate) in render_only {
+            let mut c = base.clone();
+            mutate(&mut c);
+            assert_eq!(
+                config_fingerprint(&c),
+                base_h,
+                "{name} is a pure rendering option and must NOT invalidate the diff baseline"
+            );
+        }
     }
 
     #[test]

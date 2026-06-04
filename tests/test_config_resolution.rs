@@ -48,7 +48,11 @@ fn run_with_resolved_config(
     prompter: &impl Prompter,
 ) -> std::io::Result<()> {
     // Resolve final configuration using the new config resolver
-    let resolution = resolve_final_config(args, config.clone());
+    let resolution = resolve_final_config(
+        args,
+        config.clone(),
+        context_builder::config_resolver::ExplicitCli::default(),
+    );
 
     // Convert resolved config back to Args for run_with_args
     let final_args = Args {
@@ -68,6 +72,7 @@ fn run_with_resolved_config(
         structure: resolution.config.structure,
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
+        encoding: resolution.config.encoding,
     };
 
     // Create final Config with resolved values
@@ -122,6 +127,7 @@ output = "from_config.md"
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -204,6 +210,7 @@ ignore = ["target"]
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -290,6 +297,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -371,6 +379,7 @@ yes = true
         yes: false,          // Default - should use config
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -447,6 +456,7 @@ timestamped_output = false
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,

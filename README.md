@@ -160,6 +160,9 @@ context-builder --token-count
 # Add line numbers to all code blocks
 context-builder --line-numbers
 
+# Stream the document to stdout and pipe it straight into an LLM tool
+context-builder -f rs -o - | llm
+
 # Skip all confirmation prompts (auto-answer yes)
 context-builder --yes
 
@@ -218,6 +221,10 @@ preview = false
 # Token counting mode
 token_count = false
 
+# Tokenizer encoding for --token-count / --max-tokens
+# Options: "o200k_base" (GPT-4o / o-series, default) or "cl100k_base" (GPT-4 / GPT-3.5)
+encoding = "o200k_base"
+
 
 # Automatically answer yes to all prompts
 
@@ -255,7 +262,7 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 ### Command Line Options
 
 - `-d, --input <PATH>` - Directory path to process (default: current directory).
-- `-o, --output <FILE>` - Output file path (default: `output.md`).
+- `-o, --output <FILE>` - Output file path (default: `output.md`). Use `-` to stream the document to **stdout** (e.g. `context-builder -o - | llm`); progress messages then go to stderr so the pipe stays clean.
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
 - `--max-tokens <N>` - Maximum token budget for the output. Files are truncated/skipped when exceeded.
@@ -267,14 +274,16 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
 - `--signatures` - Replace full file content with extracted function/class signatures *(requires tree-sitter)*.
 - `--structure` - Append structural summary (function/class counts) to each file *(requires tree-sitter)*.
-- `--truncate <MODE>` - Truncation strategy: `none` (default) or `smart` (AST-boundary aware) *(requires tree-sitter)*.
+- `--truncate <MODE>` - Truncation strategy for `--max-tokens`: `smart` (AST-boundary aware, default) or `byte` *(requires tree-sitter)*.
+- `--visibility <FILTER>` - Filter extracted signatures by visibility: `all` (default), `public`, or `private` *(requires tree-sitter)*.
+- `--encoding <ENC>` - Tokenizer used for `--token-count` and `--max-tokens`: `o200k_base` (GPT-4o / o-series, default) or `cl100k_base` (GPT-4 / GPT-3.5).
 - `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
 ---
 
 ## Token Counting
 
-Context Builder uses the `tiktoken-rs` library to provide accurate token counts for OpenAI models. This ensures that the token count is as close as possible to the actual number of tokens that will be used by the model.
+Context Builder uses the `tiktoken-rs` library to provide accurate token counts. By default it uses the **`o200k_base`** encoding, which matches GPT-4o and the o-series (and is a close approximation for current frontier models). Use `--encoding cl100k_base` for GPT-4 / GPT-3.5. The selected encoding applies to both `--token-count` and `--max-tokens` budgeting.
 
 ---
 

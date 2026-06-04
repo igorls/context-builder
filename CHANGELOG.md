@@ -2,6 +2,58 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.9.0 (in progress) — "Trustworthy Output"
+
+> Planned per `docs/research/next-release-roadmap.md`. This section tracks work as it lands.
+
+- **Accurate token counting — selectable tokenizer (F1)**
+  - New `--encoding {o200k_base|cl100k_base}` flag (and `encoding` config option), defaulting to **`o200k_base`** (GPT-4o / o-series). The previous hardcoded `cl100k_base` under-counts every modern OpenAI model. The selected encoding flows through both `--token-count` and `--max-tokens` budgeting
+  - `--token-count` now reports counts using the chosen encoding
+
+- **CLI validation — invalid values are now rejected (F7)**
+  - `--truncate`, `--visibility`, and `--encoding` are constrained to their allowed sets via clap `value_parser`, so invalid values produce a clear `error: ... [possible values: ...]` instead of being silently coerced (fixes B3 `--visibility` and B4 `--truncate` silent-acceptance) and `--help` now lists the valid values
+
+- **CLI precedence — explicit flags override config even at their default value**
+  - `--encoding`, `--truncate`, and `--visibility` are now honored when passed explicitly even if the value equals the clap default — e.g. `--encoding o200k_base` overriding a config that sets `cl100k_base`. Resolution uses clap's `ValueSource` to tell an explicitly-passed flag from an omitted one, instead of treating "value == default" as "not provided", which previously left the default value un-selectable from the CLI whenever the config set a non-default
+
+- **Pipe-friendly output — stream to stdout (F2)**
+  - `-o -` streams the generated document to **stdout** instead of a file, enabling `context-builder -f rs -o - | llm`. All progress/status chatter is suppressed (or already on stderr) in this mode so the pipe stays clean, and `-` is never folded into an output folder or timestamped name. Works for the auto-diff path too (the composed diff document is written to stdout)
+  - In pipe mode the large-project (>100 files) confirmation prompt is skipped as well — it `print!`s to stdout and would otherwise prepend prompt text to the piped document (and block on stdin); pipe mode is non-interactive, so it proceeds as if `--yes` were given
+
+- **Trustworthy token budget — `--max-tokens` uses the real tokenizer (F4, B1, B2)**
+  - `--max-tokens` now counts the real tokenizer (per `--encoding`) on each file's rendered output, replacing the crude `buf.len()/4` (parallel) and `metadata().len()/4` (serial) byte heuristics. Both code paths now estimate identically, restoring byte-for-byte determinism between parallel and non-parallel builds
+  - Fixed the budget bypass where the first file was always emitted in full regardless of `--max-tokens` (the `tokens_used > 0` guard). The budget now applies to every file, including the first (B1)
+  - The document header + file tree are debited from the budget, so `--max-tokens` accounts for the whole document, not just file bodies
+  - Tokenization is skipped entirely when no budget is set — no overhead on normal runs. In that case the non-parallel build also streams each file straight to the output instead of rendering it into a buffer first (buffering exists only to tokenize the chunk for the budget), keeping peak memory bounded on large files
+  - The deterministic content hash now folds in every output-affecting option (`line_numbers`, `max_tokens`, `encoding`, tree-sitter flags, `encoding_strategy`). Previously, toggling e.g. `--line-numbers` produced a different document under the **same** hash, silently breaking LLM prompt caching. The hash still fingerprints raw file content (not the rendered output, which embeds volatile mtimes), so it stays stable across checkouts (B2)
+
+- **Robustness & accuracy — low-severity mop-up (B5, B9, B17, B19, B20)**
+  - Auto-diff cache is now written atomically (temp file + rename) instead of truncate-then-write, so a crash mid-write can't leave a corrupt, baseline-dropping cache (B20). The `fs2` dependency was dropped — `std::fs::File` provides advisory locking natively since Rust 1.89 (MSRV is now 1.89)
+  - `find_smart_truncation_point` clamps its result to a UTF-8 char boundary, preventing a panic when the byte-budget fallback lands mid-character (B19)
+  - `--token-count` renders each file through the **same path as the document**, so the preview matches the produced output (including encoding transcoding and tree-sitter signature/structure enrichment) instead of diverging via a separate raw-byte read (B9)
+  - C++ struct inheritance, `enum` underlying types, and `using`/`typedef` alias targets — plus C `typedef` aliased types — are preserved in extracted signatures instead of being reduced to a bare name (B17)
+  - An unrecognized `encoding_strategy` in config now warns instead of silently falling back to `detect` (B5)
+
+- **Reliable auto-diff cache invalidation (B6, B7, B8)**
+  - Unified the two duplicated config-hash functions (`cache.rs::hash_config` and `state.rs::compute_config_hash`) into one shared `config::config_fingerprint`, removing the "must stay in sync" drift hazard (B6)
+  - The auto-diff cache fingerprint now keys on **only the file-selection inputs** (`filter` / `ignore`) — the options that decide which files form the comparable baseline. The diff compares each file's **raw captured content** (`ProjectState` stores the bytes), which no rendering option changes, so `--signatures` / `--structure` / `--truncate` / `--visibility` / `--max-tokens` / `--line-numbers` / `--encoding` / `encoding_strategy` are all **excluded**: toggling one against an existing baseline no longer silently discards the diff (which would hide real content changes on that run). The resolved CLI `filter`/`ignore` are folded in so the key reflects real behavior even when they come from flags rather than the config file (B7). _(This supersedes an earlier B7 approach that included the rendering options; per PR review, those caused exactly the spurious baseline resets described above.)_
+  - `--diff-only` now warns when used without `auto_diff` instead of silently emitting full file contents (B8)
+
+- **Tree-Sitter correctness — honest `--signatures` / `--visibility`**
+  - Fixed Java `--visibility` filter being completely non-functional — `get_visibility` returned `Visibility::All` unconditionally, so `--visibility public` dropped *every* Java symbol and `--visibility private` leaked *all* of them. It now inspects the declaration's `modifiers` node (B12)
+  - Fixed C/C++ functions returning a pointer or reference being silently dropped — `find_function_name` now descends through `pointer_declarator` / `reference_declarator` / `parenthesized_declarator` to locate the `function_declarator` (B13)
+  - Fixed C++ qualified return types (e.g. `std::string`) being misread as the function name — the name is now resolved strictly inside `function_declarator`, with no sibling-identifier fallback (B14)
+  - Fixed Rust bodiless trait methods (`function_signature_item`, e.g. `fn draw(&self);`) being dropped from both signature extraction and structure counts (B15)
+  - Fixed Python class base lists being double-parenthesized (`class User((Base))`) — `argument_list` already includes the surrounding parentheses (B16)
+  - Fixed Rust restricted visibility (`pub(crate)` / `pub(super)` / `pub(in ...)`) being reported as fully public; restricted forms are no longer matched by `--visibility public` (B18)
+  - Fixed a public trait's required methods being dropped under `--visibility public` — a `function_signature_item` carries no visibility modifier (Rust forbids one on trait items), so it now inherits the enclosing trait's visibility instead of defaulting to private; a public trait's required methods are part of its public API and are kept, while a private trait's are still filtered out
+  - Fixed the Java analog: a `public interface`'s methods are implicitly public but carry no `modifiers` node, so they were classified package-private and dropped under `--visibility public`. Java members with no access modifier are now resolved by context — implicitly public as interface/annotation members, package-private in a class/enum — while an explicit `private`/`protected` (incl. Java 9+ private interface methods) is still respected
+  - Added regression tests covering each of the above
+
+- **Maintenance**
+  - Modernized two `sort_by` comparisons to `sort_by_key(Reverse(..))` to satisfy a newer clippy under `-D warnings` (surfaced after the toolchain advanced during the release gap)
+  - Added `docs/research/next-release-roadmap.md` — the full prioritized v0.9.0 plan (verified bug backlog, competitive refresh, feature/dependency/DX roadmap)
+
 ## v0.8.3
 
 - **Bug Fixes** (identified by Gemini Deep Think v6 — clean benchmark prompt, zero historical bias)

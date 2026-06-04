@@ -234,9 +234,10 @@ impl PythonSupport {
         full_sig.push_str("class ");
         full_sig.push_str(&name);
         if let Some(b) = &bases {
-            full_sig.push('(');
+            // `argument_list` already includes the surrounding parentheses,
+            // e.g. "(Base)", so append it directly to avoid double-wrapping
+            // into `class User((Base))`.
             full_sig.push_str(b);
-            full_sig.push(')');
         }
 
         Some(Signature {
@@ -358,6 +359,32 @@ class User:
             .collect();
         assert!(!classes.is_empty());
         assert_eq!(classes[0].name, "User");
+    }
+
+    #[test]
+    fn test_class_base_list_not_double_wrapped() {
+        // Regression: `argument_list` already includes parentheses, so the base
+        // list was rendered as `class User((Base))`.
+        let source = r#"
+class User(Base):
+    pass
+"#;
+
+        let signatures = PythonSupport.extract_signatures(source, Visibility::All);
+        let class = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Class)
+            .expect("class extracted");
+        assert!(
+            class.full_signature.contains("class User(Base)"),
+            "expected single-wrapped base list, got: {}",
+            class.full_signature
+        );
+        assert!(
+            !class.full_signature.contains("((Base))"),
+            "base list double-wrapped: {}",
+            class.full_signature
+        );
     }
 
     #[test]

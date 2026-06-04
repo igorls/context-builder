@@ -61,12 +61,17 @@ pub struct Args {
     pub structure: bool,
 
     /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
-    #[clap(long, value_name = "MODE", default_value = "smart")]
+    #[clap(long, value_name = "MODE", value_parser = ["smart", "byte"], default_value = "smart")]
     pub truncate: String,
 
     /// Filter signatures by visibility: "all", "public", or "private"
-    #[clap(long, default_value = "all")]
+    #[clap(long, value_parser = ["all", "public", "private"], default_value = "all")]
     pub visibility: String,
+
+    /// Tokenizer encoding used for `--token-count` and `--max-tokens` budgeting.
+    /// "o200k_base" matches GPT-4o/o-series (default); "cl100k_base" matches GPT-4/3.5.
+    #[clap(long, value_parser = ["o200k_base", "cl100k_base"], default_value = "o200k_base")]
+    pub encoding: String,
 }
 
 #[cfg(test)]
@@ -210,5 +215,25 @@ mod tests {
         let args_default = Args::try_parse_from(["context-builder"])
             .expect("should parse with default visibility");
         assert_eq!(args_default.visibility, "all");
+    }
+
+    #[test]
+    fn parses_encoding_flag_with_default() {
+        let args = Args::try_parse_from(["context-builder", "--encoding", "cl100k_base"])
+            .expect("should parse encoding flag");
+        assert_eq!(args.encoding, "cl100k_base");
+
+        let args_default =
+            Args::try_parse_from(["context-builder"]).expect("should parse with default encoding");
+        assert_eq!(args_default.encoding, "o200k_base");
+    }
+
+    #[test]
+    fn rejects_invalid_enum_values() {
+        // value_parser restricts these flags to their allowed sets, so invalid
+        // values now error at parse time instead of being silently coerced.
+        assert!(Args::try_parse_from(["context-builder", "--truncate", "bogus"]).is_err());
+        assert!(Args::try_parse_from(["context-builder", "--visibility", "bogus"]).is_err());
+        assert!(Args::try_parse_from(["context-builder", "--encoding", "bogus"]).is_err());
     }
 }

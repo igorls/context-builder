@@ -109,6 +109,7 @@ fn test_binary_files_dont_crash_autodiff() {
         yes: true, // Auto-confirm to avoid prompts
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -192,6 +193,7 @@ fn test_mixed_text_and_binary_files_autodiff() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -259,6 +261,7 @@ fn test_large_binary_file_autodiff() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,

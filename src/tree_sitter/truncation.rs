@@ -15,7 +15,11 @@ pub fn find_truncation_point(
         return source.len();
     }
 
-    support.find_truncation_point(source, max_bytes)
+    // Per-language impls return either a node boundary (already char-safe) or the
+    // raw `max_bytes` fallback (which may split a multi-byte char). Clamp to a
+    // UTF-8 boundary so callers can slice the result without panicking (B19).
+    let point = support.find_truncation_point(source, max_bytes);
+    ensure_utf8_boundary(source, point)
 }
 
 /// Check if truncation is needed at a UTF-8 boundary.
@@ -92,6 +96,26 @@ mod tests {
         let source = "fn foo() { }";
         let point = find_truncation_point(source, 1000, lang);
         assert_eq!(point, source.len());
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-rust")]
+    fn test_find_truncation_point_clamps_to_char_boundary() {
+        // Regression (B19): a comment-only source has no AST item boundary, so the
+        // per-language walker falls back to `max_bytes`. With `max_bytes` landing
+        // inside a multi-byte char, the returned point must be clamped to a UTF-8
+        // boundary (otherwise slicing it panics once smart truncation is wired up).
+        let lang = super::super::languages::get_language_support("rs").unwrap();
+        let source = "// 世界世界世界"; // '世'/'界' are 3 bytes each
+        let max_bytes = 4; // byte 4 is inside the first '世' (bytes 3..6)
+        assert!(!source.is_char_boundary(max_bytes));
+        let point = find_truncation_point(source, max_bytes, lang);
+        assert!(
+            source.is_char_boundary(point),
+            "truncation point {point} is not a char boundary"
+        );
+        // Slicing must not panic.
+        let _ = &source[..point];
     }
 
     #[test]

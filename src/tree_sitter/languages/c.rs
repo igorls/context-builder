@@ -270,7 +270,10 @@ impl CSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("typedef {}", name);
+        // Preserve the aliased type, e.g. `typedef unsigned int uint` instead of
+        // dropping it to a bare `typedef uint`.
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
 
         Some(Signature {
             kind: SignatureKind::TypeAlias,
@@ -300,15 +303,49 @@ impl CSupport {
     }
 
     fn find_function_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        // The `function_declarator` may be nested inside a `pointer_declarator`
+        // (functions returning a pointer, e.g. `char *dup(const char *)`) or a
+        // `parenthesized_declarator`, so descend through those wrappers instead of
+        // only inspecting direct children — otherwise pointer-returning functions
+        // are silently dropped.
+        let decl = self.find_function_declarator(node)?;
+        self.declarator_name(&decl, source)
+    }
+
+    fn find_function_declarator<'a>(
+        &self,
+        node: &tree_sitter::Node<'a>,
+    ) -> Option<tree_sitter::Node<'a>> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "function_declarator" {
-                let mut inner_cursor = child.walk();
-                for inner in child.children(&mut inner_cursor) {
-                    if inner.kind() == "identifier" {
-                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+            match child.kind() {
+                "function_declarator" => return Some(child),
+                "pointer_declarator" | "parenthesized_declarator" => {
+                    if let Some(found) = self.find_function_declarator(&child) {
+                        return Some(found);
                     }
                 }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Resolve the declared name inside a `function_declarator`, skipping the
+    /// parameter list and descending through nested declarators.
+    fn declarator_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "identifier" | "field_identifier" => {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                "pointer_declarator" | "parenthesized_declarator" | "function_declarator" => {
+                    if let Some(name) = self.declarator_name(&child, source) {
+                        return Some(name);
+                    }
+                }
+                _ => {}
             }
         }
         None
@@ -398,6 +435,26 @@ void hello(const char* name) {
             .filter(|s| s.kind == SignatureKind::Function)
             .collect();
         assert!(funcs.len() >= 2);
+    }
+
+    #[test]
+    fn test_pointer_return_function_extracted() {
+        // Regression: functions returning a pointer were silently dropped
+        // because find_function_name only inspected direct children.
+        let source = r#"
+char *dup(const char *s) {
+    return 0;
+}
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        assert!(
+            signatures
+                .iter()
+                .any(|s| s.kind == SignatureKind::Function && s.name == "dup"),
+            "pointer-returning function `dup` should be extracted, got: {:?}",
+            signatures.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
     }
 
     #[test]
