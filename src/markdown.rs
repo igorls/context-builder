@@ -293,43 +293,58 @@ pub fn generate_markdown(
 
     #[cfg(not(feature = "parallel"))]
     {
-        let mut tokens_used: usize = header_tokens;
-
-        for (idx, entry) in files.iter().enumerate() {
-            // Render the file into a buffer first, then count the rendered chunk
-            // with the real tokenizer — identical to the parallel path.
-            let mut buf: Vec<u8> = Vec::new();
-            process_file(
-                base_path,
-                entry.path(),
-                &mut buf,
-                line_numbers,
-                encoding_strategy,
-                ts_config,
-            )?;
-            // Only pay for tokenization when a budget is set.
-            let chunk_tokens = if max_tokens.is_some() {
-                estimate_tokens(token_encoding, &String::from_utf8_lossy(&buf))
-            } else {
-                0
-            };
-
-            // Budget applies to every file, including the first (no bypass).
-            if let Some(budget) = max_tokens
-                && tokens_used + chunk_tokens > budget
-            {
-                let remaining = files.len() - idx;
-                writeln!(output, "---\n")?;
-                writeln!(
-                    output,
-                    "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
-                    budget, remaining
-                )?;
-                break;
+        match max_tokens {
+            // No budget: stream each file straight to the output (as the serial
+            // path did before v0.9.0). Buffering would only be needed to count
+            // tokens, so without a budget it just inflates peak memory by the
+            // size of the largest file for no benefit.
+            None => {
+                for entry in files.iter() {
+                    process_file(
+                        base_path,
+                        entry.path(),
+                        &mut output,
+                        line_numbers,
+                        encoding_strategy,
+                        ts_config,
+                    )?;
+                }
             }
+            // Budget set: render each file into a buffer first so the rendered
+            // chunk can be tokenized before we decide to emit it — identical to
+            // the parallel path, so both builds truncate at the same boundary.
+            Some(budget) => {
+                let mut tokens_used: usize = header_tokens;
 
-            tokens_used += chunk_tokens;
-            output.write_all(&buf)?;
+                for (idx, entry) in files.iter().enumerate() {
+                    let mut buf: Vec<u8> = Vec::new();
+                    process_file(
+                        base_path,
+                        entry.path(),
+                        &mut buf,
+                        line_numbers,
+                        encoding_strategy,
+                        ts_config,
+                    )?;
+                    let chunk_tokens =
+                        estimate_tokens(token_encoding, &String::from_utf8_lossy(&buf));
+
+                    // Budget applies to every file, including the first (no bypass).
+                    if tokens_used + chunk_tokens > budget {
+                        let remaining = files.len() - idx;
+                        writeln!(output, "---\n")?;
+                        writeln!(
+                            output,
+                            "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
+                            budget, remaining
+                        )?;
+                        break;
+                    }
+
+                    tokens_used += chunk_tokens;
+                    output.write_all(&buf)?;
+                }
+            }
         }
     }
 

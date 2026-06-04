@@ -358,7 +358,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         return Ok(());
     }
 
-    if !final_args.yes && !prompter.confirm_processing(files.len())? {
+    // In pipe mode (`-o -`) there is no interactive terminal to answer a prompt,
+    // and `confirm_processing` would `print!` to stdout — corrupting the piped
+    // document and blocking on stdin. Skip the >100-file confirmation and proceed,
+    // exactly as `--yes` would.
+    if !final_args.yes && !to_stdout && !prompter.confirm_processing(files.len())? {
         if !silent {
             println!("Operation cancelled.");
         }

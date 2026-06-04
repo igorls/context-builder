@@ -244,6 +244,34 @@ impl RustSupport {
         Visibility::Private
     }
 
+    /// Effective visibility of a bodiless `fn` declaration (`function_signature_item`).
+    /// Rust forbids a `visibility_modifier` on a required trait method, so such a
+    /// method's real visibility is the enclosing trait's — without this, a public
+    /// trait's required methods would be classified `Private` and dropped under
+    /// `--visibility public`. A declaration that carries its own modifier (e.g.
+    /// `extern "C" { pub fn .. }`) keeps it; `extern` declarations with no modifier
+    /// stay module-private, as they should.
+    fn sig_item_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
+        // An explicit `pub` on the declaration itself always wins.
+        let own = self.get_visibility(node, source);
+        if own == Visibility::Public {
+            return own;
+        }
+        // Otherwise inherit from the nearest enclosing trait, if any.
+        let mut current = node.parent();
+        while let Some(n) = current {
+            match n.kind() {
+                "trait_item" => return self.get_visibility(&n, source),
+                // Stop once we leave the trait body without finding a trait
+                // (e.g. an `extern` block, an impl, or the file root).
+                "impl_item" | "function_item" | "mod_item" | "source_file" => break,
+                _ => {}
+            }
+            current = n.parent();
+        }
+        own
+    }
+
     fn node_text<'a>(&self, source: &'a str, node: &tree_sitter::Node) -> &'a str {
         &source[node.start_byte()..node.end_byte()]
     }
@@ -304,7 +332,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node, source);
+        let vis = self.sig_item_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -675,6 +703,38 @@ pub trait Drawable {
             .expect("bodiless trait method `area` should be extracted");
         assert!(area.full_signature.contains("-> f64"));
         assert!(!area.full_signature.ends_with(';'));
+    }
+
+    #[test]
+    fn test_public_trait_methods_survive_public_filter() {
+        // Regression: required trait methods carry no `visibility_modifier`
+        // (Rust forbids one), so they were classified Private and dropped under
+        // `--visibility public` — hiding a public trait's API. They must inherit
+        // the trait's visibility instead.
+        let source = r#"
+pub trait Drawable {
+    fn draw(&self);
+    fn area(&self) -> f64;
+}
+
+trait Hidden {
+    fn secret(&self);
+}
+"#;
+
+        let public_only = RustSupport.extract_signatures(source, Visibility::Public);
+        assert!(
+            public_only.iter().any(|s| s.name == "draw"),
+            "a public trait's required methods must pass the `public` filter"
+        );
+        assert!(
+            public_only.iter().any(|s| s.name == "area"),
+            "a public trait's required methods must pass the `public` filter"
+        );
+        assert!(
+            !public_only.iter().any(|s| s.name == "secret"),
+            "a private trait's methods must NOT pass the `public` filter"
+        );
     }
 
     #[test]
