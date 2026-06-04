@@ -8,6 +8,9 @@ Cargo.lock
 *.swp
 *.swo
 
+# Claude Code session/tooling state (never tracked or published)
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
