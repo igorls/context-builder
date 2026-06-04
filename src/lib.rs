@@ -246,7 +246,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
 
         if !large_files.is_empty() {
-            large_files.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by size descending
+            large_files.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by size descending
             eprintln!(
                 "\n⚠  {} large file(s) detected (>{} KB):",
                 large_files.len(),
@@ -895,7 +895,7 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
 
     // Convert to vector of (extension, count) pairs and sort by count
     let mut extensions: Vec<(String, usize)> = extension_counts.into_iter().collect();
-    extensions.sort_by(|a, b| b.1.cmp(&a.1));
+    extensions.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Take the top 5 extensions or all if less than 5
     let top_extensions: Vec<String> = extensions.into_iter().take(5).map(|(ext, _)| ext).collect();

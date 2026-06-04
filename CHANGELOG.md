@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.9.0 (in progress) — "Trustworthy Output"
+
+> Planned per `docs/research/next-release-roadmap.md`. This section tracks work as it lands.
+
+- **Tree-Sitter correctness — honest `--signatures` / `--visibility`**
+  - Fixed Java `--visibility` filter being completely non-functional — `get_visibility` returned `Visibility::All` unconditionally, so `--visibility public` dropped *every* Java symbol and `--visibility private` leaked *all* of them. It now inspects the declaration's `modifiers` node (B12)
+  - Fixed C/C++ functions returning a pointer or reference being silently dropped — `find_function_name` now descends through `pointer_declarator` / `reference_declarator` / `parenthesized_declarator` to locate the `function_declarator` (B13)
+  - Fixed C++ qualified return types (e.g. `std::string`) being misread as the function name — the name is now resolved strictly inside `function_declarator`, with no sibling-identifier fallback (B14)
+  - Fixed Rust bodiless trait methods (`function_signature_item`, e.g. `fn draw(&self);`) being dropped from both signature extraction and structure counts (B15)
+  - Fixed Python class base lists being double-parenthesized (`class User((Base))`) — `argument_list` already includes the surrounding parentheses (B16)
+  - Fixed Rust restricted visibility (`pub(crate)` / `pub(super)` / `pub(in ...)`) being reported as fully public; restricted forms are no longer matched by `--visibility public` (B18)
+  - Added regression tests covering each of the above
+
+- **Maintenance**
+  - Modernized two `sort_by` comparisons to `sort_by_key(Reverse(..))` to satisfy a newer clippy under `-D warnings` (surfaced after the toolchain advanced during the release gap)
+  - Added `docs/research/next-release-roadmap.md` — the full prioritized v0.9.0 plan (verified bug backlog, competitive refresh, feature/dependency/DX roadmap)
+
 ## v0.8.3
 
 - **Bug Fixes** (identified by Gemini Deep Think v6 — clean benchmark prompt, zero historical bias)

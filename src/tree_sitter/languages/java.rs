@@ -144,11 +144,23 @@ impl JavaSupport {
         }
     }
 
-    #[allow(dead_code)]
-    fn get_visibility(&self, _node: &tree_sitter::Node) -> Visibility {
-        // Java visibility is determined by modifiers
-        // Simplified: check for public/private/protected keywords in AST modifiers
-        Visibility::All
+    /// Determine a Java declaration's visibility from its `modifiers` child.
+    /// `public` → Public; `private`/`protected` and package-private (no modifier)
+    /// → Private. This keeps `--visibility public` scoped to the true public API
+    /// surface and `--visibility private` to everything else.
+    fn get_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "modifiers" {
+                let text = &source[child.start_byte()..child.end_byte()];
+                if text.split_whitespace().any(|t| t == "public") {
+                    return Visibility::Public;
+                }
+                return Visibility::Private;
+            }
+        }
+        // No modifiers node → package-private, treated as non-public.
+        Visibility::Private
     }
 
     fn extract_method_signature(
@@ -157,7 +169,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -208,7 +220,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -243,7 +255,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -278,7 +290,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -313,7 +325,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -495,6 +507,51 @@ public class Dog extends Animal implements Runnable {
             .collect();
         assert!(!classes.is_empty());
         assert_eq!(classes[0].name, "Dog");
+    }
+
+    #[test]
+    fn test_visibility_public_filter() {
+        // Regression: get_visibility returned All unconditionally, so the
+        // `public` filter dropped every symbol.
+        let source = r#"
+public class Api {
+    public int publicMethod() { return 1; }
+    private int privateMethod() { return 2; }
+    int packageMethod() { return 3; }
+}
+"#;
+
+        let public_only = JavaSupport.extract_signatures(source, Visibility::Public);
+        assert!(public_only.iter().any(|s| s.name == "publicMethod"));
+        assert!(
+            !public_only.iter().any(|s| s.name == "privateMethod"),
+            "private method leaked into `public` filter"
+        );
+        assert!(
+            !public_only.iter().any(|s| s.name == "packageMethod"),
+            "package-private method leaked into `public` filter"
+        );
+    }
+
+    #[test]
+    fn test_visibility_private_filter_excludes_public() {
+        let source = r#"
+public class Api {
+    public int publicMethod() { return 1; }
+    private int privateMethod() { return 2; }
+}
+"#;
+
+        let private_only = JavaSupport.extract_signatures(source, Visibility::Private);
+        assert!(private_only.iter().any(|s| s.name == "privateMethod"));
+        assert!(
+            !private_only.iter().any(|s| s.name == "publicMethod"),
+            "public method leaked into `private` filter"
+        );
+        assert!(
+            !private_only.iter().any(|s| s.name == "Api"),
+            "public class leaked into `private` filter"
+        );
     }
 
     #[test]
