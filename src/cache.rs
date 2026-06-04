@@ -4,8 +4,8 @@
 //! It uses a hash of the project path and configuration to avoid cache collisions
 //! between different projects or configurations.
 
-use fs2::FileExt;
-
+// File advisory locking (`lock_shared`/`unlock`) is provided by std::fs::File
+// (stabilized in Rust 1.89), so the former `fs2` dependency is no longer needed.
 use std::fs;
 use std::fs::File;
 
@@ -158,26 +158,22 @@ impl CacheManager {
         Ok(Some(state))
     }
 
-    /// Write the project state to cache with file locking
+    /// Write the project state to cache atomically.
+    ///
+    /// Serializes into a temp file in the cache directory, then renames it over
+    /// the target (B20). The previous implementation truncated the cache under an
+    /// exclusive lock and then wrote — a crash in that window left a truncated
+    /// (corrupt) cache, silently dropping the auto-diff baseline. With an atomic
+    /// rename, a crash leaves the old cache intact and readers always see a
+    /// complete file (old or new), never a partial write.
     pub fn write_cache(&self, state: &ProjectState) -> Result<(), Box<dyn std::error::Error>> {
         let cache_path = self.get_cache_path();
-
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&cache_path)?;
-        // Acquire exclusive lock BEFORE truncating to prevent TOCTOU races
-        file.lock_exclusive()?;
-        file.set_len(0)?;
-
         let json = serde_json::to_string_pretty(state)?;
-        let mut file = std::io::BufWriter::new(file);
-        file.write_all(json.as_bytes())?;
-        file.flush()?;
 
-        // Release lock
-        file.get_ref().unlock()?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&self.cache_dir)?;
+        tmp.write_all(json.as_bytes())?;
+        tmp.flush()?;
+        tmp.persist(&cache_path).map_err(|e| e.error)?;
 
         Ok(())
     }

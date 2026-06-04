@@ -75,6 +75,17 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // `-o -` streams the document to stdout (pipe mode). In this mode all
     // human-facing chatter must go to stderr so it doesn't corrupt the pipe.
     let to_stdout = final_args.output == "-";
+
+    // B5: warn on an unrecognized encoding_strategy instead of silently using
+    // "detect". Validates the config value against the supported set.
+    if let Some(ref strat) = config.encoding_strategy
+        && !matches!(strat.as_str(), "detect" | "strict" | "skip")
+        && !silent
+    {
+        eprintln!(
+            "⚠️  Unknown encoding_strategy '{strat}' in config; expected one of: detect, strict, skip. Falling back to 'detect'."
+        );
+    }
     // Resolve base path. If input is '.' but current working directory lost the project context
     // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
     let mut resolved_base = PathBuf::from(&final_args.input);
