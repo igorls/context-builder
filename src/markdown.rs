@@ -905,8 +905,11 @@ pub fn write_tree_sitter_enrichment(
             && !crate::tree_sitter::supports_visibility_filtering(extension)
             && first_visibility_warning_for(extension)
         {
-            warn!(
-                "--visibility {} has no effect for '{}' files: the extractor \
+            // eprintln (not warn!/log) so it is visible without RUST_LOG —
+            // env_logger defaults to error level, and a user-style default run
+            // would otherwise never see this warning.
+            eprintln!(
+                "⚠️  --visibility {} has no effect for '{}' files: the extractor \
                  does not classify visibility yet (planned for v0.11). \
                  Signatures will include all symbols.",
                 ts_config.visibility, extension
@@ -1797,6 +1800,41 @@ mod tests {
         let result = write_tree_sitter_enrichment(&mut output, content, "rs", &ts_config);
         assert!(result.is_ok());
         assert!(output.is_empty());
+    }
+
+    // --- v0.10: --visibility no-op warning regression ------------------ //
+    //
+    // The warning is eprintln'd (visible without RUST_LOG — env_logger
+    // defaults to error level, so warn! was invisible in user runs). These
+    // tests pin the gate conditions: which languages are exempt from the
+    // warning (they honor the filter) and the one-shot dedup.
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_visibility_warning_gate_languages() {
+        // Languages whose extractors honor --visibility → no warning needed.
+        assert!(crate::tree_sitter::supports_visibility_filtering("rs"));
+        assert!(crate::tree_sitter::supports_visibility_filtering("go"));
+        assert!(crate::tree_sitter::supports_visibility_filtering("java"));
+        assert!(crate::tree_sitter::supports_visibility_filtering("ts"));
+        // Languages that ignore it → warning expected.
+        assert!(!crate::tree_sitter::supports_visibility_filtering("py"));
+        assert!(!crate::tree_sitter::supports_visibility_filtering("js"));
+        assert!(!crate::tree_sitter::supports_visibility_filtering("cpp"));
+        assert!(!crate::tree_sitter::supports_visibility_filtering("c"));
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-base")]
+    fn test_visibility_warning_fires_once_per_language() {
+        // First sighting returns true (emit warning), subsequent ones false —
+        // a 10k-file repo must not spam one warning per file.
+        assert!(first_visibility_warning_for("py"));
+        assert!(!first_visibility_warning_for("py"));
+        assert!(!first_visibility_warning_for("py"));
+        // A different language still gets its (single) warning.
+        assert!(first_visibility_warning_for("js"));
+        assert!(!first_visibility_warning_for("js"));
     }
 
     #[test]
