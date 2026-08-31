@@ -54,6 +54,11 @@ macro_rules! impl_ts_language_support {
 
                 self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
 
+                // v0.10: apply the --visibility filter. `all` keeps everything;
+                // `public` keeps module exports + public members; `private` keeps
+                // unexported items + private/protected members.
+                signatures.retain(|s| s.visibility.matches_filter(visibility));
+
                 signatures.sort_by_key(|s| s.line_number);
                 signatures
             }
@@ -103,29 +108,49 @@ macro_rules! impl_ts_language_support {
                 _visibility: Visibility,
                 signatures: &mut Vec<Signature>,
             ) {
+                // Visibility semantics (v0.10): a non-exported top-level
+                // declaration is module-private; `export` marks it Public (set
+                // in `extract_export_signatures`). Class members resolve via
+                // their explicit accessibility modifier (Public by default).
+                let mark_scope_private = |sig: &mut Signature| {
+                    if sig.visibility == Visibility::All {
+                        sig.visibility = Visibility::Private;
+                    }
+                };
+
                 match node.kind() {
                     "function_declaration" | "generator_function_declaration" => {
-                        if let Some(sig) = self.extract_function_signature(source, node) {
+                        if let Some(mut sig) = self.extract_function_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
                     "class_declaration" => {
-                        if let Some(sig) = self.extract_class_signature(source, node) {
+                        if let Some(mut sig) = self.extract_class_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
+                        // v0.10: also extract class members (methods/properties).
+                        // Class bodies are the majority of real TS code — without
+                        // this, `--signatures` on a TS file emitted only the class
+                        // header and lost every method (review §1.3).
+                        self.extract_class_members(source, node, signatures);
                     }
                     "interface_declaration" => {
-                        if let Some(sig) = self.extract_interface_signature(source, node) {
+                        if let Some(mut sig) = self.extract_interface_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
                     "type_alias_declaration" => {
-                        if let Some(sig) = self.extract_type_alias_signature(source, node) {
+                        if let Some(mut sig) = self.extract_type_alias_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
                     "enum_declaration" => {
-                        if let Some(sig) = self.extract_enum_signature(source, node) {
+                        if let Some(mut sig) = self.extract_enum_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
@@ -235,6 +260,122 @@ macro_rules! impl_ts_language_support {
                     visibility: Visibility::All,
                     line_number: node.start_position().row + 1,
                     full_signature: full_sig,
+                })
+            }
+
+            /// Extract methods and properties from a class body (v0.10).
+            ///
+            /// Walks the `class_body` child and emits a `Signature` for every
+            /// `method_definition` / `abstract_method_signature` /
+            /// `public_field_definition`. Visibility is resolved from the
+            /// explicit `public`/`private`/`protected` modifier when present,
+            /// enabling `--visibility` for TS (review §1.2).
+            fn extract_class_members(
+                &self,
+                source: &str,
+                class_node: &tree_sitter::Node,
+                signatures: &mut Vec<Signature>,
+            ) {
+                let class_body = {
+                    let mut cursor = class_node.walk();
+                    class_node
+                        .children(&mut cursor)
+                        .find(|c| c.kind() == "class_body")
+                };
+                let Some(class_body) = class_body else {
+                    return;
+                };
+
+                let mut cursor = class_body.walk();
+                for child in class_body.children(&mut cursor) {
+                    let member = &child;
+                    match member.kind() {
+                        "method_definition" | "abstract_method_signature" => {
+                            if let Some(sig) = self.extract_method_signature(source, member) {
+                                signatures.push(sig);
+                            }
+                        }
+                        "public_field_definition" => {
+                            if let Some(sig) = self.extract_field_signature(source, member) {
+                                signatures.push(sig);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            /// Resolve a TS member's effective visibility from its modifiers.
+            ///
+            /// `private`/`protected` → Private; `public` or no modifier → Public
+            /// (TS class members are public by default, unlike Rust).
+            fn member_visibility(&self, member: &tree_sitter::Node, source: &str) -> Visibility {
+                let mut cursor = member.walk();
+                for child in member.children(&mut cursor) {
+                    if child.kind() == "accessibility_modifier" {
+                        let text = &source[child.start_byte()..child.end_byte()];
+                        return match text {
+                            "private" | "protected" => Visibility::Private,
+                            _ => Visibility::Public,
+                        };
+                    }
+                }
+                Visibility::Public
+            }
+
+            fn extract_method_signature(
+                &self,
+                source: &str,
+                member: &tree_sitter::Node,
+            ) -> Option<Signature> {
+                let name = self
+                    .find_child_text(member, "property_identifier", source)
+                    .or_else(|| self.find_child_text(member, "identifier", source))?;
+
+                let params = self.find_child_text(member, "formal_parameters", source);
+                let return_type = self.find_child_text(member, "type_annotation", source);
+                let visibility = self.member_visibility(member, source);
+
+                // Slice from the member start (preserving async/static/access
+                // modifiers) down to the body start.
+                let full_sig = slice_signature_before_body(
+                    source,
+                    member,
+                    &["statement_block", "abstract_clause"],
+                )
+                .unwrap_or_else(|| {
+                    // Abstract members have no body — fall back to a text render.
+                    let head = &source[member.start_byte()..member.end_byte()];
+                    head.trim_end().to_string()
+                });
+
+                Some(Signature {
+                    kind: SignatureKind::Method,
+                    name,
+                    params,
+                    return_type,
+                    visibility,
+                    line_number: member.start_position().row + 1,
+                    full_signature: full_sig,
+                })
+            }
+
+            fn extract_field_signature(
+                &self,
+                source: &str,
+                member: &tree_sitter::Node,
+            ) -> Option<Signature> {
+                let name = self.find_child_text(member, "property_identifier", source)?;
+                let visibility = self.member_visibility(member, source);
+
+                Some(Signature {
+                    kind: SignatureKind::Constant,
+                    name: name.clone(),
+                    params: None,
+                    return_type: None,
+                    visibility,
+                    line_number: member.start_position().row + 1,
+                    full_signature: format!("field {name}"),
                 })
             }
 
@@ -384,27 +525,46 @@ macro_rules! impl_ts_language_support {
                 node: &tree_sitter::Node,
                 signatures: &mut Vec<Signature>,
             ) {
+                // v0.10: `export` marks the declaration Public (module API);
+                // callers mark unexported top-level items Private.
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     match child.kind() {
                         "function_declaration" => {
-                            if let Some(sig) = self.extract_function_signature(source, &child) {
+                            if let Some(mut sig) = self.extract_function_signature(source, &child) {
+                                sig.visibility = Visibility::Public;
                                 signatures.push(sig);
                             }
                         }
                         "class_declaration" => {
-                            if let Some(sig) = self.extract_class_signature(source, &child) {
+                            if let Some(mut sig) = self.extract_class_signature(source, &child) {
+                                sig.visibility = Visibility::Public;
+                                signatures.push(sig);
+                            }
+                            // v0.10: exported classes get their members too.
+                            self.extract_class_members(source, &child, signatures);
+                        }
+                        "interface_declaration" => {
+                            if let Some(mut sig) = self.extract_interface_signature(source, &child)
+                            {
+                                sig.visibility = Visibility::Public;
                                 signatures.push(sig);
                             }
                         }
-                        "interface_declaration" => {
-                            if let Some(sig) = self.extract_interface_signature(source, &child) {
+                        "enum_declaration" => {
+                            if let Some(mut sig) = self.extract_enum_signature(source, &child) {
+                                sig.visibility = Visibility::Public;
                                 signatures.push(sig);
                             }
                         }
                         "lexical_declaration" | "variable_declaration" => {
                             // Capture exported arrow functions: export const foo = () => {}
-                            self.extract_variable_declarations(source, &child, signatures);
+                            let mut exported = Vec::new();
+                            self.extract_variable_declarations(source, &child, &mut exported);
+                            for mut sig in exported {
+                                sig.visibility = Visibility::Public;
+                                signatures.push(sig);
+                            }
                         }
                         _ => {}
                     }
@@ -515,6 +675,109 @@ mod tests {
         let sigs = TypeScriptSupport.extract_signatures(source, Visibility::All);
         assert!(!sigs.is_empty());
         assert_eq!(sigs[0].name, "MyComponent");
+    }
+
+    // --- v0.10: class-member extraction (review §1.3) ------------------ //
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_class_members_are_extracted() {
+        let source = r#"
+export class K {
+    public open(): void {}
+    private secret(): void {}
+    protected guarded(x: number): number { return x; }
+    static create(): K { return new K(); }
+}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"open"), "names: {names:?}");
+        assert!(names.contains(&"secret"), "names: {names:?}");
+        assert!(names.contains(&"guarded"), "names: {names:?}");
+        assert!(names.contains(&"create"), "names: {names:?}");
+        assert!(
+            names.contains(&"K"),
+            "class itself must be listed: {names:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_visibility_public_excludes_private_members() {
+        let source = r#"
+export class K {
+    public open(): void {}
+    private secret(): void {}
+}
+function helper(): void {}
+export function api(): void {}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::Public);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"open"),
+            "public method must be kept: {names:?}"
+        );
+        assert!(
+            !names.contains(&"secret"),
+            "private method must be filtered: {names:?}"
+        );
+        assert!(
+            !names.contains(&"helper"),
+            "unexported function must be filtered: {names:?}"
+        );
+        assert!(
+            names.contains(&"api"),
+            "exported function must be kept: {names:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_visibility_private_keeps_private_members() {
+        let source = r#"
+export class K {
+    public open(): void {}
+    private secret(): void {}
+}
+function helper(): void {}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::Private);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"secret"),
+            "private method must be kept: {names:?}"
+        );
+        assert!(
+            names.contains(&"helper"),
+            "module-private fn must be kept: {names:?}"
+        );
+        assert!(
+            !names.contains(&"open"),
+            "public member must be filtered: {names:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_class_fields_extracted_with_visibility() {
+        let source = r#"
+export class K {
+    public visible: string;
+    private hidden: number;
+}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::Public);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"visible"),
+            "public field must be kept: {names:?}"
+        );
+        assert!(
+            !names.contains(&"hidden"),
+            "private field must be filtered: {names:?}"
+        );
     }
 
     #[test]

@@ -372,7 +372,7 @@ impl JavaSupport {
         }
 
         let name = self.find_child_text(node, "identifier", source)?;
-        let full_signature = format!("field {}", &name);
+        let full_signature = format!("field {name}");
 
         Some(Signature {
             kind: SignatureKind::Constant,

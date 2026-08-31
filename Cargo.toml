@@ -1,6 +1,6 @@
 [package]
 name = "context-builder"
-version = "0.9.0"
+version = "0.10.0"
 default-run = "context-builder"
 edition = "2024"
 # std::fs::File advisory locking (used by the cache) stabilized in Rust 1.89.
@@ -26,6 +26,18 @@ exclude = [
     "/tarpaulin.toml",
 ]
 
+# cargo-binstall metadata: lets `cargo binstall context-builder` resolve the
+# pre-built release binaries instead of compiling from source (review §4.3).
+# The release archives are named `context-builder-<target>.tar.gz` (`.zip` on
+# Windows) and contain the bare binary at the archive root.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/context-builder-{ target }{ archive-suffix }"
+bin-dir = "context-builder{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [dependencies]
 clap = { version = "4.5.58", features = ["derive"] }
 chrono = { version = "0.4.43", features = ["serde"] }
@@ -35,16 +47,17 @@ env_logger = "0.11.9"
 rayon = { version = "1.10", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.0.1"
-similar = "2.7.0"
+similar = "3.2.0"
+# tempfile: used at runtime by cache.rs (atomic writes) — also covers tests,
+# so it is NOT duplicated in [dev-dependencies] (v0.10 dependency diet).
 tempfile = "3.25.0"
-tiktoken-rs = "0.9.1"
-once_cell = "1.21.3"
+tiktoken-rs = "0.12.0"
+# (once_cell and num_cpus removed in v0.10 — std::sync::LazyLock and
+#  std::thread::available_parallelism cover them; walkdir was never imported.)
 serde_json = "1.0.143"
 crossbeam-channel = "0.5.15"
 # (fs2 removed in v0.9.0 — std::fs::File now provides advisory locking)
-num_cpus = "1.17.0"
 encoding_rs = "0.8.35"
-walkdir = "2.5.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Tree-sitter dependencies (feature-gated)
@@ -85,7 +98,6 @@ tree-sitter-all = [
 ]
 
 [dev-dependencies]
-tempfile = "3.25.0"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 pretty_assertions = "1.4.1"
 serial_test = "3.0"

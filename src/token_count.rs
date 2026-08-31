@@ -1,8 +1,8 @@
 use ignore::DirEntry;
-use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::LazyLock;
 /// Token counting utilities for estimating LLM token usage
 use tiktoken_rs::{CoreBPE, cl100k_base, o200k_base};
 
@@ -29,9 +29,11 @@ impl FromStr for Encoding {
     }
 }
 
-// Initialize each tokenizer once and reuse it.
-static O200K_BASE: Lazy<CoreBPE> = Lazy::new(|| o200k_base().unwrap());
-static CL100K_BASE: Lazy<CoreBPE> = Lazy::new(|| cl100k_base().unwrap());
+// Initialize each tokenizer once and reuse it (std::sync::LazyLock — once_cell
+// was dropped in the v0.10 dependency diet; LazyLock is stable since 1.80
+// and the crate MSRV is 1.89).
+static O200K_BASE: LazyLock<CoreBPE> = LazyLock::new(|| o200k_base().unwrap());
+static CL100K_BASE: LazyLock<CoreBPE> = LazyLock::new(|| cl100k_base().unwrap());
 
 impl Encoding {
     fn bpe(self) -> &'static CoreBPE {

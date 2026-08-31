@@ -95,6 +95,8 @@ Pre-built binaries include full Tree-Sitter AST support. The installer verifies 
 curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | bash
 ```
 
+> **Note:** piping remote scripts into `sh` is a matter of trust — some scanners flag the `curl | bash` pattern generically. If you prefer, review [install.sh](install.sh) first or use one of the alternatives below.
+
 ### Windows (PowerShell)
 
 ```powershell
@@ -265,7 +267,7 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `-o, --output <FILE>` - Output file path (default: `output.md`). Use `-` to stream the document to **stdout** (e.g. `context-builder -o - | llm`); progress messages then go to stderr so the pipe stays clean.
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
-- `--max-tokens <N>` - Maximum token budget for the output. Files are truncated/skipped when exceeded.
+- `--max-tokens <N>` - Maximum token budget for the output. Files that exceed the remaining budget are truncated in place (per the `--truncate` mode); further files are omitted with a notice.
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
@@ -274,8 +276,8 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
 - `--signatures` - Replace full file content with extracted function/class signatures *(requires tree-sitter)*.
 - `--structure` - Append structural summary (function/class counts) to each file *(requires tree-sitter)*.
-- `--truncate <MODE>` - Truncation strategy for `--max-tokens`: `smart` (AST-boundary aware, default) or `byte` *(requires tree-sitter)*.
-- `--visibility <FILTER>` - Filter extracted signatures by visibility: `all` (default), `public`, or `private` *(requires tree-sitter)*.
+- `--truncate <MODE>` - Truncation strategy for `--max-tokens`: `smart` (cut at AST boundaries, default) or `byte` (cut at a UTF-8 character boundary) *(requires tree-sitter)*.
+- `--visibility <FILTER>` - Filter extracted signatures by visibility: `all` (default), `public`, or `private`. Honored for Rust, Go, Java, and TypeScript; other languages warn that the filter is not yet applied *(requires tree-sitter)*.
 - `--encoding <ENC>` - Tokenizer used for `--token-count` and `--max-tokens`: `o200k_base` (GPT-4o / o-series, default) or `cl100k_base` (GPT-4 / GPT-3.5).
 - `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.

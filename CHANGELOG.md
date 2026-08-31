@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.10.0 (2026-08-31) — "Honest Signatures"
+
+> Delivered per `docs/research/v0.10-plan.md` (derived from the post-v0.9.0 review): every documented flag now does what it says, divergent language maps are unified, and packaging/CI gaps are closed.
+
+- **`--truncate` is now wired into the `--max-tokens` budget path (review §1.1)**
+  - A file that crosses the remaining budget is **truncated in place** (with a visible `_⚠️ File content truncated: N of M bytes (mode: …)_` marker) instead of being omitted wholesale; only files after the crossing one are omitted
+  - `smart` mode cuts at an AST boundary via tree-sitter (char-safe per B19); `byte` mode cuts at a UTF-8 character boundary — the two modes now genuinely differ
+  - The truncated chunk is verified with the real tokenizer to fit the remaining allowance (probing the fixed section cost first, then shrinking proportionally); if even a minimal section cannot fit, the file is omitted exactly as before
+  - Serial and parallel paths truncate identically — byte-for-byte determinism between builds is preserved (verified)
+
+- **TypeScript class members are now extracted (review §1.3)**
+  - `--signatures` on a TS/TSX file now lists `method_definition` (including `async`/`static`/abstract), `public_field_definition` fields, and preserves access modifiers — previously only the bare class header appeared
+  - `--visibility` is honored for TypeScript: class members resolve `public`/`private`/`protected` (public by default), and top-level declarations are Public when `export`ed, Private otherwise (review §1.2, TS half)
+
+- **Honest `--visibility` for the remaining languages (review §1.2)**
+  - Rust, Go, Java, and TypeScript honor the filter; C, C++, Python, and JavaScript now emit a one-time `warn!` (per language, per process) stating the filter is not yet applied, instead of silently returning unfiltered signatures
+  - Full visibility classification for those four languages is queued for v0.11
+
+- **Single extension→language map (review §2)**
+  - New `src/languages.rs` — one `language_for_extension()` used by the file-body fence, the signature block, and the auto-diff path, replacing three divergent `match` maps
+  - Fixes the observable drift: `.mjs` bodies/signatures/auto-diff now consistently say `javascript` (previously the body fence said the non-highlightable `mjs`); `.jsx`/`.sh` keep their deliberate distinct tags (`jsx`, `bash`) everywhere — previously the auto-diff path emitted raw extensions
+
+- **Documentation sync (review §5)**
+  - `SKILL.md` no longer documents a nonexistent `simple` truncate mode (values are `smart`/`byte`)
+  - `README.md` describes `--max-tokens` truncation semantics accurately and states which languages honor `--visibility`
+  - `AGENTS.md` updated: std file locking (fs2 removed in v0.9.0), `src/tree_sitter/` in the structure tree, all nine `tree-sitter-*` features in the feature table, and the full release process (binary release + winget)
+
+- **CI, packaging & repo hygiene (review §4)**
+  - The MSRV job now builds with the pinned declared MSRV (`1.89`, `cargo check --all-features`) instead of `stable` — previously it never verified the MSRV at all
+  - `aarch64-unknown-linux-gnu` added to the release matrix (native `ubuntu-24.04-arm` runner) — the one-liner installer previously 404'd on Raspberry Pi / Graviton / ARM WSL because `install.sh` downloads an archive that was never built
+  - `[package.metadata.binstall]` added so `cargo binstall context-builder` resolves the pre-built release binaries
+  - `.github/dependabot.yml` added (cargo + github-actions, weekly; majors stay ungrouped for MSRV-conscious review)
+  - `test.md` (16 MB generated output) untracked; `Cargo.lock` no longer listed in `.gitignore` while being tracked (binary crate keeps its lockfile)
+
+- **Dependency diet (review §3)**
+  - Removed `walkdir` (never imported), `once_cell` (→ `std::sync::LazyLock`), and `num_cpus` (→ `std::thread::available_parallelism()`); `tempfile` no longer duplicated in `[dev-dependencies]`
+  - `similar` 2.7 → 3.2 and `tiktoken-rs` 0.9 → 0.12 (adds gpt-5 / o-series model mappings); both verified through the full suite
+  - `tree-sitter` stays at 0.26: v0.27 requires Rust 1.90, above the declared MSRV 1.89 — deferred to v0.11 together with the MSRV bump
+
 ## v0.9.0 (2026-06-04) — "Trustworthy Output"
 
 > Delivered per `docs/research/next-release-roadmap.md`: accurate token counting, honest tree-sitter signatures, pipe-friendly output, and a reliable auto-diff cache.

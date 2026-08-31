@@ -1,0 +1,26 @@
+# Dependabot: keeps the four-major-version tiktoken-rs lag (review §4.4) from
+# recurring. cargo covers library deps; github-actions covers workflow actions.
+
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Semver-major bumps stay as individual PRs so the MSRV implications
+    # (e.g. tree-sitter 0.27 requiring Rust 1.90) are reviewed consciously.
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        update-types:
+          - "minor"
+          - "patch"

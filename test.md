@@ -1,13 +1,14 @@
 # Directory Structure Report
 
 This document contains all files from the `context-builder` directory, optimized for LLM consumption.
-Content hash: c3813e45c6726d5e
+Content hash: c88bbf2e033d8071
 
 ## File Tree Structure
 
 - 📄 AGENTS.md
 - 📄 BENCHMARKS.md
 - 📄 CHANGELOG.md
+- 📄 Cargo.lock
 - 📄 Cargo.toml
 - 📄 DEVELOPMENT.md
 - 📄 LICENSE
@@ -16,7 +17,15 @@ Content hash: c3813e45c6726d5e
 - 📁 benches
   - 📄 context_bench.rs
 - 📁 docs
-  - 📄 demo.cast
+  - 📁 agent-harness
+    - 📄 README.md
+    - 📄 antigravity-system-prompt.md
+    - 📁 templates
+      - 📄 01-problem.md
+      - 📄 02-authority.md
+      - 📄 03-build.md
+      - 📄 04-result.md
+      - 📄 05-conflict.md
   - 📄 demo.gif
   - 📄 demo.mp4
   - 📁 research
@@ -51,11 +60,13 @@ Content hash: c3813e45c6726d5e
       - 📄 deepthink_context_v5_20260215111448.md
     - 📄 multi-model-code-review-analysis-v3.md
     - 📄 multi-model-code-review-analysis.md
+    - 📄 next-release-roadmap.md
     - 📁 prompts
       - 📄 clean_benchmark_v6.md
       - 📄 deep_think_prompt_v3_multimodel.md
       - 📄 deepthink_prompt_v2.md
       - 📄 deepthink_prompt_v5.md
+    - 📄 v0.10-plan.md
     - 📁 v2-responses
       - 📄 context_v2_resp-chat-gpt-5.2.md
       - 📄 context_v2_resp-claude-opus-4.6.md
@@ -93,6 +104,7 @@ Content hash: c3813e45c6726d5e
   - 📄 config_resolver.rs
   - 📄 diff.rs
   - 📄 file_utils.rs
+  - 📄 languages.rs
   - 📄 lib.rs
   - 📄 main.rs
   - 📄 markdown.rs
@@ -136,12 +148,16 @@ Content hash: c3813e45c6726d5e
             - 📄 igorls.context-builder.installer.yaml
             - 📄 igorls.context-builder.locale.en-US.yaml
             - 📄 igorls.context-builder.yaml
+          - 📁 0.9.0
+            - 📄 igorls.context-builder.installer.yaml
+            - 📄 igorls.context-builder.locale.en-US.yaml
+            - 📄 igorls.context-builder.yaml
 
 
 ### File: `AGENTS.md`
 
-- Size: 6816 bytes
-- Modified: 2026-02-14 07:24:34 UTC
+- Size: 9416 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```markdown
 # AGENTS.md - AI Agent Instructions
@@ -156,6 +172,20 @@ Context Builder is a **blazing-fast Rust CLI** for aggregating entire codebases 
 
 ---
 
+## Deep Think Authority Mode (optional handoffs)
+
+When the user points at `docs/handoffs/**` or an AUTHORITY document:
+
+1. Follow **Authority Mode** rules in `docs/agent-harness/antigravity-system-prompt.md`.
+2. AUTHORITY is law for implementation; do **not** redesign.
+3. If the live tree contradicts AUTHORITY, stop with a **CONFLICT** packet (`docs/agent-harness/templates/05-conflict.md`).
+4. Prefer tools on the real repo; do not demand a re-dump of the full context-builder snapshot unless tools are unavailable.
+5. End with a **RESULT** block (`docs/agent-harness/templates/04-result.md`).
+
+Pipeline overview: `docs/agent-harness/README.md`. Skill entrypoint: `SKILL.md`.
+
+---
+
 ## Tech Stack
 
 | Technology | Usage |
@@ -167,7 +197,7 @@ Context Builder is a **blazing-fast Rust CLI** for aggregating entire codebases 
 | **Diffing** | `similar` (unified diffs) |
 | **File traversal** | `ignore` crate (gitignore-aware) |
 | **Token counting** | `tiktoken-rs` (`cl100k_base`) |
-| **Caching** | JSON + `fs2` file locking |
+| **Caching** | JSON snapshots + `std::fs::File` advisory locking (fs2 removed in v0.9.0) |
 | **Config** | TOML (`context-builder.toml`) |
 | **Encoding** | `encoding_rs` (transcoding non-UTF-8) |
 | **Logging** | `env_logger` |
@@ -189,9 +219,18 @@ context-builder/
 │   ├── tree.rs              # BTreeMap file tree (deterministic ordering)
 │   ├── state.rs             # ProjectState/FileState structured snapshots
 │   ├── markdown.rs          # Streaming file renderer, binary detection, encoding, parallel
-│   ├── cache.rs             # JSON-based caching with fs2 locking, old cache migration
+│   ├── cache.rs             # JSON-based caching with std::fs::File locking, old cache migration
 │   ├── diff.rs              # Per-file unified diffs via similar
-│   └── token_count.rs       # Real tokenization via tiktoken-rs (cl100k_base, lazy init)
+│   ├── token_count.rs       # Real tokenization via tiktoken-rs (o200k/cl100k, lazy init)
+│   ├── languages.rs         # Canonical extension → code-fence language map (v0.10)
+│   └── tree_sitter/         # AST signatures/structure/smart-truncation (feature-gated)
+│       ├── language_support.rs  # Signature/Visibility types, LanguageSupport trait
+│       ├── signatures.rs        # extract_signatures + markdown formatting
+│       ├── structure.rs         # structural summaries
+│       ├── truncation.rs        # AST-boundary smart truncation (char-safe per B19)
+│       ├── mod.rs               # feature-gated facade (is_supported_extension, etc.)
+│       └── languages/           # per-language extractors: rust, javascript, typescript,
+│                                #   python, go, java, c, cpp
 ├── tests/                   # 10 integration test files
 ├── benches/                 # Criterion benchmark suite
 ├── scripts/                 # generate_samples.rs (benchmark dataset generator)
@@ -249,6 +288,16 @@ cargo fmt --all
 |---|---|---|
 | `parallel` | ✅ | Rayon for parallel file processing |
 | `samples-bin` | ❌ | Exposes `generate_samples` binary for benchmarking |
+| `tree-sitter-base` | ❌ | Core tree-sitter parsing plumbing |
+| `tree-sitter-rust` | ❌ | Rust signature extraction |
+| `tree-sitter-js` | ❌ | JavaScript signature extraction |
+| `tree-sitter-ts` | ❌ | TypeScript/TSX signature extraction |
+| `tree-sitter-python` | ❌ | Python signature extraction |
+| `tree-sitter-go` | ❌ | Go signature extraction |
+| `tree-sitter-java` | ❌ | Java signature extraction |
+| `tree-sitter-c` | ❌ | C signature extraction |
+| `tree-sitter-cpp` | ❌ | C++ signature extraction |
+| `tree-sitter-all` | ❌ | Enables all eight language extractors |
 
 ---
 
@@ -306,17 +355,110 @@ cargo fmt --all
 2. Bump `version` in `Cargo.toml`, add entry to `CHANGELOG.md`
 3. `git commit -am "chore(release): vX.Y.Z" && git tag vX.Y.Z && git push && git push --tags`
 4. `cargo publish`
+5. Tag push triggers `.github/workflows/release.yml` — builds binaries for linux/darwin/windows targets and publishes the GitHub release (with SHA256SUMS).
+6. Bump the winget manifest under `winget/manifests/i/igorls/context-builder/<version>/` and submit to the winget-pkgs flow.
 ```
 
 ### File: `CHANGELOG.md`
 
-- Size: 13696 bytes
-- Modified: 2026-02-16 04:23:45 UTC
+- Size: 27103 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```markdown
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## v0.10.0 (2026-08-31) — "Honest Signatures"
+
+> Delivered per `docs/research/v0.10-plan.md` (derived from the post-v0.9.0 review): every documented flag now does what it says, divergent language maps are unified, and packaging/CI gaps are closed.
+
+- **`--truncate` is now wired into the `--max-tokens` budget path (review §1.1)**
+  - A file that crosses the remaining budget is **truncated in place** (with a visible `_⚠️ File content truncated: N of M bytes (mode: …)_` marker) instead of being omitted wholesale; only files after the crossing one are omitted
+  - `smart` mode cuts at an AST boundary via tree-sitter (char-safe per B19); `byte` mode cuts at a UTF-8 character boundary — the two modes now genuinely differ
+  - The truncated chunk is verified with the real tokenizer to fit the remaining allowance (probing the fixed section cost first, then shrinking proportionally); if even a minimal section cannot fit, the file is omitted exactly as before
+  - Serial and parallel paths truncate identically — byte-for-byte determinism between builds is preserved (verified)
+
+- **TypeScript class members are now extracted (review §1.3)**
+  - `--signatures` on a TS/TSX file now lists `method_definition` (including `async`/`static`/abstract), `public_field_definition` fields, and preserves access modifiers — previously only the bare class header appeared
+  - `--visibility` is honored for TypeScript: class members resolve `public`/`private`/`protected` (public by default), and top-level declarations are Public when `export`ed, Private otherwise (review §1.2, TS half)
+
+- **Honest `--visibility` for the remaining languages (review §1.2)**
+  - Rust, Go, Java, and TypeScript honor the filter; C, C++, Python, and JavaScript now emit a one-time `warn!` (per language, per process) stating the filter is not yet applied, instead of silently returning unfiltered signatures
+  - Full visibility classification for those four languages is queued for v0.11
+
+- **Single extension→language map (review §2)**
+  - New `src/languages.rs` — one `language_for_extension()` used by the file-body fence, the signature block, and the auto-diff path, replacing three divergent `match` maps
+  - Fixes the observable drift: `.mjs` bodies/signatures/auto-diff now consistently say `javascript` (previously the body fence said the non-highlightable `mjs`); `.jsx`/`.sh` keep their deliberate distinct tags (`jsx`, `bash`) everywhere — previously the auto-diff path emitted raw extensions
+
+- **Documentation sync (review §5)**
+  - `SKILL.md` no longer documents a nonexistent `simple` truncate mode (values are `smart`/`byte`)
+  - `README.md` describes `--max-tokens` truncation semantics accurately and states which languages honor `--visibility`
+  - `AGENTS.md` updated: std file locking (fs2 removed in v0.9.0), `src/tree_sitter/` in the structure tree, all nine `tree-sitter-*` features in the feature table, and the full release process (binary release + winget)
+
+- **CI, packaging & repo hygiene (review §4)**
+  - The MSRV job now builds with the pinned declared MSRV (`1.89`, `cargo check --all-features`) instead of `stable` — previously it never verified the MSRV at all
+  - `aarch64-unknown-linux-gnu` added to the release matrix (native `ubuntu-24.04-arm` runner) — the one-liner installer previously 404'd on Raspberry Pi / Graviton / ARM WSL because `install.sh` downloads an archive that was never built
+  - `[package.metadata.binstall]` added so `cargo binstall context-builder` resolves the pre-built release binaries
+  - `.github/dependabot.yml` added (cargo + github-actions, weekly; majors stay ungrouped for MSRV-conscious review)
+  - `test.md` (16 MB generated output) untracked; `Cargo.lock` no longer listed in `.gitignore` while being tracked (binary crate keeps its lockfile)
+
+- **Dependency diet (review §3)**
+  - Removed `walkdir` (never imported), `once_cell` (→ `std::sync::LazyLock`), and `num_cpus` (→ `std::thread::available_parallelism()`); `tempfile` no longer duplicated in `[dev-dependencies]`
+  - `similar` 2.7 → 3.2 and `tiktoken-rs` 0.9 → 0.12 (adds gpt-5 / o-series model mappings); both verified through the full suite
+  - `tree-sitter` stays at 0.26: v0.27 requires Rust 1.90, above the declared MSRV 1.89 — deferred to v0.11 together with the MSRV bump
+
+## v0.9.0 (2026-06-04) — "Trustworthy Output"
+
+> Delivered per `docs/research/next-release-roadmap.md`: accurate token counting, honest tree-sitter signatures, pipe-friendly output, and a reliable auto-diff cache.
+
+- **Accurate token counting — selectable tokenizer (F1)**
+  - New `--encoding {o200k_base|cl100k_base}` flag (and `encoding` config option), defaulting to **`o200k_base`** (GPT-4o / o-series). The previous hardcoded `cl100k_base` under-counts every modern OpenAI model. The selected encoding flows through both `--token-count` and `--max-tokens` budgeting
+  - `--token-count` now reports counts using the chosen encoding
+
+- **CLI validation — invalid values are now rejected (F7)**
+  - `--truncate`, `--visibility`, and `--encoding` are constrained to their allowed sets via clap `value_parser`, so invalid values produce a clear `error: ... [possible values: ...]` instead of being silently coerced (fixes B3 `--visibility` and B4 `--truncate` silent-acceptance) and `--help` now lists the valid values
+
+- **CLI precedence — explicit flags override config even at their default value**
+  - `--encoding`, `--truncate`, and `--visibility` are now honored when passed explicitly even if the value equals the clap default — e.g. `--encoding o200k_base` overriding a config that sets `cl100k_base`. Resolution uses clap's `ValueSource` to tell an explicitly-passed flag from an omitted one, instead of treating "value == default" as "not provided", which previously left the default value un-selectable from the CLI whenever the config set a non-default
+
+- **Pipe-friendly output — stream to stdout (F2)**
+  - `-o -` streams the generated document to **stdout** instead of a file, enabling `context-builder -f rs -o - | llm`. All progress/status chatter is suppressed (or already on stderr) in this mode so the pipe stays clean, and `-` is never folded into an output folder or timestamped name. Works for the auto-diff path too (the composed diff document is written to stdout)
+  - In pipe mode the large-project (>100 files) confirmation prompt is skipped as well — it `print!`s to stdout and would otherwise prepend prompt text to the piped document (and block on stdin); pipe mode is non-interactive, so it proceeds as if `--yes` were given
+
+- **Trustworthy token budget — `--max-tokens` uses the real tokenizer (F4, B1, B2)**
+  - `--max-tokens` now counts the real tokenizer (per `--encoding`) on each file's rendered output, replacing the crude `buf.len()/4` (parallel) and `metadata().len()/4` (serial) byte heuristics. Both code paths now estimate identically, restoring byte-for-byte determinism between parallel and non-parallel builds
+  - Fixed the budget bypass where the first file was always emitted in full regardless of `--max-tokens` (the `tokens_used > 0` guard). The budget now applies to every file, including the first (B1)
+  - The document header + file tree are debited from the budget, so `--max-tokens` accounts for the whole document, not just file bodies
+  - Tokenization is skipped entirely when no budget is set — no overhead on normal runs. In that case the non-parallel build also streams each file straight to the output instead of rendering it into a buffer first (buffering exists only to tokenize the chunk for the budget), keeping peak memory bounded on large files
+  - The deterministic content hash now folds in every output-affecting option (`line_numbers`, `max_tokens`, `encoding`, tree-sitter flags, `encoding_strategy`). Previously, toggling e.g. `--line-numbers` produced a different document under the **same** hash, silently breaking LLM prompt caching. The hash still fingerprints raw file content (not the rendered output, which embeds volatile mtimes), so it stays stable across checkouts (B2)
+
+- **Robustness & accuracy — low-severity mop-up (B5, B9, B17, B19, B20)**
+  - Auto-diff cache is now written atomically (temp file + rename) instead of truncate-then-write, so a crash mid-write can't leave a corrupt, baseline-dropping cache (B20). The `fs2` dependency was dropped — `std::fs::File` provides advisory locking natively since Rust 1.89 (MSRV is now 1.89)
+  - `find_smart_truncation_point` clamps its result to a UTF-8 char boundary, preventing a panic when the byte-budget fallback lands mid-character (B19)
+  - `--token-count` renders each file through the **same path as the document**, so the preview matches the produced output (including encoding transcoding and tree-sitter signature/structure enrichment) instead of diverging via a separate raw-byte read (B9)
+  - C++ struct inheritance, `enum` underlying types, and `using`/`typedef` alias targets — plus C `typedef` aliased types — are preserved in extracted signatures instead of being reduced to a bare name (B17)
+  - An unrecognized `encoding_strategy` in config now warns instead of silently falling back to `detect` (B5)
+
+- **Reliable auto-diff cache invalidation (B6, B7, B8)**
+  - Unified the two duplicated config-hash functions (`cache.rs::hash_config` and `state.rs::compute_config_hash`) into one shared `config::config_fingerprint`, removing the "must stay in sync" drift hazard (B6)
+  - The auto-diff cache fingerprint now keys on **only the file-selection inputs** (`filter` / `ignore`) — the options that decide which files form the comparable baseline. The diff compares each file's **raw captured content** (`ProjectState` stores the bytes), which no rendering option changes, so `--signatures` / `--structure` / `--truncate` / `--visibility` / `--max-tokens` / `--line-numbers` / `--encoding` / `encoding_strategy` are all **excluded**: toggling one against an existing baseline no longer silently discards the diff (which would hide real content changes on that run). The resolved CLI `filter`/`ignore` are folded in so the key reflects real behavior even when they come from flags rather than the config file (B7). _(This supersedes an earlier B7 approach that included the rendering options; per PR review, those caused exactly the spurious baseline resets described above.)_
+  - `--diff-only` now warns when used without `auto_diff` instead of silently emitting full file contents (B8)
+
+- **Tree-Sitter correctness — honest `--signatures` / `--visibility`**
+  - Fixed Java `--visibility` filter being completely non-functional — `get_visibility` returned `Visibility::All` unconditionally, so `--visibility public` dropped *every* Java symbol and `--visibility private` leaked *all* of them. It now inspects the declaration's `modifiers` node (B12)
+  - Fixed C/C++ functions returning a pointer or reference being silently dropped — `find_function_name` now descends through `pointer_declarator` / `reference_declarator` / `parenthesized_declarator` to locate the `function_declarator` (B13)
+  - Fixed C++ qualified return types (e.g. `std::string`) being misread as the function name — the name is now resolved strictly inside `function_declarator`, with no sibling-identifier fallback (B14)
+  - Fixed Rust bodiless trait methods (`function_signature_item`, e.g. `fn draw(&self);`) being dropped from both signature extraction and structure counts (B15)
+  - Fixed Python class base lists being double-parenthesized (`class User((Base))`) — `argument_list` already includes the surrounding parentheses (B16)
+  - Fixed Rust restricted visibility (`pub(crate)` / `pub(super)` / `pub(in ...)`) being reported as fully public; restricted forms are no longer matched by `--visibility public` (B18)
+  - Fixed a public trait's required methods being dropped under `--visibility public` — a `function_signature_item` carries no visibility modifier (Rust forbids one on trait items), so it now inherits the enclosing trait's visibility instead of defaulting to private; a public trait's required methods are part of its public API and are kept, while a private trait's are still filtered out
+  - Fixed the Java analog: a `public interface`'s methods are implicitly public but carry no `modifiers` node, so they were classified package-private and dropped under `--visibility public`. Java members with no access modifier are now resolved by context — implicitly public as interface/annotation members, package-private in a class/enum — while an explicit `private`/`protected` (incl. Java 9+ private interface methods) is still respected
+  - Added regression tests covering each of the above
+
+- **Maintenance**
+  - Modernized two `sort_by` comparisons to `sort_by_key(Reverse(..))` to satisfy a newer clippy under `-D warnings` (surfaced after the toolchain advanced during the release gap)
+  - Added `docs/research/next-release-roadmap.md` — the full prioritized v0.9.0 plan (verified bug backlog, competitive refresh, feature/dependency/DX roadmap)
 
 ## v0.8.3
 
@@ -569,15 +711,17 @@ All notable changes to this project will be documented in this file.
 
 ### File: `Cargo.toml`
 
-- Size: 2832 bytes
-- Modified: 2026-02-16 04:22:28 UTC
+- Size: 4259 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```toml
 [package]
 name = "context-builder"
-version = "0.8.3"
+version = "0.10.0"
 default-run = "context-builder"
 edition = "2024"
+# std::fs::File advisory locking (used by the cache) stabilized in Rust 1.89.
+rust-version = "1.89"
 authors = ["Igor Lins e Silva"]
 description = "CLI tool to aggregate directory contents into a single markdown file optimized for LLM consumption"
 readme = "README.md"
@@ -586,6 +730,30 @@ repository = "https://github.com/igorls/context-builder"
 license = "MIT"
 keywords = ["cli", "markdown", "documentation", "llm", "context"]
 categories = ["command-line-utilities", "development-tools"]
+# Keep the published crate lean: exclude the 16 MB test fixture, research dumps,
+# demo media, CI config, and packaging manifests — none are needed to build or
+# use the crate. (src, benches, scripts, tests, README, LICENSE, CHANGELOG stay.)
+exclude = [
+    "/test.md",
+    "/docs",
+    "/winget",
+    "/.github",
+    "/.agent",
+    "/install.sh",
+    "/tarpaulin.toml",
+]
+
+# cargo-binstall metadata: lets `cargo binstall context-builder` resolve the
+# pre-built release binaries instead of compiling from source (review §4.3).
+# The release archives are named `context-builder-<target>.tar.gz` (`.zip` on
+# Windows) and contain the bare binary at the archive root.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/context-builder-{ target }{ archive-suffix }"
+bin-dir = "context-builder{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
 
 [dependencies]
 clap = { version = "4.5.58", features = ["derive"] }
@@ -596,16 +764,17 @@ env_logger = "0.11.9"
 rayon = { version = "1.10", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.0.1"
-similar = "2.7.0"
+similar = "3.2.0"
+# tempfile: used at runtime by cache.rs (atomic writes) — also covers tests,
+# so it is NOT duplicated in [dev-dependencies] (v0.10 dependency diet).
 tempfile = "3.25.0"
-tiktoken-rs = "0.9.1"
-once_cell = "1.21.3"
-fs2 = "0.4.3"
+tiktoken-rs = "0.12.0"
+# (once_cell and num_cpus removed in v0.10 — std::sync::LazyLock and
+#  std::thread::available_parallelism cover them; walkdir was never imported.)
 serde_json = "1.0.143"
 crossbeam-channel = "0.5.15"
-num_cpus = "1.17.0"
+# (fs2 removed in v0.9.0 — std::fs::File now provides advisory locking)
 encoding_rs = "0.8.35"
-walkdir = "2.5.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Tree-sitter dependencies (feature-gated)
@@ -646,7 +815,6 @@ tree-sitter-all = [
 ]
 
 [dev-dependencies]
-tempfile = "3.25.0"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 pretty_assertions = "1.4.1"
 serial_test = "3.0"
@@ -663,8 +831,8 @@ required-features = ["samples-bin"]
 
 ### File: `README.md`
 
-- Size: 11448 bytes
-- Modified: 2026-02-16 04:23:47 UTC
+- Size: 13072 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```markdown
 <div align="center">
@@ -764,6 +932,8 @@ Pre-built binaries include full Tree-Sitter AST support. The installer verifies 
 curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | bash
 ```
 
+> **Note:** piping remote scripts into `sh` is a matter of trust — some scanners flag the `curl | bash` pattern generically. If you prefer, review [install.sh](install.sh) first or use one of the alternatives below.
+
 ### Windows (PowerShell)
 
 ```powershell
@@ -829,6 +999,9 @@ context-builder --token-count
 # Add line numbers to all code blocks
 context-builder --line-numbers
 
+# Stream the document to stdout and pipe it straight into an LLM tool
+context-builder -f rs -o - | llm
+
 # Skip all confirmation prompts (auto-answer yes)
 context-builder --yes
 
@@ -887,6 +1060,10 @@ preview = false
 # Token counting mode
 token_count = false
 
+# Tokenizer encoding for --token-count / --max-tokens
+# Options: "o200k_base" (GPT-4o / o-series, default) or "cl100k_base" (GPT-4 / GPT-3.5)
+encoding = "o200k_base"
+
 
 # Automatically answer yes to all prompts
 
@@ -924,10 +1101,10 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 ### Command Line Options
 
 - `-d, --input <PATH>` - Directory path to process (default: current directory).
-- `-o, --output <FILE>` - Output file path (default: `output.md`).
+- `-o, --output <FILE>` - Output file path (default: `output.md`). Use `-` to stream the document to **stdout** (e.g. `context-builder -o - | llm`); progress messages then go to stderr so the pipe stays clean.
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
 - `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
-- `--max-tokens <N>` - Maximum token budget for the output. Files are truncated/skipped when exceeded.
+- `--max-tokens <N>` - Maximum token budget for the output. Files that exceed the remaining budget are truncated in place (per the `--truncate` mode); further files are omitted with a notice.
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
@@ -936,14 +1113,16 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
 - `--signatures` - Replace full file content with extracted function/class signatures *(requires tree-sitter)*.
 - `--structure` - Append structural summary (function/class counts) to each file *(requires tree-sitter)*.
-- `--truncate <MODE>` - Truncation strategy: `none` (default) or `smart` (AST-boundary aware) *(requires tree-sitter)*.
+- `--truncate <MODE>` - Truncation strategy for `--max-tokens`: `smart` (cut at AST boundaries, default) or `byte` (cut at a UTF-8 character boundary) *(requires tree-sitter)*.
+- `--visibility <FILTER>` - Filter extracted signatures by visibility: `all` (default), `public`, or `private`. Honored for Rust, Go, Java, and TypeScript; other languages warn that the filter is not yet applied *(requires tree-sitter)*.
+- `--encoding <ENC>` - Tokenizer used for `--token-count` and `--max-tokens`: `o200k_base` (GPT-4o / o-series, default) or `cl100k_base` (GPT-4 / GPT-3.5).
 - `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
 ---
 
 ## Token Counting
 
-Context Builder uses the `tiktoken-rs` library to provide accurate token counts for OpenAI models. This ensures that the token count is as close as possible to the actual number of tokens that will be used by the model.
+Context Builder uses the `tiktoken-rs` library to provide accurate token counts. By default it uses the **`o200k_base`** encoding, which matches GPT-4o and the o-series (and is a close approximation for current frontier models). Use `--encoding cl100k_base` for GPT-4 / GPT-3.5. The selected encoding applies to both `--token-count` and `--max-tokens` budgeting.
 
 ---
 
@@ -966,13 +1145,168 @@ See **[CHANGELOG.md](CHANGELOG.md)** for a complete history of releases and chan
 This project is licensed under the MIT License. See the **[LICENSE](LICENSE)** file for details.
 ```
 
-### File: `src/lib.rs`
+### File: `docs\agent-harness\README.md`
 
-- Size: 84117 bytes
-- Modified: 2026-02-16 04:28:24 UTC
+- Size: 6089 bytes
+- Modified: 2026-07-23 00:39:58 UTC
+
+```markdown
+# Deep Think Authority Harness
+
+> **Thesis:** The intelligence gap between Gemini Flash (agent harness) and Deep Think (Ultra web) is real. Closing it is not reverse-engineering Deep Think into the agent — it is **separating roles** and **injecting Deep Think as authoritative context** that Flash must obey.
+
+This harness is the organized skill layer on top of [context-builder](../../README.md):
+
+| Phase | Actor | Tooling |
+| --- | --- | --- |
+| **1. Package** | You / agent | `context-builder` → scoped, relevance-ordered context |
+| **2. Reason** | Deep Think (Ultra web) | One-shot review over that context → **AUTHORITY** document |
+| **3. Execute** | Antigravity / Flash agent | System prompt + AUTHORITY + tools on the real repo |
+| **4. Verify** | Agent | Commands from AUTHORITY; stop on conflict |
+| **5. Re-escalate** | You → Deep Think | Only when evidence contradicts AUTHORITY |
+
+Your multi-model research already supports the packaging side: well-structured context lets one-shot Deep Think match agentic reviewers on *bug depth*. The missing half is the **return path** into a weaker tool-using model without letting it freestyle.
+
+---
+
+## What this does *not* claim
+
+- Flash + good context ≠ Deep Think. You do **not** recover Deep Think’s novel reasoning mid-flight.
+- You **do** recover: discipline, correct targets, ordered steps, fewer architecture thrash loops, higher verification fidelity.
+- Dumping a 40-page freeform Deep Think essay into the agent **hurts**. Structure + budget beat volume.
+
+---
+
+## Core invariant (put this in every agent system prompt)
+
+```
+AUTHORITY documents produced by Deep Think are law for implementation.
+If the codebase contradicts AUTHORITY, STOP and emit a CONFLICT packet.
+Do not redesign, re-prioritize, or invent alternate architectures.
+You may fix local mechanical details required to implement AUTHORITY.
+```
+
+---
+
+## Files in this harness
+
+| Path | Purpose |
+| --- | --- |
+| [`antigravity-system-prompt.md`](./antigravity-system-prompt.md) | Paste / mount as Antigravity (or any agent) system instructions |
+| [`templates/01-problem.md`](./templates/01-problem.md) | Human → Deep Think intake |
+| [`templates/02-authority.md`](./templates/02-authority.md) | Deep Think output shape (required) |
+| [`templates/03-build.md`](./templates/03-build.md) | Human → agent task wrapper |
+| [`templates/04-result.md`](./templates/04-result.md) | Agent → human completion report |
+| [`templates/05-conflict.md`](./templates/05-conflict.md) | Agent stop condition when plan meets reality |
+
+---
+
+## Recommended on-disk layout (per project)
+
+```
+docs/handoffs/<YYYY-MM-DD-short-slug>/
+  00-context.md          # from context-builder (or path to it)
+  01-problem.md
+  02-authority.md        # paste Deep Think response here (edited)
+  03-build.md
+  04-result.md
+```
+
+Keep handoffs **out of** the next context-builder snapshot if they bloat tokens (`-i handoffs` or output only under a ignored pattern). Prefer `docs/handoffs/` + ignore in `context-builder.toml` when regenerating review context.
+
+---
+
+## End-to-end recipe
+
+### A. Package for Deep Think
+
+```bash
+# Preview size
+context-builder -d /abs/path/to/project --token-count
+
+# Full review context (adjust filters per language)
+context-builder -d /abs/path/to/project \
+  -f rs,toml,md \
+  --max-tokens 120000 \
+  -y -o docs/handoffs/2026-07-22-example/00-context.md
+```
+
+For large trees, prefer signatures first:
+
+```bash
+context-builder -d /abs/path/to/project \
+  --signatures --structure --visibility public \
+  -f rs -y -o docs/handoffs/.../00-context-signatures.md
+```
+
+### B. Deep Think pass
+
+1. Upload `00-context.md` in Gemini Ultra.
+2. Paste `templates/01-problem.md` filled in, plus the closing line that **forces AUTHORITY shape**.
+3. Save response as `02-authority.md`. Human-edit: delete prose fluff; keep verdict, plan, verification.
+
+### C. Antigravity / Flash pass
+
+1. Ensure agent system prompt includes `antigravity-system-prompt.md`.
+2. Open the **project root** (not the handoff folder alone).
+3. Paste `03-build.md` with AUTHORITY inlined or `@`-referenced.
+4. Agent implements; must return `04-result.md` shape.
+5. On mismatch → `05-conflict.md` → back to Deep Think with new evidence only.
+
+### D. After implementation (optional)
+
+```bash
+# Diff-only update for a second Deep Think verification pass
+context-builder -d /abs/path/to/project -y --diff-only -o docs/handoffs/.../05-post-diff.md
+```
+
+---
+
+## Attention budget for Flash (critical)
+
+Rank content by **influence**, not chronological paste order:
+
+1. **System prompt** (this harness) — identity + stop rules  
+2. **AUTHORITY** (≤ ~2–4k tokens if possible) — law  
+3. **Current task slice** — which step of the plan  
+4. **Live repo via tools** — ground truth  
+5. **Full context-builder dump** — *optional*; usually already consumed by Deep Think  
+
+Do **not** re-inject the entire Deep Think *input* context into Flash unless the agent has no tool access. Flash should **read files** with tools, not re-read a 100k snapshot that Deep Think already distilled.
+
+---
+
+## When to re-escalate to Deep Think
+
+| Signal | Action |
+| --- | --- |
+| AUTHORITY step impossible given real code | CONFLICT → Deep Think DEBUG |
+| Tests fail for design reasons (not typos) | DEBUG packet + new evidence |
+| Two plausible architectures appear mid-work | STOP — new PROBLEM, not agent freestyle |
+| Mechanical compile/lint errors | Agent only |
+| Flaky env / path issues | Agent only |
+
+---
+
+## Skill product direction (future CLI)
+
+Possible context-builder features that encode this harness (not required to use it today):
+
+1. `context-builder handoff init <slug>` — scaffold `docs/handoffs/<slug>/` from templates  
+2. `context-builder handoff package` — write `00-context.md` into the active handoff  
+3. `context-builder handoff distill` — (human-assisted) strip AUTHORITY to agent-sized budget  
+4. Emit a ready-to-paste **BUILD** file from AUTHORITY + verification commands  
+
+Until then, the markdown templates + Antigravity system prompt are the skill surface.
+```
+
+### File: `src\lib.rs`
+
+- Size: 91791 bytes
+- Modified: 2026-08-31 04:13:25 UTC
 
 ```rust
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches};
 
 use std::fs;
 use std::io::{self, Write};
@@ -985,6 +1319,7 @@ pub mod config;
 pub mod config_resolver;
 pub mod diff;
 pub mod file_utils;
+pub mod languages;
 pub mod markdown;
 pub mod state;
 pub mod token_count;
@@ -1000,7 +1335,7 @@ use diff::render_per_file_diffs;
 use file_utils::{collect_files, confirm_overwrite, confirm_processing};
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
-use token_count::{count_file_tokens, count_tree_tokens, estimate_tokens};
+use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
 use tree::{build_file_tree, print_tree};
 
 /// Configuration for diff operations
@@ -1046,6 +1381,20 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     // Use the finalized args passed in from run()
     let final_args = args;
+    // `-o -` streams the document to stdout (pipe mode). In this mode all
+    // human-facing chatter must go to stderr so it doesn't corrupt the pipe.
+    let to_stdout = final_args.output == "-";
+
+    // B5: warn on an unrecognized encoding_strategy instead of silently using
+    // "detect". Validates the config value against the supported set.
+    if let Some(ref strat) = config.encoding_strategy
+        && !matches!(strat.as_str(), "detect" | "strict" | "skip")
+        && !silent
+    {
+        eprintln!(
+            "⚠️  Unknown encoding_strategy '{strat}' in config; expected one of: detect, strict, skip. Falling back to 'detect'."
+        );
+    }
     // Resolve base path. If input is '.' but current working directory lost the project context
     // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
     let mut resolved_base = PathBuf::from(&final_args.input);
@@ -1220,7 +1569,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
 
         if !large_files.is_empty() {
-            large_files.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by size descending
+            large_files.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by size descending
             eprintln!(
                 "\n⚠  {} large file(s) detected (>{} KB):",
                 large_files.len(),
@@ -1253,34 +1602,62 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     if final_args.token_count {
         if !silent {
+            let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
+            // Render each file through the same path as the document so the
+            // preview matches what would actually be produced (B9).
+            let ts_config = markdown::TreeSitterConfig {
+                signatures: final_args.signatures,
+                structure: final_args.structure,
+                truncate: final_args.truncate.clone(),
+                visibility: final_args.visibility.clone(),
+            };
+            let enc_strategy = config.encoding_strategy.as_deref();
             println!("\n# Token Count Estimation\n");
             let mut total_tokens = 0;
-            total_tokens += estimate_tokens("# Directory Structure Report\n\n");
+            total_tokens += estimate_tokens(encoding, "# Directory Structure Report\n\n");
             if !final_args.filter.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains files from the `{}` directory with extensions: {} \n",
-                    final_args.input,
-                    final_args.filter.join(", ")
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "This document contains files from the `{}` directory with extensions: {} \n",
+                        final_args.input,
+                        final_args.filter.join(", ")
+                    ),
+                );
             } else {
-                total_tokens += estimate_tokens(&format!(
-                    "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
-                    final_args.input
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
+                        final_args.input
+                    ),
+                );
             }
             if !final_args.ignore.is_empty() {
-                total_tokens += estimate_tokens(&format!(
-                    "Custom ignored patterns: {} \n",
-                    final_args.ignore.join(", ")
-                ));
+                total_tokens += estimate_tokens(
+                    encoding,
+                    &format!(
+                        "Custom ignored patterns: {} \n",
+                        final_args.ignore.join(", ")
+                    ),
+                );
             }
-            total_tokens += estimate_tokens("Content hash: 0000000000000000\n\n");
-            total_tokens += estimate_tokens("## File Tree Structure\n\n");
-            let tree_tokens = count_tree_tokens(&file_tree, 0);
+            total_tokens += estimate_tokens(encoding, "Content hash: 0000000000000000\n\n");
+            total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
+            let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
             let file_tokens: usize = files
                 .iter()
-                .map(|entry| count_file_tokens(base_path, entry, final_args.line_numbers))
+                .map(|entry| {
+                    count_file_tokens(
+                        base_path,
+                        entry,
+                        final_args.line_numbers,
+                        encoding,
+                        enc_strategy,
+                        &ts_config,
+                    )
+                })
                 .sum();
             total_tokens += file_tokens;
             println!("Estimated total tokens: {}", total_tokens);
@@ -1290,7 +1667,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         return Ok(());
     }
 
-    if !final_args.yes && !prompter.confirm_processing(files.len())? {
+    // In pipe mode (`-o -`) there is no interactive terminal to answer a prompt,
+    // and `confirm_processing` would `print!` to stdout — corrupting the piped
+    // document and blocking on stdin. Skip the >100-file confirmation and proceed,
+    // exactly as `--yes` would.
+    if !final_args.yes && !to_stdout && !prompter.confirm_processing(files.len())? {
         if !silent {
             println!("Operation cancelled.");
         }
@@ -1304,20 +1685,31 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // by config_resolver.rs with proper CLI-takes-precedence semantics.
     // Do NOT re-apply them here as that would silently overwrite CLI flags.
 
+    // B8: --diff-only only takes effect together with auto_diff (+ timestamped
+    // output). Warn instead of silently emitting full file contents.
+    if final_args.diff_only && !config.auto_diff.unwrap_or(false) && !silent {
+        eprintln!(
+            "⚠️  --diff-only has no effect without auto_diff (it also needs timestamped_output). \
+             Full file contents will be emitted. Enable auto_diff = true + timestamped_output = true to use diff-only mode."
+        );
+    }
+
     if config.auto_diff.unwrap_or(false) {
-        // Build an effective config that mirrors the *actual* operational settings coming
-        // from resolved CLI args (filters/ignores/line_numbers). This ensures the
-        // configuration hash used for cache invalidation reflects real behavior and
-        // stays consistent across runs even when values originate from CLI not file.
+        // Build an effective config that mirrors the *actual* file selection coming
+        // from resolved CLI args, so the cache/diff fingerprint reflects real
+        // behavior even when filter/ignore originate from the CLI, not the config
+        // file. Only `filter`/`ignore` matter: they decide which files form the
+        // diff baseline. Rendering options (signatures/structure/truncate/
+        // visibility/max_tokens/line_numbers/encoding) deliberately do NOT feed the
+        // fingerprint — they don't change the captured raw content — so propagating
+        // them here would only risk spurious baseline resets (see `config_fingerprint`).
         let mut effective_config = config.clone();
-        // Normalize filter/ignore/line_numbers into config so hashing sees them
         if !final_args.filter.is_empty() {
             effective_config.filter = Some(final_args.filter.clone());
         }
         if !final_args.ignore.is_empty() {
             effective_config.ignore = Some(final_args.ignore.clone());
         }
-        effective_config.line_numbers = Some(final_args.line_numbers);
 
         // 1. Create current project state
         let current_state = ProjectState::from_files(
@@ -1464,20 +1856,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             }
         }
 
-        // 5. Write output
-        let output_path = Path::new(&final_args.output);
-        if let Some(parent) = output_path.parent()
-            && !parent.exists()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            return Err(io::Error::other(format!(
-                "Failed to create output directory {}: {}",
-                parent.display(),
-                e
-            )));
+        // 5. Write output — to stdout in pipe mode, otherwise to the file.
+        if to_stdout {
+            io::stdout().write_all(final_doc.as_bytes())?;
+        } else {
+            let output_path = Path::new(&final_args.output);
+            if let Some(parent) = output_path.parent()
+                && !parent.exists()
+                && let Err(e) = fs::create_dir_all(parent)
+            {
+                return Err(io::Error::other(format!(
+                    "Failed to create output directory {}: {}",
+                    parent.display(),
+                    e
+                )));
+            }
+            let mut final_output = fs::File::create(output_path)?;
+            final_output.write_all(final_doc.as_bytes())?;
         }
-        let mut final_output = fs::File::create(output_path)?;
-        final_output.write_all(final_doc.as_bytes())?;
 
         // 6. Update cache with current state
         if let Err(e) = cache_manager.write_cache(&current_state)
@@ -1487,7 +1883,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
 
         let duration = start_time.elapsed();
-        if !silent {
+        if !silent && !to_stdout {
             if let Some(comp) = &comparison {
                 if comp.summary.has_changes() {
                     println!(
@@ -1545,11 +1941,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         final_args.line_numbers,
         config.encoding_strategy.as_deref(),
         final_args.max_tokens,
+        final_args.encoding.parse::<Encoding>().unwrap_or_default(),
         &ts_config,
     )?;
 
     let duration = start_time.elapsed();
-    if !silent {
+    if !silent && !to_stdout {
         println!("Documentation created successfully: {}", final_args.output);
         println!("Processing time: {:.2?}", duration);
 
@@ -1709,21 +2106,10 @@ fn generate_markdown_with_diff(
                 output.push_str(&format!("- Size: {} bytes\n", file_state.size));
                 output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
 
-                // Determine language from file extension
+                // Determine language from file extension (canonical map —
+                // same fence language as the main rendering path)
                 let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
-                let language = match extension {
-                    "rs" => "rust",
-                    "js" => "javascript",
-                    "ts" => "typescript",
-                    "py" => "python",
-                    "json" => "json",
-                    "toml" => "toml",
-                    "md" => "markdown",
-                    "yaml" | "yml" => "yaml",
-                    "html" => "html",
-                    "css" => "css",
-                    _ => extension,
-                };
+                let language = crate::languages::language_for_extension(extension);
 
                 // When --signatures is active, only suppress content for supported code files
                 let signatures_only =
@@ -1768,7 +2154,19 @@ fn generate_markdown_with_diff(
 
 pub fn run() -> io::Result<()> {
     env_logger::init();
-    let args = Args::parse();
+    // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
+    // value-bearing flags were *explicitly* passed or left at their clap default.
+    // `--encoding o200k_base` carries the same value as the default, so the value
+    // alone can't reveal an intent to override a non-default config (see resolver).
+    let matches = Args::command().get_matches();
+    let explicit = crate::config_resolver::ExplicitCli {
+        truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
+        visibility: matches.value_source("visibility")
+            == Some(clap::parser::ValueSource::CommandLine),
+        encoding: matches.value_source("encoding") == Some(clap::parser::ValueSource::CommandLine),
+    };
+    let args = Args::from_arg_matches(&matches)
+        .expect("arguments were already validated by get_matches()");
 
     // Handle init command first
     if args.init {
@@ -1799,7 +2197,7 @@ pub fn run() -> io::Result<()> {
     }
 
     // Resolve final configuration using the new config resolver
-    let resolution = crate::config_resolver::resolve_final_config(args, config.clone());
+    let resolution = crate::config_resolver::resolve_final_config(args, config.clone(), explicit);
 
     // Print warnings if any
     let silent = std::env::var("CB_SILENT")
@@ -1830,6 +2228,7 @@ pub fn run() -> io::Result<()> {
         structure: resolution.config.structure,
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
+        encoding: resolution.config.encoding,
     };
 
     // Create final Config with resolved values
@@ -1869,7 +2268,7 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
 
     // Convert to vector of (extension, count) pairs and sort by count
     let mut extensions: Vec<(String, usize)> = extension_counts.into_iter().collect();
-    extensions.sort_by(|a, b| b.1.cmp(&a.1));
+    extensions.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Take the top 5 extensions or all if less than 5
     let top_extensions: Vec<String> = extensions.into_iter().take(5).map(|(ext, _)| ext).collect();
@@ -2015,6 +2414,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2051,6 +2451,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2092,6 +2493,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2131,6 +2533,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2173,6 +2576,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2216,6 +2620,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2258,6 +2663,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2306,6 +2712,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2353,6 +2760,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2399,6 +2807,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2448,6 +2857,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2494,6 +2904,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2597,6 +3008,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2637,6 +3049,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2677,6 +3090,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2721,6 +3135,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2753,6 +3168,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2790,6 +3206,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: Some(100),
             signatures: false,
@@ -2835,6 +3252,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2866,6 +3284,7 @@ mod tests {
             yes: true,
             diff_only: true,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2911,6 +3330,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -2989,6 +3409,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3158,6 +3579,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3199,6 +3621,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3241,6 +3664,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3281,6 +3705,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3310,6 +3735,7 @@ mod tests {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3358,6 +3784,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3431,6 +3858,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -3479,10 +3907,10 @@ mod tests {
 }
 ```
 
-### File: `src/main.rs`
+### File: `src\main.rs`
 
-- Size: 73 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 78 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 use std::io;
@@ -3492,10 +3920,10 @@ fn main() -> io::Result<()> {
 }
 ```
 
-### File: `src/tree_sitter/languages/mod.rs`
+### File: `src\tree_sitter\languages\mod.rs`
 
-- Size: 3727 bytes
-- Modified: 2026-02-16 03:20:03 UTC
+- Size: 3862 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 //! Language support registry.
@@ -3635,10 +4063,10 @@ pub fn supported_extensions() -> Vec<&'static str> {
 }
 ```
 
-### File: `src/tree_sitter/mod.rs`
+### File: `src\tree_sitter\mod.rs`
 
-- Size: 7458 bytes
-- Modified: 2026-02-15 20:46:52 UTC
+- Size: 8614 bytes
+- Modified: 2026-08-31 04:13:25 UTC
 
 ```rust
 //! Tree-sitter integration for intelligent code parsing.
@@ -3688,6 +4116,32 @@ pub fn is_supported_extension(ext: &str) -> bool {
 
 #[cfg(not(feature = "tree-sitter-base"))]
 pub fn is_supported_extension(_ext: &str) -> bool {
+    false
+}
+
+/// Languages whose signature extractors honor `--visibility` filtering.
+///
+/// v0.10: Rust, Go, Java, and TypeScript assign real visibility to
+/// signatures; the others still extract everything and ignore the filter
+/// (tracked for v0.11). Callers use this to warn the user instead of
+/// silently returning unfiltered output.
+#[cfg(feature = "tree-sitter-base")]
+pub fn supports_visibility_filtering(ext: &str) -> bool {
+    match ext.to_lowercase().as_str() {
+        #[cfg(feature = "tree-sitter-rust")]
+        "rs" => true,
+        #[cfg(feature = "tree-sitter-go")]
+        "go" => true,
+        #[cfg(feature = "tree-sitter-java")]
+        "java" => true,
+        #[cfg(feature = "tree-sitter-ts")]
+        "ts" | "mts" | "cts" | "tsx" => true,
+        _ => false,
+    }
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn supports_visibility_filtering(_ext: &str) -> bool {
     false
 }
 
@@ -3876,8 +4330,8 @@ mod tests {
 
 ### File: `install.sh`
 
-- Size: 2865 bytes
-- Modified: 2026-02-16 04:19:04 UTC
+- Size: 2950 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```bash
 #!/bin/sh
@@ -3967,10 +4421,10 @@ else
 fi
 ```
 
-### File: `src/cache.rs`
+### File: `src\cache.rs`
 
-- Size: 19719 bytes
-- Modified: 2026-02-16 03:20:01 UTC
+- Size: 19864 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Cache management for context-builder.
@@ -3979,8 +4433,8 @@ fi
 //! It uses a hash of the project path and configuration to avoid cache collisions
 //! between different projects or configurations.
 
-use fs2::FileExt;
-
+// File advisory locking (`lock_shared`/`unlock`) is provided by std::fs::File
+// (stabilized in Rust 1.89), so the former `fs2` dependency is no longer needed.
 use std::fs;
 use std::fs::File;
 
@@ -4065,32 +4519,11 @@ impl CacheManager {
         }
     }
 
-    /// Generate a hash from the configuration
+    /// Generate a hash from the configuration.
+    /// Delegates to the single shared `config_fingerprint` so the cache key and
+    /// `state.rs`'s config hash can never drift apart.
     fn hash_config(config: &Config) -> String {
-        // Build a stable string representation of config for hashing.
-        // IMPORTANT: Must stay in sync with state.rs::compute_config_hash
-        let mut config_str = String::new();
-        if let Some(ref filters) = config.filter {
-            config_str.push_str(&filters.join(","));
-        }
-        config_str.push('|');
-        if let Some(ref ignores) = config.ignore {
-            config_str.push_str(&ignores.join(","));
-        }
-        config_str.push('|');
-        config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-            config.line_numbers,
-            config.auto_diff,
-            config.diff_context_lines,
-            config.signatures,
-            config.structure,
-            config.truncate,
-            config.visibility,
-            config.max_tokens,
-        ));
-        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
-        format!("{:x}", hash)
+        crate::config::config_fingerprint(config)
     }
 
     /// Get the cache file path for this specific project and configuration
@@ -4154,26 +4587,22 @@ impl CacheManager {
         Ok(Some(state))
     }
 
-    /// Write the project state to cache with file locking
+    /// Write the project state to cache atomically.
+    ///
+    /// Serializes into a temp file in the cache directory, then renames it over
+    /// the target (B20). The previous implementation truncated the cache under an
+    /// exclusive lock and then wrote — a crash in that window left a truncated
+    /// (corrupt) cache, silently dropping the auto-diff baseline. With an atomic
+    /// rename, a crash leaves the old cache intact and readers always see a
+    /// complete file (old or new), never a partial write.
     pub fn write_cache(&self, state: &ProjectState) -> Result<(), Box<dyn std::error::Error>> {
         let cache_path = self.get_cache_path();
-
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&cache_path)?;
-        // Acquire exclusive lock BEFORE truncating to prevent TOCTOU races
-        file.lock_exclusive()?;
-        file.set_len(0)?;
-
         let json = serde_json::to_string_pretty(state)?;
-        let mut file = std::io::BufWriter::new(file);
-        file.write_all(json.as_bytes())?;
-        file.flush()?;
 
-        // Release lock
-        file.get_ref().unlock()?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&self.cache_dir)?;
+        tmp.write_all(json.as_bytes())?;
+        tmp.flush()?;
+        tmp.persist(&cache_path).map_err(|e| e.error)?;
 
         Ok(())
     }
@@ -4567,10 +4996,10 @@ mod tests {
 }
 ```
 
-### File: `src/cli.rs`
+### File: `src\cli.rs`
 
-- Size: 6553 bytes
-- Modified: 2026-02-15 06:50:55 UTC
+- Size: 8096 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 use clap::Parser;
@@ -4636,12 +5065,17 @@ pub struct Args {
     pub structure: bool,
 
     /// Truncation mode for max-tokens: "smart" (AST boundaries) or "byte"
-    #[clap(long, value_name = "MODE", default_value = "smart")]
+    #[clap(long, value_name = "MODE", value_parser = ["smart", "byte"], default_value = "smart")]
     pub truncate: String,
 
     /// Filter signatures by visibility: "all", "public", or "private"
-    #[clap(long, default_value = "all")]
+    #[clap(long, value_parser = ["all", "public", "private"], default_value = "all")]
     pub visibility: String,
+
+    /// Tokenizer encoding used for `--token-count` and `--max-tokens` budgeting.
+    /// "o200k_base" matches GPT-4o/o-series (default); "cl100k_base" matches GPT-4/3.5.
+    #[clap(long, value_parser = ["o200k_base", "cl100k_base"], default_value = "o200k_base")]
+    pub encoding: String,
 }
 
 #[cfg(test)]
@@ -4786,13 +5220,33 @@ mod tests {
             .expect("should parse with default visibility");
         assert_eq!(args_default.visibility, "all");
     }
+
+    #[test]
+    fn parses_encoding_flag_with_default() {
+        let args = Args::try_parse_from(["context-builder", "--encoding", "cl100k_base"])
+            .expect("should parse encoding flag");
+        assert_eq!(args.encoding, "cl100k_base");
+
+        let args_default =
+            Args::try_parse_from(["context-builder"]).expect("should parse with default encoding");
+        assert_eq!(args_default.encoding, "o200k_base");
+    }
+
+    #[test]
+    fn rejects_invalid_enum_values() {
+        // value_parser restricts these flags to their allowed sets, so invalid
+        // values now error at parse time instead of being silently coerced.
+        assert!(Args::try_parse_from(["context-builder", "--truncate", "bogus"]).is_err());
+        assert!(Args::try_parse_from(["context-builder", "--visibility", "bogus"]).is_err());
+        assert!(Args::try_parse_from(["context-builder", "--encoding", "bogus"]).is_err());
+    }
 }
 ```
 
-### File: `src/config.rs`
+### File: `src\config.rs`
 
-- Size: 10227 bytes
-- Modified: 2026-02-15 20:48:50 UTC
+- Size: 14723 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 use serde::Deserialize;
@@ -4881,6 +5335,40 @@ pub struct Config {
 
     /// Filter signatures by visibility: "all", "public", or "private"
     pub visibility: Option<String>,
+
+    /// Tokenizer encoding for token counting/budgeting.
+    /// - "o200k_base": GPT-4o / o-series (default)
+    /// - "cl100k_base": GPT-4 / GPT-3.5
+    pub encoding: Option<String>,
+}
+
+/// Stable fingerprint of the configuration that determines the auto-diff
+/// *baseline* — i.e. which files are captured and compared between runs. Shared
+/// by the cache key (`cache.rs`) and the project-state config hash (`state.rs`)
+/// so the two can never drift out of sync.
+///
+/// The baseline is the **raw content** of the selected files (`ProjectState`
+/// stores each file's bytes via `read_to_string`; the diff compares those). The
+/// only inputs that change that baseline are the file-selection options:
+/// `filter` and `ignore`. Everything else is pure *rendering* — `line_numbers`,
+/// `signatures`, `structure`, `truncate`, `visibility`, `max_tokens`,
+/// `encoding`/`encoding_strategy`, `diff_context_lines`, `diff_only`,
+/// `timestamped_output`, `output_folder` — and does **not** affect the captured
+/// content. Such options are deliberately EXCLUDED: including them would reset
+/// the diff baseline whenever a user toggles one (e.g. adding `--signatures`),
+/// silently hiding real content changes on that run. (The project *path* is
+/// keyed separately in `cache.rs`, so it isn't part of this fingerprint.)
+pub(crate) fn config_fingerprint(config: &Config) -> String {
+    let mut s = String::new();
+    if let Some(ref filters) = config.filter {
+        s.push_str(&filters.join(","));
+    }
+    s.push('|');
+    if let Some(ref ignores) = config.ignore {
+        s.push_str(&ignores.join(","));
+    }
+    let hash = xxhash_rust::xxh3::xxh3_64(s.as_bytes());
+    format!("{:x}", hash)
 }
 
 /// Load configuration from `context-builder.toml` in the current working directory.
@@ -5066,6 +5554,61 @@ invalid_toml [
         assert!(config.structure.is_none());
         assert!(config.truncate.is_none());
         assert!(config.visibility.is_none());
+        assert!(config.encoding.is_none());
+    }
+
+    #[test]
+    fn config_fingerprint_sensitivity() {
+        // The cache/diff fingerprint must change ONLY for the file-selection
+        // options (filter, ignore) that determine which files form the comparable
+        // baseline. Every pure output-rendering option must leave it untouched, so
+        // toggling one against an existing baseline never discards the diff.
+        let base = Config::default();
+        let base_h = config_fingerprint(&base);
+
+        // --- File selection: MUST change the fingerprint ---
+        let mut c = base.clone();
+        c.filter = Some(vec!["rs".to_string()]);
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "filter changes which files are captured, so it must change the fingerprint"
+        );
+
+        let mut c = base.clone();
+        c.ignore = Some(vec!["target".to_string()]);
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "ignore changes which files are captured, so it must change the fingerprint"
+        );
+
+        // --- Rendering options: MUST NOT change the fingerprint ---
+        // (none of these affect the raw content captured into the diff baseline)
+        type Mutate = fn(&mut Config);
+        let render_only: Vec<(&str, Mutate)> = vec![
+            ("line_numbers", |c| c.line_numbers = Some(true)),
+            ("signatures", |c| c.signatures = Some(true)),
+            ("structure", |c| c.structure = Some(true)),
+            ("truncate", |c| c.truncate = Some("byte".to_string())),
+            ("visibility", |c| c.visibility = Some("public".to_string())),
+            ("max_tokens", |c| c.max_tokens = Some(1000)),
+            ("encoding", |c| c.encoding = Some("cl100k_base".to_string())),
+            ("encoding_strategy", |c| {
+                c.encoding_strategy = Some("strict".to_string())
+            }),
+            ("diff_only", |c| c.diff_only = Some(true)),
+            ("diff_context_lines", |c| c.diff_context_lines = Some(9)),
+        ];
+        for (name, mutate) in render_only {
+            let mut c = base.clone();
+            mutate(&mut c);
+            assert_eq!(
+                config_fingerprint(&c),
+                base_h,
+                "{name} is a pure rendering option and must NOT invalidate the diff baseline"
+            );
+        }
     }
 
     #[test]
@@ -5116,10 +5659,10 @@ filter = ["rs"]
 }
 ```
 
-### File: `src/config_resolver.rs`
+### File: `src\config_resolver.rs`
 
-- Size: 15995 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 21807 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Configuration resolution module for context-builder.
@@ -5155,6 +5698,7 @@ pub struct ResolvedConfig {
     pub structure: bool,
     pub truncate: String,
     pub visibility: String,
+    pub encoding: String,
 }
 
 /// Result of configuration resolution including the final config and any warnings
@@ -5164,10 +5708,25 @@ pub struct ConfigResolution {
     pub warnings: Vec<String>,
 }
 
+/// Which value-bearing CLI flags the user explicitly passed (as opposed to
+/// leaving at their clap default). These flags carry a default *value*, so the
+/// value alone can't tell us whether the user typed e.g. `--encoding o200k_base`
+/// to override a non-default config or simply omitted the flag. `run()` fills
+/// this from clap's `ValueSource`; `Default` (all `false`) means "treat the
+/// value as a default", which preserves the value-based precedence for callers
+/// (e.g. tests) that build `Args` directly.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExplicitCli {
+    pub truncate: bool,
+    pub visibility: bool,
+    pub encoding: bool,
+}
+
 /// Resolves final configuration by merging CLI arguments with config file values.
 ///
 /// Precedence rules (highest to lowest):
-/// 1. Explicit CLI arguments (non-default values)
+/// 1. Explicit CLI arguments — a non-default value, or (for the value-bearing
+///    flags in `ExplicitCli`) a flag the user passed even at its default value
 /// 2. Configuration file values
 /// 3. CLI default values
 ///
@@ -5175,7 +5734,11 @@ pub struct ConfigResolution {
 /// - `output` field supports timestamping and output folder resolution
 /// - Boolean flags respect explicit CLI usage vs defaults
 /// - Arrays (filter, ignore) use CLI if non-empty, otherwise config file
-pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigResolution {
+pub fn resolve_final_config(
+    mut args: Args,
+    config: Option<Config>,
+    explicit: ExplicitCli,
+) -> ConfigResolution {
     let mut warnings = Vec::new();
 
     // Start with CLI defaults, then apply config file, then explicit CLI overrides
@@ -5204,7 +5767,10 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
         init: args.init,
         signatures: args.signatures || final_config.signatures.unwrap_or(false),
         structure: args.structure || final_config.structure.unwrap_or(false),
-        truncate: if args.truncate != "smart" {
+        // CLI explicit (even when the value equals the default) > config > default.
+        // The `|| value != default` keeps value-based precedence for callers that
+        // build Args directly without an explicitness signal (e.g. tests).
+        truncate: if explicit.truncate || args.truncate != "smart" {
             args.truncate.clone()
         } else {
             final_config
@@ -5212,13 +5778,21 @@ pub fn resolve_final_config(mut args: Args, config: Option<Config>) -> ConfigRes
                 .clone()
                 .unwrap_or_else(|| args.truncate.clone())
         },
-        visibility: if args.visibility != "all" {
+        visibility: if explicit.visibility || args.visibility != "all" {
             args.visibility.clone()
         } else {
             final_config
                 .visibility
                 .clone()
                 .unwrap_or_else(|| args.visibility.clone())
+        },
+        encoding: if explicit.encoding || args.encoding != "o200k_base" {
+            args.encoding.clone()
+        } else {
+            final_config
+                .encoding
+                .clone()
+                .unwrap_or_else(|| args.encoding.clone())
         },
     };
 
@@ -5299,6 +5873,11 @@ fn apply_config_to_args(args: &mut Args, config: &Config, warnings: &mut Vec<Str
 
 /// Resolve output path including timestamping and output folder logic
 fn resolve_output_path(args: &mut Args, config: &Config, warnings: &mut Vec<String>) {
+    // `-` means stdout: never fold in an output folder or a timestamp.
+    if args.output == "-" {
+        return;
+    }
+
     let mut output_folder_path: Option<PathBuf> = None;
 
     // Apply output folder first
@@ -5363,6 +5942,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -5379,7 +5959,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args.clone(), Some(config));
+        let resolution = resolve_final_config(args.clone(), Some(config), ExplicitCli::default());
 
         assert_eq!(resolution.config.output, "custom.md"); // CLI wins
         assert_eq!(resolution.config.filter, vec!["rs"]); // CLI wins
@@ -5400,6 +5980,7 @@ mod tests {
             yes: false,                      // Default value
             diff_only: false,                // Default value
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -5420,7 +6001,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert_eq!(resolution.config.output, "from_config.md");
         assert_eq!(
@@ -5448,6 +6029,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -5461,7 +6043,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         // Output should have timestamp format: test_YYYYMMDDHHMMSS.md
         assert!(resolution.config.output.starts_with("test_"));
@@ -5482,6 +6064,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -5495,7 +6078,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert!(resolution.config.output.contains("docs"));
         assert!(resolution.config.output.ends_with("test.md"));
@@ -5514,6 +6097,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -5528,11 +6112,44 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert!(resolution.config.output.contains("docs"));
         assert!(resolution.config.output.contains("test_"));
         assert!(resolution.config.output.ends_with(".md"));
+    }
+
+    #[test]
+    fn stdout_output_bypasses_folder_and_timestamp() {
+        let args = Args {
+            input: "src".to_string(),
+            output: "-".to_string(), // stdout
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let config = Config {
+            output_folder: Some("docs".to_string()),
+            timestamped_output: Some(true),
+            ..Default::default()
+        };
+
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
+        // `-` must survive untouched — not folded into docs/ nor timestamped.
+        assert_eq!(resolution.config.output, "-");
     }
 
     #[test]
@@ -5548,6 +6165,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -5562,7 +6180,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolution = resolve_final_config(args, Some(config));
+        let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
         assert!(!resolution.warnings.is_empty());
         assert!(resolution.warnings[0].contains("auto_diff"));
@@ -5582,6 +6200,7 @@ mod tests {
             yes: false,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -5590,7 +6209,7 @@ mod tests {
             visibility: "all".to_string(),
         };
 
-        let resolution = resolve_final_config(args.clone(), None);
+        let resolution = resolve_final_config(args.clone(), None, ExplicitCli::default());
 
         assert_eq!(resolution.config.input, args.input);
         assert_eq!(resolution.config.output, args.output);
@@ -5605,13 +6224,67 @@ mod tests {
         assert_eq!(resolution.config.diff_context_lines, 3);
         assert!(resolution.warnings.is_empty());
     }
+
+    #[test]
+    fn explicit_cli_default_value_overrides_config() {
+        // Regression: `--encoding o200k_base` (the clap default value) must still
+        // override a non-default config encoding. The value looks like the default,
+        // so resolution must rely on the explicit-flag signal, not the value.
+        // Same for `--truncate smart` and `--visibility all`.
+        let make_args = || Args {
+            input: ".".to_string(),
+            output: "output.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: false,
+            diff_only: false,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let config = Config {
+            encoding: Some("cl100k_base".to_string()),
+            truncate: Some("byte".to_string()),
+            visibility: Some("public".to_string()),
+            ..Default::default()
+        };
+
+        // Flags NOT explicitly passed → config wins (the value equals the default).
+        let implicit =
+            resolve_final_config(make_args(), Some(config.clone()), ExplicitCli::default());
+        assert_eq!(implicit.config.encoding, "cl100k_base");
+        assert_eq!(implicit.config.truncate, "byte");
+        assert_eq!(implicit.config.visibility, "public");
+
+        // Flags explicitly passed at their default value → CLI wins over config.
+        let explicit = resolve_final_config(
+            make_args(),
+            Some(config),
+            ExplicitCli {
+                truncate: true,
+                visibility: true,
+                encoding: true,
+            },
+        );
+        assert_eq!(explicit.config.encoding, "o200k_base");
+        assert_eq!(explicit.config.truncate, "smart");
+        assert_eq!(explicit.config.visibility, "all");
+    }
 }
 ```
 
-### File: `src/diff.rs`
+### File: `src\diff.rs`
 
-- Size: 21233 bytes
-- Modified: 2026-02-15 04:50:34 UTC
+- Size: 21817 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 use similar::{ChangeTag, TextDiff};
@@ -6200,10 +6873,10 @@ mod tests {
 }
 ```
 
-### File: `src/file_utils.rs`
+### File: `src\file_utils.rs`
 
-- Size: 31270 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 32111 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
@@ -7049,10 +7722,124 @@ mod tests {
 }
 ```
 
-### File: `src/markdown.rs`
+### File: `src\languages.rs`
 
-- Size: 54722 bytes
-- Modified: 2026-02-16 03:45:28 UTC
+- Size: 4018 bytes
+- Modified: 2026-08-31 04:20:10 UTC
+
+```rust
+//! Canonical extension → code-fence language map.
+//!
+//! Single source of truth for the language tag used in code fences. Before
+//! v0.10 there were three independent `match extension` maps (file bodies in
+//! `markdown.rs`, signature blocks in `markdown.rs`, and the auto-diff path in
+//! `lib.rs`) that had already diverged: `.mjs` bodies got a non-highlightable
+//! `` ```mjs `` fence while its signature block said `javascript`, and `.jsx`/
+//! `.sh` files rendered through auto-diff got raw-extension fences. All call
+//! sites now route through this module so any extension yields the same fence
+//! language everywhere.
+//!
+//! Unknown extensions fall back to the raw extension (preserves pre-v0.10
+//! behavior for exotic files).
+
+/// Map a file extension to the code-fence language tag.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(context_builder::languages::language_for_extension("mjs"), "javascript");
+/// assert_eq!(context_builder::languages::language_for_extension("jsx"), "jsx");
+/// assert_eq!(context_builder::languages::language_for_extension("sh"), "bash");
+/// assert_eq!(context_builder::languages::language_for_extension("weird"), "weird");
+/// ```
+pub fn language_for_extension(ext: &str) -> &str {
+    match ext {
+        // Rust
+        "rs" => "rust",
+        // JavaScript family — `mjs`/`cjs` are not highlightable fence tags,
+        // so they fold to `javascript`; `jsx` is a distinct linguist language
+        // and keeps its own (more precise) fence tag.
+        "js" | "mjs" | "cjs" => "javascript",
+        "jsx" => "jsx",
+        // TypeScript family — same reasoning: `mts`/`cts` fold to
+        // `typescript`; `tsx` is a distinct linguist language.
+        "ts" | "mts" | "cts" => "typescript",
+        "tsx" => "tsx",
+        // Python
+        "py" | "pyw" => "python",
+        // Go
+        "go" => "go",
+        // Java
+        "java" => "java",
+        // C / C++
+        "c" | "h" => "c",
+        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
+        // Data / markup / config
+        "json" => "json",
+        "toml" => "toml",
+        "md" => "markdown",
+        "yaml" | "yml" => "yaml",
+        "html" => "html",
+        "css" => "css",
+        "sql" => "sql",
+        "xml" => "xml",
+        // Shell — `sh` is not a highlightable tag in most renderers; `bash`
+        // is the convention GitHub and most markdown pipelines recognize.
+        "sh" | "bash" => "bash",
+        "lock" => "toml",
+        // Unknown extension: use it verbatim (pre-v0.10 fallback behavior)
+        _ => ext,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn js_family_folds_to_javascript_except_jsx() {
+        assert_eq!(language_for_extension("js"), "javascript");
+        assert_eq!(language_for_extension("mjs"), "javascript");
+        assert_eq!(language_for_extension("cjs"), "javascript");
+        // `jsx`/`tsx` are distinct linguist languages — keep their own fence
+        assert_eq!(language_for_extension("jsx"), "jsx");
+        assert_eq!(language_for_extension("tsx"), "tsx");
+    }
+
+    #[test]
+    fn ts_family_folds_to_typescript() {
+        assert_eq!(language_for_extension("ts"), "typescript");
+        assert_eq!(language_for_extension("mts"), "typescript");
+        assert_eq!(language_for_extension("cts"), "typescript");
+    }
+
+    #[test]
+    fn shell_folds_to_bash() {
+        assert_eq!(language_for_extension("sh"), "bash");
+    }
+
+    #[test]
+    fn unknown_extension_falls_back_to_raw() {
+        assert_eq!(language_for_extension("weird"), "weird");
+        assert_eq!(language_for_extension("text"), "text");
+    }
+
+    #[test]
+    fn core_languages() {
+        assert_eq!(language_for_extension("rs"), "rust");
+        assert_eq!(language_for_extension("py"), "python");
+        assert_eq!(language_for_extension("go"), "go");
+        assert_eq!(language_for_extension("java"), "java");
+        assert_eq!(language_for_extension("c"), "c");
+        assert_eq!(language_for_extension("cpp"), "cpp");
+    }
+}
+```
+
+### File: `src\markdown.rs`
+
+- Size: 81442 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```rust
 use chrono::Utc;
@@ -7062,6 +7849,7 @@ use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use crate::token_count::{Encoding as TokenEncoding, estimate_tokens};
 use crate::tree::{FileTree, write_tree_to_file};
 use encoding_rs::{Encoding, UTF_8};
 
@@ -7096,15 +7884,21 @@ pub fn generate_markdown(
     line_numbers: bool,
     encoding_strategy: Option<&str>,
     max_tokens: Option<usize>,
+    token_encoding: TokenEncoding,
     ts_config: &TreeSitterConfig,
 ) -> io::Result<()> {
-    if let Some(parent) = Path::new(output_path).parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut output = fs::File::create(output_path)?;
+    // `-` selects stdout (pipe mode, e.g. `context-builder -o - | llm`);
+    // otherwise create/truncate the file path (creating parent dirs as needed).
+    let mut output: Box<dyn Write + Send> = if output_path == "-" {
+        Box::new(io::stdout())
+    } else {
+        if let Some(parent) = Path::new(output_path).parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        Box::new(fs::File::create(output_path)?)
+    };
 
     let input_dir_name = if input_dir == "." {
         let current_dir = std::env::current_dir()?;
@@ -7117,32 +7911,55 @@ pub fn generate_markdown(
         input_dir.to_string()
     };
 
-    // --- Header --- //
-    writeln!(output, "# Directory Structure Report\n")?;
+    // --- Header + file tree (buffered) --- //
+    // Build the header and tree into a buffer first so we can (a) write them in
+    // one shot and (b) debit their token cost from the `--max-tokens` budget.
+    let mut head_buf: Vec<u8> = Vec::new();
+    writeln!(head_buf, "# Directory Structure Report\n")?;
 
     if !filters.is_empty() {
         writeln!(
-            output,
+            head_buf,
             "This document contains files from the `{}` directory with extensions: {}",
             input_dir_name,
             filters.join(", ")
         )?;
     } else {
         writeln!(
-            output,
+            head_buf,
             "This document contains all files from the `{}` directory, optimized for LLM consumption.",
             input_dir_name
         )?;
     }
 
     if !ignores.is_empty() {
-        writeln!(output, "Custom ignored patterns: {}", ignores.join(", "))?;
+        writeln!(head_buf, "Custom ignored patterns: {}", ignores.join(", "))?;
     }
 
-    // Deterministic content hash (enables LLM prompt caching across runs)
-    // Uses xxh3 over file content bytes — stable across Rust versions and machines.
-    // Previous implementation hashed mtime (broken by git checkout, cp, etc.)
+    // Deterministic content hash (enables LLM prompt caching across runs).
+    // Hashes raw file content (NOT mtime — see v0.7.0; the rendered output embeds
+    // each file's mtime, so hashing emitted bytes would be volatile) PLUS every
+    // option that changes the rendered output. The hash is therefore a complete
+    // fingerprint: two runs share a hash iff they produce identical output.
+    // Folding in line_numbers / max_tokens / encoding / tree-sitter flags fixes
+    // the bug where toggling those yielded a different document under the same
+    // hash, and keeps the hash honest when `--max-tokens` truncates the file set.
     let mut content_hasher = xxhash_rust::xxh3::Xxh3::new();
+    content_hasher.update(b"line_numbers\0");
+    content_hasher.update(&[line_numbers as u8]);
+    // u64::MAX sentinel distinguishes "no budget" from any real value.
+    content_hasher.update(b"max_tokens\0");
+    content_hasher.update(&max_tokens.map_or(u64::MAX, |v| v as u64).to_le_bytes());
+    content_hasher.update(b"encoding\0");
+    content_hasher.update(format!("{token_encoding:?}").as_bytes());
+    content_hasher.update(b"\0ts\0");
+    content_hasher.update(&[ts_config.signatures as u8, ts_config.structure as u8]);
+    content_hasher.update(ts_config.truncate.as_bytes());
+    content_hasher.update(b"\0");
+    content_hasher.update(ts_config.visibility.as_bytes());
+    content_hasher.update(b"\0encoding_strategy\0");
+    content_hasher.update(encoding_strategy.unwrap_or("").as_bytes());
+    content_hasher.update(b"\0files\0");
     for entry in files {
         // Hash relative unix-style path for cross-OS determinism.
         // Using absolute or OS-native paths would produce different hashes
@@ -7158,16 +7975,22 @@ pub fn generate_markdown(
         }
         content_hasher.update(b"\0");
     }
-    writeln!(output, "Content hash: {:016x}", content_hasher.digest())?;
-    writeln!(output)?;
+    writeln!(head_buf, "Content hash: {:016x}", content_hasher.digest())?;
+    writeln!(head_buf)?;
 
-    // --- File Tree --- //
+    writeln!(head_buf, "## File Tree Structure\n")?;
+    write_tree_to_file(&mut head_buf, file_tree, 0)?;
+    writeln!(head_buf)?;
 
-    writeln!(output, "## File Tree Structure\n")?;
+    // Debit the header + tree token cost so `--max-tokens` budgets the whole
+    // document, not just file bodies. Only computed when a budget is set
+    // (the tokenizer call is not free).
+    let header_tokens = match max_tokens {
+        Some(_) => estimate_tokens(token_encoding, &String::from_utf8_lossy(&head_buf)),
+        None => 0,
+    };
 
-    write_tree_to_file(&mut output, file_tree, 0)?;
-
-    writeln!(output)?;
+    output.write_all(&head_buf)?;
 
     // (No '## Files' heading here; it will be injected later only once during final composition)
     // (Diff section will be conditionally inserted later by the auto_diff logic in lib.rs)
@@ -7179,18 +8002,40 @@ pub fn generate_markdown(
         // Create a bounded channel for ordered chunks
         type ChunkResult = (usize, io::Result<Vec<u8>>);
         let (sender, receiver): (Sender<ChunkResult>, Receiver<ChunkResult>) =
-            bounded(num_cpus::get() * 2); // Buffer size based on CPU count
+            // Buffer size based on CPU count (std replacement — num_cpus was
+            // dropped in the v0.10 dependency diet).
+            bounded(
+                std::thread::available_parallelism()
+                    .map(|n| n.get() * 2)
+                    .unwrap_or(8),
+            );
 
         let writer_handle = {
             let mut output = output;
             let total_files = files.len();
             let budget = max_tokens;
 
+            // v0.10: the writer thread may need to re-render the crossing file
+            // with a content limit (--truncate wiring), so it needs the entries.
+            // Cloning the paths up front keeps the thread 'static and lets the
+            // rest of the function borrow `files` for par_iter.
+            let entry_paths: Vec<std::path::PathBuf> =
+                files.iter().map(|e| e.path().to_path_buf()).collect();
+
+            // Config data the writer may need to re-render with a content limit.
+            let w_line_numbers = line_numbers;
+            let w_encoding_strategy = encoding_strategy.map(|s| s.to_string());
+            let w_ts_config = ts_config.clone();
+            let w_token_encoding = token_encoding;
+            // `base_path` is a borrow from the caller; the writer thread must
+            // be 'static, so it gets an owned copy for any re-render.
+            let w_base_path = base_path.to_path_buf();
+
             thread::spawn(move || -> io::Result<()> {
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
-                let mut tokens_used: usize = 0;
+                let mut tokens_used: usize = header_tokens;
                 let mut budget_exceeded = false;
 
                 // Receive chunks and write them in order
@@ -7209,14 +8054,54 @@ pub fn generate_markdown(
 
                                 match chunk_result {
                                     Ok(buf) => {
-                                        // Estimate tokens for this chunk (~4 bytes per token)
-                                        let chunk_tokens = buf.len() / 4;
+                                        // Count tokens of the rendered chunk with the real
+                                        // tokenizer (same as the serial path, so both builds
+                                        // truncate identically and the hash stays stable).
+                                        // Only pay for tokenization when a budget is set.
+                                        let chunk_tokens = if budget.is_some() {
+                                            estimate_tokens(
+                                                token_encoding,
+                                                &String::from_utf8_lossy(&buf),
+                                            )
+                                        } else {
+                                            0
+                                        };
 
+                                        // Budget applies to every file, including the first
+                                        // (no `tokens_used > 0` bypass): a single oversized
+                                        // file no longer slips through in full.
                                         if let Some(max) = budget
                                             && tokens_used + chunk_tokens > max
-                                            && tokens_used > 0
                                         {
-                                            let remaining = total_files - next_index;
+                                            // v0.10: --truncate wiring. Instead of omitting
+                                            // the crossing file, try to fit it into the
+                                            // remaining allowance (bytes ≈ tokens × 4).
+                                            // Falls back to omission when even a minimal
+                                            // section cannot fit.
+                                            let remaining_tokens = max.saturating_sub(tokens_used);
+                                            let mut limited_buf: Vec<u8> = Vec::new();
+                                            let fits = render_truncated_to_fit(
+                                                &w_base_path,
+                                                &entry_paths[next_index],
+                                                &mut limited_buf,
+                                                w_line_numbers,
+                                                w_encoding_strategy.as_deref(),
+                                                &w_ts_config,
+                                                w_token_encoding,
+                                                remaining_tokens,
+                                            );
+                                            if let Some(limited_tokens) = fits {
+                                                if let Err(e) = output.write_all(&limited_buf) {
+                                                    errors.push(format!(
+                                                        "Failed to write output for file index {}: {}",
+                                                        next_index, e
+                                                    ));
+                                                }
+                                                tokens_used += limited_tokens;
+                                            }
+                                            let remaining = total_files
+                                                - next_index
+                                                - if fits.is_some() { 1 } else { 0 };
                                             let notice = format!(
                                                 "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
                                                 max, remaining
@@ -7302,37 +8187,78 @@ pub fn generate_markdown(
 
     #[cfg(not(feature = "parallel"))]
     {
-        let mut tokens_used: usize = 0;
-
-        for (idx, entry) in files.iter().enumerate() {
-            // Estimate tokens for this file (~4 bytes per token)
-            let file_size = std::fs::metadata(entry.path())
-                .map(|m| m.len())
-                .unwrap_or(0);
-            let estimated_file_tokens = (file_size as usize) / 4;
-
-            if let Some(budget) = max_tokens {
-                if tokens_used + estimated_file_tokens > budget && tokens_used > 0 {
-                    let remaining = files.len() - idx;
-                    writeln!(output, "---\n")?;
-                    writeln!(
-                        output,
-                        "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
-                        budget, remaining
+        match max_tokens {
+            // No budget: stream each file straight to the output (as the serial
+            // path did before v0.9.0). Buffering would only be needed to count
+            // tokens, so without a budget it just inflates peak memory by the
+            // size of the largest file for no benefit.
+            None => {
+                for entry in files.iter() {
+                    process_file(
+                        base_path,
+                        entry.path(),
+                        &mut output,
+                        line_numbers,
+                        encoding_strategy,
+                        ts_config,
                     )?;
-                    break;
                 }
             }
+            // Budget set: render each file into a buffer first so the rendered
+            // chunk can be tokenized before we decide to emit it — identical to
+            // the parallel path, so both builds truncate at the same boundary.
+            Some(budget) => {
+                let mut tokens_used: usize = header_tokens;
 
-            tokens_used += estimated_file_tokens;
-            process_file(
-                base_path,
-                entry.path(),
-                &mut output,
-                line_numbers,
-                encoding_strategy,
-                ts_config,
-            )?;
+                for (idx, entry) in files.iter().enumerate() {
+                    let mut buf: Vec<u8> = Vec::new();
+                    process_file(
+                        base_path,
+                        entry.path(),
+                        &mut buf,
+                        line_numbers,
+                        encoding_strategy,
+                        ts_config,
+                    )?;
+                    let chunk_tokens =
+                        estimate_tokens(token_encoding, &String::from_utf8_lossy(&buf));
+
+                    // Budget applies to every file, including the first (no bypass).
+                    if tokens_used + chunk_tokens > budget {
+                        // v0.10: --truncate wiring. Instead of omitting the crossing
+                        // file, try to fit it into the remaining allowance (bytes ≈
+                        // tokens × 4 for typical source). If even a minimal section
+                        // (header + fence) cannot fit, fall back to omission.
+                        let remaining_tokens = budget.saturating_sub(tokens_used);
+                        let mut limited_buf: Vec<u8> = Vec::new();
+                        let fits = render_truncated_to_fit(
+                            base_path,
+                            entry.path(),
+                            &mut limited_buf,
+                            line_numbers,
+                            encoding_strategy,
+                            ts_config,
+                            token_encoding,
+                            remaining_tokens,
+                        );
+                        if let Some(limited_tokens) = fits {
+                            output.write_all(&limited_buf)?;
+                            tokens_used += limited_tokens;
+                        }
+                        let remaining = files.len() - idx - if fits.is_some() { 1 } else { 0 };
+                        writeln!(output, "---\n")?;
+                        writeln!(
+                            output,
+                            "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n",
+                            budget, remaining
+                        )?;
+                        break;
+                    }
+
+                    tokens_used += chunk_tokens;
+                    output.write_all(&buf)?;
+                }
+            }
         }
     }
 
@@ -7347,6 +8273,35 @@ pub fn process_file(
     line_numbers: bool,
     encoding_strategy: Option<&str>,
     ts_config: &TreeSitterConfig,
+) -> io::Result<()> {
+    process_file_with_content_limit(
+        base_path,
+        file_path,
+        output,
+        line_numbers,
+        encoding_strategy,
+        ts_config,
+        None,
+    )
+}
+
+/// Processes a single file, optionally clamping its content to
+/// `content_limit` bytes (v0.10 `--truncate` wiring).
+///
+/// `content_limit` is the remaining byte allowance for a file that crossed the
+/// `--max-tokens` budget. The cut point honors the truncation mode:
+/// `smart` prefers an AST boundary via tree-sitter (char-safe per B19),
+/// `byte` (and any fallback) clamps to a UTF-8 char boundary. When truncation
+/// happens, a visible marker is emitted in the file section so downstream
+/// LLMs know the content is partial.
+pub fn process_file_with_content_limit(
+    base_path: &Path,
+    file_path: &Path,
+    output: &mut impl Write,
+    line_numbers: bool,
+    encoding_strategy: Option<&str>,
+    ts_config: &TreeSitterConfig,
+    content_limit: Option<usize>,
 ) -> io::Result<()> {
     let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
     info!("Processing file: {}", relative_path.display());
@@ -7386,30 +8341,7 @@ pub fn process_file(
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("text");
-    let language = match extension {
-        "rs" => "rust",
-        "js" => "javascript",
-        "ts" => "typescript",
-        "jsx" => "jsx",
-        "tsx" => "tsx",
-        "json" => "json",
-        "toml" => "toml",
-        "md" => "markdown",
-        "yaml" | "yml" => "yaml",
-        "html" => "html",
-        "css" => "css",
-        "py" => "python",
-        "java" => "java",
-        "cpp" => "cpp",
-        "c" => "c",
-        "h" => "c",
-        "hpp" => "cpp",
-        "sql" => "sql",
-        "sh" => "bash",
-        "xml" => "xml",
-        "lock" => "toml",
-        _ => extension,
-    };
+    let language = crate::languages::language_for_extension(extension);
 
     // Enhanced binary file handling with encoding detection and transcoding
     match fs::File::open(file_path) {
@@ -7598,16 +8530,35 @@ pub fn process_file(
             let signatures_only =
                 ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
 
+            // v0.10: --truncate wiring. When the file crossed the token budget, clamp
+            // its content to the remaining byte allowance at a mode-appropriate boundary
+            // (`smart` = AST boundary via tree-sitter; `byte` = char-boundary clamp).
+            let (content, original_len, truncated) = match content_limit {
+                Some(limit) if content.len() > limit => {
+                    let cut =
+                        content_cut_point(&content, limit, extension, ts_config.truncate.as_str());
+                    (&content[..cut], content.len(), cut < content.len())
+                }
+                _ => (content.as_str(), content.len(), false),
+            };
+
             if !signatures_only {
-                // Note: Smart truncation (`truncate: "smart"`) indicates AST-boundary
-                // truncation should be preferred when content needs truncating.
-                // Without a per-file max_tokens budget, no truncation is applied.
-                // The flag is stored for future use when per-file token limits are implemented.
-                write_text_content(output, &content, language, line_numbers)?;
+                write_text_content(output, content, language, line_numbers)?;
+                if truncated {
+                    writeln!(
+                        output,
+                        "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
+                        content.len(),
+                        original_len,
+                        ts_config.truncate
+                    )?;
+                }
             }
 
             // Tree-sitter enrichment: signatures and/or structure
-            write_tree_sitter_enrichment(output, &content, extension, ts_config)?;
+            // (computed over the *truncated* content when a budget cut applies,
+            // so the signature block matches what is actually displayed)
+            write_tree_sitter_enrichment(output, content, extension, ts_config)?;
         }
         Err(e) => {
             warn!(
@@ -7625,6 +8576,149 @@ pub fn process_file(
     }
 
     Ok(())
+}
+
+/// Compute the byte cut point for truncating `content` to `limit` bytes,
+/// honoring the `--truncate` mode.
+///
+/// - `smart`: prefers an AST boundary found via tree-sitter (falling back to a
+///   char-boundary clamp when the parser or grammar is unavailable). The
+///   returned point is always char-safe (B19), so slicing cannot panic.
+/// - `byte` (and any unknown mode): clamps `limit` down to a UTF-8 char
+///   boundary.
+///
+/// Returns 0 only if no valid cut fits the allowance.
+pub fn content_cut_point(
+    content: &str,
+    limit: usize,
+    extension: &str,
+    truncate_mode: &str,
+) -> usize {
+    if content.len() <= limit {
+        return content.len();
+    }
+
+    let point = if truncate_mode == "smart" {
+        crate::tree_sitter::find_smart_truncation_point(content, limit, extension)
+            // Grammar/parser unavailable (or no tree-sitter feature compiled in):
+            // fall back to the char-boundary clamp. Never raw-cut a multi-byte char.
+            .unwrap_or_else(|| char_boundary_clamp(content, limit))
+    } else {
+        char_boundary_clamp(content, limit)
+    };
+
+    // Belt-and-suspenders: any smart-cut result must still be char-safe to slice.
+    if !content.is_char_boundary(point) {
+        return char_boundary_clamp(content, point);
+    }
+    point
+}
+
+/// Clamp `position` down to the nearest preceding UTF-8 char boundary.
+fn char_boundary_clamp(content: &str, position: usize) -> usize {
+    let mut pos = position.min(content.len());
+    while pos > 0 && !content.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+/// Re-render a file clamped so the *whole rendered chunk* fits within
+/// `remaining_tokens`, verified with the real tokenizer.
+///
+/// Returns `Some(chunk_tokens)` and fills `buf` when the file can be emitted
+/// (truncated to fit), or `None` when even a minimal section cannot fit — the
+/// caller then omits the file exactly as pre-v0.10 behavior did. Shared by the
+/// serial and parallel budget paths so both builds truncate at the same
+/// boundary.
+///
+/// The section header (`### File: …`, size/mtime, fence, truncation marker) is
+/// a fixed token cost paid before any content fits, so it is measured first
+/// with a zero-byte content probe; the content allowance is what remains
+/// after it, converted to bytes at ~4 bytes/token and shrunk proportionally
+/// (with margin) if the rendered chunk overshoots.
+#[allow(clippy::too_many_arguments)]
+pub fn render_truncated_to_fit(
+    base_path: &Path,
+    file_path: &Path,
+    buf: &mut Vec<u8>,
+    line_numbers: bool,
+    encoding_strategy: Option<&str>,
+    ts_config: &TreeSitterConfig,
+    token_encoding: TokenEncoding,
+    remaining_tokens: usize,
+) -> Option<usize> {
+    if remaining_tokens == 0 {
+        return None;
+    }
+
+    // 1. Measure the fixed section cost (header + empty fence + marker) by
+    //    rendering with a zero-byte content allowance.
+    let mut base_probe: Vec<u8> = Vec::new();
+    if process_file_with_content_limit(
+        base_path,
+        file_path,
+        &mut base_probe,
+        line_numbers,
+        encoding_strategy,
+        ts_config,
+        Some(0),
+    )
+    .is_err()
+    {
+        return None;
+    }
+    let base_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&base_probe));
+
+    // Even an empty section would overdraw — omit the file instead.
+    if base_tokens >= remaining_tokens {
+        return None;
+    }
+
+    let content_token_budget = remaining_tokens - base_tokens;
+    let mut byte_allowance = content_token_budget.saturating_mul(4);
+
+    // 2. Render with the estimated content allowance and verify with the real
+    //    tokenizer; shrink proportionally on overshoot. Bounded attempts —
+    //    if it still doesn't fit, omission is safer than an over-budget emit.
+    for _ in 0..5 {
+        let mut probe: Vec<u8> = Vec::new();
+        if process_file_with_content_limit(
+            base_path,
+            file_path,
+            &mut probe,
+            line_numbers,
+            encoding_strategy,
+            ts_config,
+            Some(byte_allowance),
+        )
+        .is_err()
+        {
+            return None;
+        }
+
+        let chunk_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&probe));
+        if chunk_tokens <= remaining_tokens {
+            *buf = probe;
+            return Some(chunk_tokens);
+        }
+
+        if byte_allowance == 0 {
+            return None;
+        }
+
+        // Overshoot → shrink the content allowance proportionally with a 20%
+        // safety margin (covers `--line-numbers` inflating tokens per byte).
+        // Always shrinks by at least one byte so the loop terminates.
+        let scaled = byte_allowance
+            .saturating_mul(remaining_tokens)
+            .saturating_mul(4)
+            / 5
+            / chunk_tokens.max(1);
+        byte_allowance = scaled.min(byte_allowance.saturating_sub(1));
+    }
+
+    None
 }
 
 /// Write tree-sitter enrichment (signatures, structure) after file content.
@@ -7645,6 +8739,24 @@ pub fn write_tree_sitter_enrichment(
 
         let vis_filter: Visibility = ts_config.visibility.parse().unwrap_or(Visibility::All);
 
+        // v0.10: honest warnings. A non-"all" --visibility filter on a language
+        // whose extractor ignores it silently returns unfiltered signatures —
+        // warn once (per process, per language) instead of lying quietly.
+        // The full set (C, C++, Python, JS) is a v0.11 roadmap item.
+        if vis_filter != Visibility::All
+            && ts_config.signatures
+            && crate::tree_sitter::is_supported_extension(extension)
+            && !crate::tree_sitter::supports_visibility_filtering(extension)
+            && first_visibility_warning_for(extension)
+        {
+            warn!(
+                "--visibility {} has no effect for '{}' files: the extractor \
+                 does not classify visibility yet (planned for v0.11). \
+                 Signatures will include all symbols.",
+                ts_config.visibility, extension
+            );
+        }
+
         if ts_config.structure
             && let Some(structure) =
                 crate::tree_sitter::extract_structure_for_file(content, extension)
@@ -7661,17 +8773,7 @@ pub fn write_tree_sitter_enrichment(
                 crate::tree_sitter::extract_signatures_for_file(content, extension, vis_filter)
             && !signatures.is_empty()
         {
-            let language = match extension {
-                "rs" => "rust",
-                "js" | "mjs" | "cjs" => "javascript",
-                "ts" | "tsx" | "mts" | "cts" => "typescript",
-                "py" | "pyw" => "python",
-                "go" => "go",
-                "java" => "java",
-                "c" | "h" => "c",
-                "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
-                _ => extension,
-            };
+            let language = crate::languages::language_for_extension(extension);
             writeln!(output)?;
             writeln!(output, "**Signatures:**")?;
             writeln!(output)?;
@@ -7690,6 +8792,19 @@ pub fn write_tree_sitter_enrichment(
     }
 
     Ok(())
+}
+
+/// One-shot warning guard for `--visibility` no-op languages: returns `true`
+/// the first time `ext` is seen in this process, `false` after, so a
+/// 10,000-file repo logs one warning per language instead of per file.
+#[cfg(feature = "tree-sitter-base")]
+fn first_visibility_warning_for(ext: &str) -> bool {
+    use std::sync::OnceLock;
+    static WARNED: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let set = WARNED.get_or_init(Default::default);
+    let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
+    // `insert` returns true when the value was newly added (first time).
+    guard.insert(ext.to_string())
 }
 
 /// Detect text encoding using heuristics for common encodings
@@ -8097,6 +9212,7 @@ mod tests {
             false,
             None,
             None, // max_tokens
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
@@ -8131,6 +9247,7 @@ mod tests {
             false,
             None,
             None, // max_tokens
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
@@ -8163,6 +9280,7 @@ mod tests {
             true,
             Some("strict"),
             None, // max_tokens
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
@@ -8531,8 +9649,18 @@ mod tests {
         let base_path = dir.path();
         let output_path = base_path.join("output.md");
 
-        fs::write(base_path.join("file1.txt"), "x".repeat(50000)).unwrap();
-        fs::write(base_path.join("file2.txt"), "y".repeat(50000)).unwrap();
+        // Whitespace-separated words so the tokenizer pre-splits cheaply (a long
+        // run of a single char with no whitespace is a pathological BPE case).
+        fs::write(
+            base_path.join("file1.txt"),
+            "alpha beta gamma delta ".repeat(1000),
+        )
+        .unwrap();
+        fs::write(
+            base_path.join("file2.txt"),
+            "epsilon zeta eta theta ".repeat(1000),
+        )
+        .unwrap();
 
         let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
         let file_tree = crate::tree::build_file_tree(&files, base_path);
@@ -8548,12 +9676,106 @@ mod tests {
             false,
             None,
             Some(100),
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
         assert!(result.is_ok());
         let content = fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("Token budget") || content.len() < 1000);
+    }
+
+    #[test]
+    fn test_max_tokens_truncates_single_oversized_first_file() {
+        // Regression (B1): the first file used to bypass the budget and was always
+        // emitted in full. A single oversized file is now omitted with a notice.
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("output.md");
+
+        // ~17 KB of whitespace-separated text (well over a 100-token budget) with a
+        // unique marker we can assert is absent. Avoid a single-char run (slow BPE).
+        let body = "UNIQUE_BODY_MARKER alpha beta gamma ".repeat(500);
+        fs::write(base_path.join("huge.txt"), &body).unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            "project",
+            &[],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            Some(100), // tiny budget — smaller than the single file
+            TokenEncoding::default(),
+            &TreeSitterConfig::default(),
+        );
+
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(
+            content.contains("Token budget"),
+            "expected the budget notice"
+        );
+        assert!(
+            !content.contains("UNIQUE_BODY_MARKER"),
+            "oversized first file body leaked despite the budget"
+        );
+    }
+
+    #[test]
+    fn test_content_hash_reflects_output_options() {
+        // Regression (B2): the hash must change when an output-affecting option
+        // changes (else prompt caching reuses a stale document), and must be
+        // identical for identical inputs (deterministic / cacheable).
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(base_path.join("a.txt"), "hello world").unwrap();
+        let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let render = |line_numbers: bool, out: &std::path::Path| {
+            generate_markdown(
+                &out.to_string_lossy(),
+                "p",
+                &[],
+                &[],
+                &file_tree,
+                &files,
+                base_path,
+                line_numbers,
+                None,
+                None,
+                TokenEncoding::default(),
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+        };
+        let hash_of = |p: &std::path::Path| {
+            fs::read_to_string(p)
+                .unwrap()
+                .lines()
+                .find(|l| l.starts_with("Content hash:"))
+                .unwrap()
+                .to_string()
+        };
+
+        let o1 = base_path.join("o1.md");
+        let o2 = base_path.join("o2.md");
+        let o3 = base_path.join("o3.md");
+        render(false, &o1);
+        render(true, &o2);
+        render(false, &o3);
+
+        // Toggling line_numbers changes the rendered output → hash must change.
+        assert_ne!(hash_of(&o1), hash_of(&o2));
+        // Same options → identical hash.
+        assert_eq!(hash_of(&o1), hash_of(&o3));
     }
 
     #[test]
@@ -8629,6 +9851,7 @@ mod tests {
             false,
             None,
             None,
+            TokenEncoding::default(),
             &TreeSitterConfig::default(),
         );
 
@@ -8636,13 +9859,201 @@ mod tests {
         let content = fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("Directory Structure Report"));
     }
+
+    // --- v0.10: --truncate wiring ------------------------------------- //
+
+    /// Helper: render a file with a content limit and return the output text.
+    fn render_limited(
+        base_path: &Path,
+        file_name: &str,
+        limit: Option<usize>,
+        truncate: &str,
+    ) -> String {
+        let file_path = base_path.join(file_name);
+        let mut buf: Vec<u8> = Vec::new();
+        process_file_with_content_limit(
+            base_path,
+            &file_path,
+            &mut buf,
+            false,
+            None,
+            &TreeSitterConfig {
+                truncate: truncate.to_string(),
+                ..Default::default()
+            },
+            limit,
+        )
+        .unwrap();
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    #[test]
+    fn test_truncate_smart_cuts_at_function_boundary() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(
+            base_path.join("a.rs"),
+            "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+        )
+        .unwrap();
+
+        // Limit smaller than full content — smart mode must return a complete
+        // function, not a mid-line cut.
+        let out = render_limited(base_path, "a.rs", Some(20), "smart");
+        assert!(out.contains("File content truncated"), "{out}");
+        // The smart cut should land on a complete function boundary: the last
+        // rendered line ends with '}' (no dangling partial signature).
+        let body_lines: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with("fn ") && l.ends_with("}"))
+            .collect();
+        assert!(!body_lines.is_empty(), "expected complete fns, got: {out}");
+    }
+
+    #[test]
+    fn test_truncate_byte_clamps_to_char_boundary() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        // Multibyte content: cutting inside a char must not produce invalid UTF-8.
+        fs::write(
+            base_path.join("u.rs"),
+            "// 世界世界世界世界世界\nfn u() {}\n",
+        )
+        .unwrap();
+
+        let out = render_limited(base_path, "u.rs", Some(10), "byte");
+        assert!(out.contains("File content truncated"), "{out}");
+        // Rendered output must remain valid UTF-8 (lossy conversion never fails,
+        // but the content slice itself must have been char-boundary safe: the
+        // rendered fn body survives intact whenever it is included).
+        assert!(out.contains("```rust"));
+    }
+
+    #[test]
+    fn test_truncate_no_limit_emits_full_content() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(base_path.join("a.rs"), "fn one() {}\nfn two() {}\n").unwrap();
+
+        let out = render_limited(base_path, "a.rs", None, "smart");
+        assert!(out.contains("fn one() {}"));
+        assert!(out.contains("fn two() {}"));
+        assert!(!out.contains("File content truncated"));
+    }
+
+    #[test]
+    fn test_truncate_limit_above_content_no_marker() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(base_path.join("a.rs"), "fn one() {}\n").unwrap();
+
+        // Limit larger than content: no truncation, no marker.
+        let out = render_limited(base_path, "a.rs", Some(1000), "smart");
+        assert!(out.contains("fn one() {}"));
+        assert!(!out.contains("File content truncated"));
+    }
+
+    #[test]
+    fn test_render_truncated_to_fit_fits_or_none() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(
+            base_path.join("a.rs"),
+            "fn one() {}\nfn two() {}\nfn three() {}\n",
+        )
+        .unwrap();
+
+        // Generous allowance → fits (truncated or whole).
+        let mut buf: Vec<u8> = Vec::new();
+        let fits = render_truncated_to_fit(
+            base_path,
+            &base_path.join("a.rs"),
+            &mut buf,
+            false,
+            None,
+            &TreeSitterConfig {
+                truncate: "smart".to_string(),
+                ..Default::default()
+            },
+            TokenEncoding::default(),
+            60,
+        );
+        assert!(fits.is_some(), "expected the section to fit");
+        assert!(!buf.is_empty());
+
+        // Zero allowance → omitted.
+        let mut buf2: Vec<u8> = Vec::new();
+        let fits2 = render_truncated_to_fit(
+            base_path,
+            &base_path.join("a.rs"),
+            &mut buf2,
+            false,
+            None,
+            &TreeSitterConfig {
+                truncate: "smart".to_string(),
+                ..Default::default()
+            },
+            TokenEncoding::default(),
+            0,
+        );
+        assert!(fits2.is_none());
+        assert!(buf2.is_empty());
+    }
+
+    #[test]
+    fn test_budget_truncates_crossing_file_instead_of_omitting() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        fs::write(base_path.join("small.rs"), "fn small() {}\n").unwrap();
+        // 60 functions ≈ 250 rendered tokens — guaranteed to cross the
+        // remaining allowance after the header + small.rs on any OS.
+        let big_content: String = (0..60)
+            .map(|i| format!("fn pad_{i}() {{ let v = {i}; }}\n"))
+            .collect();
+        fs::write(base_path.join("big.rs"), big_content).unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &["rs".into()], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            &base_path.to_string_lossy(),
+            &["rs".to_string()],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            // 250 tokens: header consumes ~100 (long temp path), small.rs ~30, so
+            // big.rs crosses the line — it must be truncated in place, not omitted.
+            // (A much smaller budget would correctly omit everything; that case is
+            // covered by render_truncated_to_fit returning None.)
+            Some(250),
+            TokenEncoding::default(),
+            &TreeSitterConfig {
+                truncate: "smart".to_string(),
+                ..Default::default()
+            },
+        );
+
+        assert!(result.is_ok());
+        let out = fs::read_to_string(&output_path).unwrap();
+        // The crossing file must be *present* (truncated), not omitted wholesale.
+        assert!(
+            out.contains("big.rs") && out.contains("File content truncated"),
+            "expected big.rs to be truncated in place, got:\n{out}"
+        );
+    }
 }
 ```
 
-### File: `src/state.rs`
+### File: `src\state.rs`
 
-- Size: 28240 bytes
-- Modified: 2026-02-16 04:28:24 UTC
+- Size: 28418 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Project state representation for context-builder.
@@ -8868,32 +10279,11 @@ impl ProjectState {
         false
     }
 
-    /// Generate a configuration hash for cache validation
+    /// Generate a configuration hash for cache validation.
+    /// Delegates to the single shared `config_fingerprint` (see `config.rs`) so
+    /// this hash and the cache key in `cache.rs` always agree.
     fn compute_config_hash(config: &Config) -> String {
-        // Build a stable string representation for hashing
-        let mut config_str = String::new();
-        if let Some(ref filters) = config.filter {
-            config_str.push_str(&filters.join(","));
-        }
-        config_str.push('|');
-        if let Some(ref ignores) = config.ignore {
-            config_str.push_str(&ignores.join(","));
-        }
-        config_str.push('|');
-        config_str.push_str(&format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-            config.line_numbers,
-            config.auto_diff,
-            config.diff_context_lines,
-            config.signatures,
-            config.structure,
-            config.truncate,
-            config.visibility,
-            config.max_tokens,
-        ));
-
-        let hash = xxhash_rust::xxh3::xxh3_64(config_str.as_bytes());
-        format!("{:x}", hash)
+        crate::config::config_fingerprint(config)
     }
 }
 
@@ -9502,64 +10892,100 @@ mod tests {
 }
 ```
 
-### File: `src/token_count.rs`
+### File: `src\token_count.rs`
 
-- Size: 10045 bytes
-- Modified: 2026-02-15 08:04:26 UTC
+- Size: 12979 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```rust
 use ignore::DirEntry;
-use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
+use std::str::FromStr;
+use std::sync::LazyLock;
 /// Token counting utilities for estimating LLM token usage
-use tiktoken_rs::{CoreBPE, cl100k_base};
+use tiktoken_rs::{CoreBPE, cl100k_base, o200k_base};
 
-// Initialize the tokenizer once and reuse it
-static TOKENIZER: Lazy<CoreBPE> = Lazy::new(|| cl100k_base().unwrap());
-
-/// Estimates the number of tokens in a text string using a real tokenizer
-pub fn estimate_tokens(text: &str) -> usize {
-    TOKENIZER.encode_with_special_tokens(text).len()
+/// Tokenizer encoding used for token estimation and budgeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Encoding {
+    /// `o200k_base` — GPT-4o / o-series, and the closest match for current
+    /// frontier models. Default, because `cl100k_base` under-counts these.
+    #[default]
+    O200kBase,
+    /// `cl100k_base` — GPT-4 / GPT-3.5-turbo.
+    Cl100kBase,
 }
 
-/// Counts the tokens that would be generated for a file
-pub fn count_file_tokens(base_path: &Path, entry: &DirEntry, line_numbers: bool) -> usize {
-    let file_path = entry.path();
-    let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
+impl FromStr for Encoding {
+    type Err = ();
 
-    // Start with tokens for the file header (path, size, modified time)
-    let mut token_count = estimate_tokens(&format!(
-        "\n### File: `{}`\n\n- Size: {} bytes\n- Modified: {}\n\n",
-        relative_path.display(),
-        entry.metadata().map(|m| m.len()).unwrap_or(0),
-        "Unknown"
-    )); // Using "Unknown" as placeholder for modified time in estimation
-
-    // Add tokens for the code fences
-    token_count += estimate_tokens("```\n```");
-
-    // Try to read file content
-    if let Ok(content) = fs::read_to_string(file_path) {
-        if line_numbers {
-            // When line numbers are enabled, we add the line number prefix to each line
-            let lines_with_numbers: String = content
-                .lines()
-                .enumerate()
-                .map(|(i, line)| format!("{:>4} | {}\n", i + 1, line))
-                .collect();
-            token_count += estimate_tokens(&lines_with_numbers);
-        } else {
-            token_count += estimate_tokens(&content);
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "o200k_base" | "o200k" => Ok(Encoding::O200kBase),
+            "cl100k_base" | "cl100k" => Ok(Encoding::Cl100kBase),
+            _ => Err(()),
         }
     }
+}
 
-    token_count
+// Initialize each tokenizer once and reuse it (std::sync::LazyLock — once_cell
+// was dropped in the v0.10 dependency diet; LazyLock is stable since 1.80
+// and the crate MSRV is 1.89).
+static O200K_BASE: LazyLock<CoreBPE> = LazyLock::new(|| o200k_base().unwrap());
+static CL100K_BASE: LazyLock<CoreBPE> = LazyLock::new(|| cl100k_base().unwrap());
+
+impl Encoding {
+    fn bpe(self) -> &'static CoreBPE {
+        match self {
+            Encoding::O200kBase => &O200K_BASE,
+            Encoding::Cl100kBase => &CL100K_BASE,
+        }
+    }
+}
+
+/// Estimates the number of tokens in a text string using the given encoding.
+pub fn estimate_tokens(encoding: Encoding, text: &str) -> usize {
+    encoding.bpe().encode_with_special_tokens(text).len()
+}
+
+/// Counts the tokens that would be generated for a file.
+///
+/// Renders the file through the same `process_file` path the document uses, then
+/// tokenizes the result — so the `--token-count` preview matches the produced
+/// document, including encoding transcoding and tree-sitter signature/structure
+/// enrichment, instead of re-reading raw bytes through a divergent code path (B9).
+pub fn count_file_tokens(
+    base_path: &Path,
+    entry: &DirEntry,
+    line_numbers: bool,
+    encoding: Encoding,
+    encoding_strategy: Option<&str>,
+    ts_config: &crate::markdown::TreeSitterConfig,
+) -> usize {
+    let mut buf: Vec<u8> = Vec::new();
+    if crate::markdown::process_file(
+        base_path,
+        entry.path(),
+        &mut buf,
+        line_numbers,
+        encoding_strategy,
+        ts_config,
+    )
+    .is_err()
+    {
+        // A file that fails to render contributes nothing to the document.
+        return 0;
+    }
+    estimate_tokens(encoding, &String::from_utf8_lossy(&buf))
 }
 
 /// Counts the tokens that would be generated for the entire file tree section
-pub fn count_tree_tokens(tree: &BTreeMap<String, crate::tree::FileNode>, depth: usize) -> usize {
+pub fn count_tree_tokens(
+    tree: &BTreeMap<String, crate::tree::FileNode>,
+    depth: usize,
+    encoding: Encoding,
+) -> usize {
     let mut token_count = 0;
 
     // Add tokens for indentation
@@ -9568,11 +10994,11 @@ pub fn count_tree_tokens(tree: &BTreeMap<String, crate::tree::FileNode>, depth: 
     for (name, node) in tree {
         match node {
             crate::tree::FileNode::File => {
-                token_count += estimate_tokens(&format!("{}- 📄 {}\n", indent, name));
+                token_count += estimate_tokens(encoding, &format!("{}- 📄 {}\n", indent, name));
             }
             crate::tree::FileNode::Directory(children) => {
-                token_count += estimate_tokens(&format!("{}- 📁 {}\n", indent, name));
-                token_count += count_tree_tokens(children, depth + 1);
+                token_count += estimate_tokens(encoding, &format!("{}- 📁 {}\n", indent, name));
+                token_count += count_tree_tokens(children, depth + 1, encoding);
             }
         }
     }
@@ -9589,15 +11015,27 @@ mod tests {
     fn test_estimate_tokens() {
         // Test with a simple string
         let text = "Hello, world!";
-        let tokens = estimate_tokens(text);
+        let tokens = estimate_tokens(Encoding::Cl100kBase, text);
         // "Hello, world!" is 4 tokens with cl100k_base
         assert_eq!(tokens, 4);
 
         // Test with code-like content
         let code_text = "fn main() {\n    println!(\"Hello, world!\");\n}";
-        let tokens = estimate_tokens(code_text);
+        let tokens = estimate_tokens(Encoding::Cl100kBase, code_text);
         // This specific code snippet is 12 tokens with cl100k_base
         assert_eq!(tokens, 12);
+    }
+
+    #[test]
+    fn test_encoding_default_and_parse() {
+        assert_eq!(Encoding::default(), Encoding::O200kBase);
+        assert_eq!("o200k_base".parse::<Encoding>(), Ok(Encoding::O200kBase));
+        assert_eq!("cl100k_base".parse::<Encoding>(), Ok(Encoding::Cl100kBase));
+        assert_eq!("O200K".parse::<Encoding>(), Ok(Encoding::O200kBase));
+        assert!("bogus".parse::<Encoding>().is_err());
+        // Both encodings tokenize non-empty text to a non-zero count.
+        assert!(estimate_tokens(Encoding::O200kBase, "hello world") > 0);
+        assert!(estimate_tokens(Encoding::Cl100kBase, "hello world") > 0);
     }
 
     #[test]
@@ -9610,7 +11048,7 @@ mod tests {
         subdir.insert("file2.md".to_string(), crate::tree::FileNode::File);
         tree.insert("src".to_string(), crate::tree::FileNode::Directory(subdir));
 
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         // "- 📄 file1.rs\n" -> 8 tokens
         // "- 📁 src\n" -> 6 tokens
         // "  - 📄 file2.md\n" -> 9 tokens
@@ -9633,7 +11071,14 @@ mod tests {
             .unwrap();
 
         // Estimate tokens for the file
-        let estimated_tokens = count_file_tokens(dir.path(), &entry, false);
+        let estimated_tokens = count_file_tokens(
+            dir.path(),
+            &entry,
+            false,
+            Encoding::Cl100kBase,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        );
 
         // Generate actual markdown content
         let mut actual_content = Vec::new();
@@ -9649,7 +11094,7 @@ mod tests {
         let actual_content_str = String::from_utf8(actual_content).unwrap();
 
         // Count actual tokens
-        let actual_tokens = estimate_tokens(&actual_content_str);
+        let actual_tokens = estimate_tokens(Encoding::Cl100kBase, &actual_content_str);
 
         // The estimation should be close to actual (within a reasonable margin)
         // Allow for some variance due to timestamp differences and minor formatting
@@ -9669,19 +11114,19 @@ mod tests {
 
     #[test]
     fn test_estimate_tokens_empty_string() {
-        let tokens = estimate_tokens("");
+        let tokens = estimate_tokens(Encoding::Cl100kBase, "");
         assert_eq!(tokens, 0);
     }
 
     #[test]
     fn test_estimate_tokens_whitespace_only() {
-        let tokens = estimate_tokens("   \n\t  ");
+        let tokens = estimate_tokens(Encoding::Cl100kBase, "   \n\t  ");
         assert!(tokens > 0); // Whitespace still counts as tokens
     }
 
     #[test]
     fn test_estimate_tokens_unicode() {
-        let tokens = estimate_tokens("Hello 世界! 🌍");
+        let tokens = estimate_tokens(Encoding::Cl100kBase, "Hello 世界! 🌍");
         assert!(tokens > 0);
         // Unicode characters may be encoded as multiple tokens
         assert!(tokens >= 4);
@@ -9701,8 +11146,22 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let tokens_without_line_numbers = count_file_tokens(dir.path(), &entry, false);
-        let tokens_with_line_numbers = count_file_tokens(dir.path(), &entry, true);
+        let tokens_without_line_numbers = count_file_tokens(
+            dir.path(),
+            &entry,
+            false,
+            Encoding::Cl100kBase,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        );
+        let tokens_with_line_numbers = count_file_tokens(
+            dir.path(),
+            &entry,
+            true,
+            Encoding::Cl100kBase,
+            None,
+            &crate::markdown::TreeSitterConfig::default(),
+        );
 
         // With line numbers should have more tokens due to line number prefixes
         assert!(tokens_with_line_numbers > tokens_without_line_numbers);
@@ -9735,16 +11194,24 @@ mod tests {
         std::fs::remove_file(&test_file).unwrap();
 
         if let Some(entry) = found_entry {
-            let tokens = count_file_tokens(dir.path(), &entry, false);
-            // Should still return some tokens for the file header even if content can't be read
-            assert!(tokens > 0);
+            let tokens = count_file_tokens(
+                dir.path(),
+                &entry,
+                false,
+                Encoding::Cl100kBase,
+                None,
+                &crate::markdown::TreeSitterConfig::default(),
+            );
+            // A file that cannot be read renders to nothing, so it contributes 0
+            // tokens — matching what the produced document would actually contain.
+            assert_eq!(tokens, 0);
         }
     }
 
     #[test]
     fn test_count_tree_tokens_empty_tree() {
         let tree = BTreeMap::new();
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         assert_eq!(tokens, 0);
     }
 
@@ -9773,11 +11240,11 @@ mod tests {
             crate::tree::FileNode::Directory(level1),
         );
 
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         assert!(tokens > 0);
 
         // Should account for indentation at different levels
-        let tokens_with_depth = count_tree_tokens(&tree, 2);
+        let tokens_with_depth = count_tree_tokens(&tree, 2, Encoding::Cl100kBase);
         assert!(tokens_with_depth > tokens); // More indentation = more tokens
     }
 
@@ -9800,7 +11267,7 @@ mod tests {
             crate::tree::FileNode::Directory(subdir),
         );
 
-        let tokens = count_tree_tokens(&tree, 0);
+        let tokens = count_tree_tokens(&tree, 0, Encoding::Cl100kBase);
         assert!(tokens > 0);
 
         // Verify it handles unicode filenames without crashing
@@ -9809,10 +11276,10 @@ mod tests {
 }
 ```
 
-### File: `src/tree.rs`
+### File: `src\tree.rs`
 
-- Size: 10845 bytes
-- Modified: 2026-02-14 17:55:15 UTC
+- Size: 11167 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 use ignore::DirEntry;
@@ -10139,10 +11606,10 @@ mod tests {
 }
 ```
 
-### File: `src/tree_sitter/language_support.rs`
+### File: `src\tree_sitter\language_support.rs`
 
-- Size: 4742 bytes
-- Modified: 2026-02-15 11:02:36 UTC
+- Size: 4906 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 //! Core types and traits for language support.
@@ -10311,10 +11778,10 @@ pub trait LanguageSupport: Send + Sync {
 }
 ```
 
-### File: `src/tree_sitter/languages/c.rs`
+### File: `src\tree_sitter\languages\c.rs`
 
-- Size: 15771 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 18693 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! C language support for tree-sitter.
@@ -10589,7 +12056,10 @@ impl CSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("typedef {}", name);
+        // Preserve the aliased type, e.g. `typedef unsigned int uint` instead of
+        // dropping it to a bare `typedef uint`.
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
 
         Some(Signature {
             kind: SignatureKind::TypeAlias,
@@ -10619,15 +12089,49 @@ impl CSupport {
     }
 
     fn find_function_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        // The `function_declarator` may be nested inside a `pointer_declarator`
+        // (functions returning a pointer, e.g. `char *dup(const char *)`) or a
+        // `parenthesized_declarator`, so descend through those wrappers instead of
+        // only inspecting direct children — otherwise pointer-returning functions
+        // are silently dropped.
+        let decl = self.find_function_declarator(node)?;
+        self.declarator_name(&decl, source)
+    }
+
+    fn find_function_declarator<'a>(
+        &self,
+        node: &tree_sitter::Node<'a>,
+    ) -> Option<tree_sitter::Node<'a>> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "function_declarator" {
-                let mut inner_cursor = child.walk();
-                for inner in child.children(&mut inner_cursor) {
-                    if inner.kind() == "identifier" {
-                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+            match child.kind() {
+                "function_declarator" => return Some(child),
+                "pointer_declarator" | "parenthesized_declarator" => {
+                    if let Some(found) = self.find_function_declarator(&child) {
+                        return Some(found);
                     }
                 }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Resolve the declared name inside a `function_declarator`, skipping the
+    /// parameter list and descending through nested declarators.
+    fn declarator_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "identifier" | "field_identifier" => {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                "pointer_declarator" | "parenthesized_declarator" | "function_declarator" => {
+                    if let Some(name) = self.declarator_name(&child, source) {
+                        return Some(name);
+                    }
+                }
+                _ => {}
             }
         }
         None
@@ -10717,6 +12221,26 @@ void hello(const char* name) {
             .filter(|s| s.kind == SignatureKind::Function)
             .collect();
         assert!(funcs.len() >= 2);
+    }
+
+    #[test]
+    fn test_pointer_return_function_extracted() {
+        // Regression: functions returning a pointer were silently dropped
+        // because find_function_name only inspected direct children.
+        let source = r#"
+char *dup(const char *s) {
+    return 0;
+}
+"#;
+
+        let signatures = CSupport.extract_signatures(source, Visibility::All);
+        assert!(
+            signatures
+                .iter()
+                .any(|s| s.kind == SignatureKind::Function && s.name == "dup"),
+            "pointer-returning function `dup` should be extracted, got: {:?}",
+            signatures.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -10851,10 +12375,10 @@ void helper() {}
 }
 ```
 
-### File: `src/tree_sitter/languages/cpp.rs`
+### File: `src\tree_sitter\languages\cpp.rs`
 
-- Size: 21266 bytes
-- Modified: 2026-02-16 04:28:24 UTC
+- Size: 26582 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! C++ language support for tree-sitter.
@@ -11179,7 +12703,9 @@ impl CppSupport {
     ) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("struct {}", name);
+        // Byte-slice to preserve inheritance/templates (e.g. `struct Foo : public Base`).
+        let full_sig = slice_signature_before_body(source, node, &["field_declaration_list"])
+            .unwrap_or_else(|| format!("struct {}", name));
 
         Some(Signature {
             kind: SignatureKind::Struct,
@@ -11195,7 +12721,9 @@ impl CppSupport {
     fn extract_enum_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("enum {}", name);
+        // Byte-slice to preserve `enum class` and the underlying type (e.g. `: int`).
+        let full_sig = slice_signature_before_body(source, node, &["enumerator_list"])
+            .unwrap_or_else(|| format!("enum {}", name));
 
         Some(Signature {
             kind: SignatureKind::Enum,
@@ -11211,7 +12739,10 @@ impl CppSupport {
     fn extract_alias_signature(&self, source: &str, node: &tree_sitter::Node) -> Option<Signature> {
         let name = self.find_child_text(node, "type_identifier", source)?;
 
-        let full_sig = format!("using/typedef {}", name);
+        // Preserve the full alias target, e.g. `using StringVec = std::vector<std::string>`
+        // or `typedef unsigned int uint`, instead of a bare `using/typedef X`.
+        let text = source[node.start_byte()..node.end_byte()].trim_end();
+        let full_sig = text.trim_end_matches(';').trim_end().to_string();
 
         Some(Signature {
             kind: SignatureKind::TypeAlias,
@@ -11241,18 +12772,56 @@ impl CppSupport {
     }
 
     fn find_function_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        // Resolve the name strictly from inside the `function_declarator`,
+        // descending through pointer/reference/parenthesized wrappers so that
+        // pointer- and reference-returning functions are not dropped. We do NOT
+        // fall back to a sibling identifier — doing so would misread a qualified
+        // return type like `std::string` as the function name.
+        let decl = self.find_function_declarator(node)?;
+        self.declarator_name(&decl, source)
+    }
+
+    fn find_function_declarator<'a>(
+        &self,
+        node: &tree_sitter::Node<'a>,
+    ) -> Option<tree_sitter::Node<'a>> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "function_declarator" || child.kind() == "reference_declarator" {
-                let mut inner_cursor = child.walk();
-                for inner in child.children(&mut inner_cursor) {
-                    if inner.kind() == "identifier" || inner.kind() == "qualified_identifier" {
-                        return Some(source[inner.start_byte()..inner.end_byte()].to_string());
+            match child.kind() {
+                "function_declarator" => return Some(child),
+                "pointer_declarator" | "reference_declarator" | "parenthesized_declarator" => {
+                    if let Some(found) = self.find_function_declarator(&child) {
+                        return Some(found);
                     }
                 }
+                _ => {}
             }
-            if child.kind() == "identifier" || child.kind() == "qualified_identifier" {
-                return Some(source[child.start_byte()..child.end_byte()].to_string());
+        }
+        None
+    }
+
+    /// Resolve the declared name inside a `function_declarator`, skipping the
+    /// parameter list and descending through nested declarators.
+    fn declarator_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "identifier"
+                | "qualified_identifier"
+                | "field_identifier"
+                | "destructor_name"
+                | "operator_name" => {
+                    return Some(source[child.start_byte()..child.end_byte()].to_string());
+                }
+                "pointer_declarator"
+                | "reference_declarator"
+                | "parenthesized_declarator"
+                | "function_declarator" => {
+                    if let Some(name) = self.declarator_name(&child, source) {
+                        return Some(name);
+                    }
+                }
+                _ => {}
             }
         }
         None
@@ -11368,6 +12937,43 @@ void greet(const std::string& name) {
     }
 
     #[test]
+    fn test_pointer_and_qualified_return_functions() {
+        // Regression: pointer-returning functions were dropped, and a qualified
+        // return type (`std::string`) was misread as the function name.
+        let source = r#"
+int* makeArray(int n) {
+    return nullptr;
+}
+
+std::string greet(const std::string& who) {
+    return who;
+}
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let names: Vec<&str> = signatures
+            .iter()
+            .filter(|s| s.kind == SignatureKind::Function)
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"makeArray"),
+            "pointer-returning function dropped; got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"greet"),
+            "function with qualified return type dropped; got {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"std::string"),
+            "qualified return type misread as function name; got {:?}",
+            names
+        );
+    }
+
+    #[test]
     fn test_extract_struct_signature() {
         let source = r#"
 struct Vec3 {
@@ -11402,6 +13008,53 @@ enum class Direction {
             .collect();
         assert!(!enums.is_empty());
         assert_eq!(enums[0].name, "Direction");
+    }
+
+    #[test]
+    fn test_struct_enum_alias_preserve_details() {
+        // Regression (B17): struct inheritance, enum underlying type, and alias
+        // targets were dropped by `format!`-based signatures.
+        let source = r#"
+struct Derived : public Base {
+    int x;
+};
+
+enum class Color : int {
+    Red,
+    Green
+};
+
+using StringVec = std::vector<std::string>;
+"#;
+
+        let signatures = CppSupport.extract_signatures(source, Visibility::All);
+        let s = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Struct && s.name == "Derived")
+            .expect("struct extracted");
+        assert!(
+            s.full_signature.contains(": public Base"),
+            "struct inheritance dropped: {}",
+            s.full_signature
+        );
+        let e = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Enum)
+            .expect("enum extracted");
+        assert!(
+            e.full_signature.contains(": int"),
+            "enum underlying type dropped: {}",
+            e.full_signature
+        );
+        let a = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::TypeAlias)
+            .expect("alias extracted");
+        assert!(
+            a.full_signature.contains("std::vector"),
+            "alias target dropped: {}",
+            a.full_signature
+        );
     }
 
     #[test]
@@ -11523,10 +13176,10 @@ void helper() {}
 }
 ```
 
-### File: `src/tree_sitter/languages/go.rs`
+### File: `src\tree_sitter\languages\go.rs`
 
-- Size: 15675 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 16215 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 //! Go language support for tree-sitter.
@@ -12071,10 +13724,10 @@ func helper() {}
 }
 ```
 
-### File: `src/tree_sitter/languages/java.rs`
+### File: `src\tree_sitter\languages\java.rs`
 
-- Size: 15822 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 21393 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```rust
 //! Java language support for tree-sitter.
@@ -12223,11 +13876,60 @@ impl JavaSupport {
         }
     }
 
-    #[allow(dead_code)]
-    fn get_visibility(&self, _node: &tree_sitter::Node) -> Visibility {
-        // Java visibility is determined by modifiers
-        // Simplified: check for public/private/protected keywords in AST modifiers
-        Visibility::All
+    /// Text of the declaration's `modifiers` child, if present.
+    fn modifiers_text<'a>(&self, node: &tree_sitter::Node, source: &'a str) -> Option<&'a str> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "modifiers" {
+                return Some(&source[child.start_byte()..child.end_byte()]);
+            }
+        }
+        None
+    }
+
+    /// True when the declaration's nearest enclosing type is an interface or
+    /// annotation type — whose members are implicitly `public`.
+    fn is_interface_member(&self, node: &tree_sitter::Node) -> bool {
+        let mut current = node.parent();
+        while let Some(n) = current {
+            match n.kind() {
+                "interface_declaration" | "annotation_type_declaration" => return true,
+                // The nearest enclosing type is a class/enum/record, whose
+                // members are package-private by default — stop here.
+                "class_declaration" | "enum_declaration" | "record_declaration" => return false,
+                _ => {}
+            }
+            current = n.parent();
+        }
+        false
+    }
+
+    /// Determine a Java declaration's *effective* visibility, honoring Java's
+    /// implicit rules. An explicit `public` always wins, and an explicit
+    /// `private`/`protected` is respected even inside an interface. Otherwise a
+    /// declaration with no access modifier is **package-private** in a class/enum
+    /// but **implicitly public** as an interface/annotation member — without that
+    /// distinction, a public interface's methods (which carry no `modifiers`
+    /// node) would be classified non-public and dropped under `--visibility public`.
+    fn get_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
+        if let Some(text) = self.modifiers_text(node, source) {
+            if text.split_whitespace().any(|t| t == "public") {
+                return Visibility::Public;
+            }
+            if text
+                .split_whitespace()
+                .any(|t| t == "private" || t == "protected")
+            {
+                return Visibility::Private;
+            }
+            // Only non-access modifiers (e.g. `default`, `static`, `final`,
+            // `abstract`) — fall through to the implicit rule below.
+        }
+        if self.is_interface_member(node) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        }
     }
 
     fn extract_method_signature(
@@ -12236,7 +13938,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -12287,7 +13989,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -12322,7 +14024,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -12357,7 +14059,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -12392,7 +14094,7 @@ impl JavaSupport {
         node: &tree_sitter::Node,
         visibility: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
 
         if visibility == Visibility::Public && vis != Visibility::Public {
             return None;
@@ -12402,7 +14104,7 @@ impl JavaSupport {
         }
 
         let name = self.find_child_text(node, "identifier", source)?;
-        let full_signature = format!("field {}", &name);
+        let full_signature = format!("field {name}");
 
         Some(Signature {
             kind: SignatureKind::Constant,
@@ -12577,6 +14279,80 @@ public class Dog extends Animal implements Runnable {
     }
 
     #[test]
+    fn test_visibility_public_filter() {
+        // Regression: get_visibility returned All unconditionally, so the
+        // `public` filter dropped every symbol.
+        let source = r#"
+public class Api {
+    public int publicMethod() { return 1; }
+    private int privateMethod() { return 2; }
+    int packageMethod() { return 3; }
+}
+"#;
+
+        let public_only = JavaSupport.extract_signatures(source, Visibility::Public);
+        assert!(public_only.iter().any(|s| s.name == "publicMethod"));
+        assert!(
+            !public_only.iter().any(|s| s.name == "privateMethod"),
+            "private method leaked into `public` filter"
+        );
+        assert!(
+            !public_only.iter().any(|s| s.name == "packageMethod"),
+            "package-private method leaked into `public` filter"
+        );
+    }
+
+    #[test]
+    fn test_visibility_private_filter_excludes_public() {
+        let source = r#"
+public class Api {
+    public int publicMethod() { return 1; }
+    private int privateMethod() { return 2; }
+}
+"#;
+
+        let private_only = JavaSupport.extract_signatures(source, Visibility::Private);
+        assert!(private_only.iter().any(|s| s.name == "privateMethod"));
+        assert!(
+            !private_only.iter().any(|s| s.name == "publicMethod"),
+            "public method leaked into `private` filter"
+        );
+        assert!(
+            !private_only.iter().any(|s| s.name == "Api"),
+            "public class leaked into `private` filter"
+        );
+    }
+
+    #[test]
+    fn test_interface_methods_survive_public_filter() {
+        // Regression: interface methods are implicitly public but carry no
+        // `modifiers` node, so they were classified package-private and dropped
+        // under `--visibility public`, hiding a public interface's API. An
+        // explicitly `private` interface method (Java 9+) must still be filtered.
+        let source = r#"
+public interface Service {
+    void start();
+    String name();
+    private void internalHelper() {}
+}
+"#;
+
+        let public_only = JavaSupport.extract_signatures(source, Visibility::Public);
+        assert!(
+            public_only.iter().any(|s| s.name == "start"),
+            "implicitly-public interface method must pass the `public` filter"
+        );
+        assert!(
+            public_only.iter().any(|s| s.name == "name"),
+            "implicitly-public interface method must pass the `public` filter"
+        );
+        assert!(
+            !public_only.iter().any(|s| s.name == "internalHelper"),
+            "explicitly-private interface method must NOT pass the `public` filter"
+        );
+    }
+
+    #[test]
     fn test_extract_structure() {
         let source = r#"
 import java.util.List;
@@ -12624,10 +14400,10 @@ enum Status { ACTIVE, INACTIVE }
 }
 ```
 
-### File: `src/tree_sitter/languages/javascript.rs`
+### File: `src\tree_sitter\languages\javascript.rs`
 
-- Size: 13628 bytes
-- Modified: 2026-02-16 03:19:11 UTC
+- Size: 14023 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```rust
 //! JavaScript language support for tree-sitter.
@@ -12878,7 +14654,7 @@ impl JavaScriptSupport {
                         full_signature,
                     });
                 } else if let Some(name) = self.find_child_text(&child, "identifier", source) {
-                    let full_signature = format!("const {}", &name);
+                    let full_signature = format!("const {name}");
                     signatures.push(Signature {
                         kind: SignatureKind::Constant,
                         name,
@@ -13030,10 +14806,10 @@ class User {
 }
 ```
 
-### File: `src/tree_sitter/languages/python.rs`
+### File: `src\tree_sitter\languages\python.rs`
 
-- Size: 11941 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 13303 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Python language support for tree-sitter.
@@ -13272,9 +15048,10 @@ impl PythonSupport {
         full_sig.push_str("class ");
         full_sig.push_str(&name);
         if let Some(b) = &bases {
-            full_sig.push('(');
+            // `argument_list` already includes the surrounding parentheses,
+            // e.g. "(Base)", so append it directly to avoid double-wrapping
+            // into `class User((Base))`.
             full_sig.push_str(b);
-            full_sig.push(')');
         }
 
         Some(Signature {
@@ -13399,6 +15176,32 @@ class User:
     }
 
     #[test]
+    fn test_class_base_list_not_double_wrapped() {
+        // Regression: `argument_list` already includes parentheses, so the base
+        // list was rendered as `class User((Base))`.
+        let source = r#"
+class User(Base):
+    pass
+"#;
+
+        let signatures = PythonSupport.extract_signatures(source, Visibility::All);
+        let class = signatures
+            .iter()
+            .find(|s| s.kind == SignatureKind::Class)
+            .expect("class extracted");
+        assert!(
+            class.full_signature.contains("class User(Base)"),
+            "expected single-wrapped base list, got: {}",
+            class.full_signature
+        );
+        assert!(
+            !class.full_signature.contains("((Base))"),
+            "base list double-wrapped: {}",
+            class.full_signature
+        );
+    }
+
+    #[test]
     fn test_file_extensions() {
         assert!(PythonSupport.supports_extension("py"));
         assert!(PythonSupport.supports_extension("pyw"));
@@ -13407,10 +15210,10 @@ class User:
 }
 ```
 
-### File: `src/tree_sitter/languages/rust.rs`
+### File: `src\tree_sitter\languages\rust.rs`
 
-- Size: 25304 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 32324 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Rust language support for tree-sitter.
@@ -13517,6 +15320,7 @@ impl RustSupport {
                 let is_item = matches!(
                     node.kind(),
                     "function_item"
+                        | "function_signature_item"
                         | "struct_item"
                         | "enum_item"
                         | "trait_item"
@@ -13596,6 +15400,11 @@ impl RustSupport {
                     signatures.push(sig);
                 }
             }
+            "function_signature_item" => {
+                if let Some(sig) = self.extract_function_sig_item(source, node, visibility) {
+                    signatures.push(sig);
+                }
+            }
             _ => {}
         }
 
@@ -13619,6 +15428,7 @@ impl RustSupport {
             "const_item" => structure.constants += 1,
             "type_item" => structure.type_aliases += 1,
             "macro_definition" => structure.macros += 1,
+            "function_signature_item" => structure.functions += 1,
             "use_declaration" => {
                 structure
                     .imports
@@ -13633,22 +15443,51 @@ impl RustSupport {
         }
     }
 
-    fn is_public(&self, node: &tree_sitter::Node) -> bool {
+    /// Determine a Rust item's visibility. Only a bare `pub` counts as Public;
+    /// restricted forms (`pub(crate)`, `pub(super)`, `pub(in path)`) are not part
+    /// of the crate's public API, so they are treated as Private for filtering.
+    fn get_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "visibility_modifier" {
-                return true;
+                let text = self.node_text(source, &child).trim();
+                return if text == "pub" {
+                    Visibility::Public
+                } else {
+                    // pub(crate) / pub(super) / pub(self) / pub(in ...) → restricted
+                    Visibility::Private
+                };
             }
         }
-        false
+        Visibility::Private
     }
 
-    fn get_visibility(&self, node: &tree_sitter::Node) -> Visibility {
-        if self.is_public(node) {
-            Visibility::Public
-        } else {
-            Visibility::Private
+    /// Effective visibility of a bodiless `fn` declaration (`function_signature_item`).
+    /// Rust forbids a `visibility_modifier` on a required trait method, so such a
+    /// method's real visibility is the enclosing trait's — without this, a public
+    /// trait's required methods would be classified `Private` and dropped under
+    /// `--visibility public`. A declaration that carries its own modifier (e.g.
+    /// `extern "C" { pub fn .. }`) keeps it; `extern` declarations with no modifier
+    /// stay module-private, as they should.
+    fn sig_item_visibility(&self, node: &tree_sitter::Node, source: &str) -> Visibility {
+        // An explicit `pub` on the declaration itself always wins.
+        let own = self.get_visibility(node, source);
+        if own == Visibility::Public {
+            return own;
         }
+        // Otherwise inherit from the nearest enclosing trait, if any.
+        let mut current = node.parent();
+        while let Some(n) = current {
+            match n.kind() {
+                "trait_item" => return self.get_visibility(&n, source),
+                // Stop once we leave the trait body without finding a trait
+                // (e.g. an `extern` block, an impl, or the file root).
+                "impl_item" | "function_item" | "mod_item" | "source_file" => break,
+                _ => {}
+            }
+            current = n.parent();
+        }
+        own
     }
 
     fn node_text<'a>(&self, source: &'a str, node: &tree_sitter::Node) -> &'a str {
@@ -13661,7 +15500,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -13700,13 +15539,51 @@ impl RustSupport {
         })
     }
 
+    /// Extract a bodiless function declaration (`function_signature_item`), e.g. a
+    /// required trait method `fn draw(&self);` or an `extern` block declaration.
+    /// These have no `block`, so the slice-before-body path finds no body; we
+    /// slice the whole node and drop the trailing `;` to preserve generics,
+    /// return types, and where-clauses.
+    fn extract_function_sig_item(
+        &self,
+        source: &str,
+        node: &tree_sitter::Node,
+        visibility_filter: Visibility,
+    ) -> Option<Signature> {
+        let vis = self.sig_item_visibility(node, source);
+        if !vis.matches_filter(visibility_filter) {
+            return None;
+        }
+
+        let name = self.find_child_text(node, "identifier", source)?;
+        let params = self.find_child_text(node, "parameters", source);
+        let return_type = self.find_child_text(node, "return_type", source);
+
+        let text = self.node_text(source, node).trim_end();
+        let full_signature = text
+            .strip_suffix(';')
+            .unwrap_or(text)
+            .trim_end()
+            .to_string();
+
+        Some(Signature {
+            kind: SignatureKind::Function,
+            name,
+            params,
+            return_type,
+            visibility: vis,
+            line_number: node.start_position().row + 1,
+            full_signature,
+        })
+    }
+
     fn extract_struct_signature(
         &self,
         source: &str,
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -13748,7 +15625,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -13784,7 +15661,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -13843,7 +15720,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -13874,7 +15751,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -13905,7 +15782,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -13936,7 +15813,7 @@ impl RustSupport {
         node: &tree_sitter::Node,
         visibility_filter: Visibility,
     ) -> Option<Signature> {
-        let vis = self.get_visibility(node);
+        let vis = self.get_visibility(node, source);
         if !vis.matches_filter(visibility_filter) {
             return None;
         }
@@ -14020,6 +15897,78 @@ fn private_fn() {}
         let signatures = RustSupport.extract_signatures(source, Visibility::Public);
         assert_eq!(signatures.len(), 1);
         assert_eq!(signatures[0].name, "public_fn");
+    }
+
+    #[test]
+    fn test_extract_trait_method_signatures() {
+        // Regression: bodiless trait methods (`function_signature_item`) were
+        // dropped entirely, leaving trait views incomplete.
+        let source = r#"
+pub trait Drawable {
+    fn draw(&self);
+    fn area(&self) -> f64;
+}
+"#;
+
+        let signatures = RustSupport.extract_signatures(source, Visibility::All);
+        assert!(
+            signatures.iter().any(|s| s.name == "draw"),
+            "bodiless trait method `draw` should be extracted"
+        );
+        let area = signatures
+            .iter()
+            .find(|s| s.name == "area")
+            .expect("bodiless trait method `area` should be extracted");
+        assert!(area.full_signature.contains("-> f64"));
+        assert!(!area.full_signature.ends_with(';'));
+    }
+
+    #[test]
+    fn test_public_trait_methods_survive_public_filter() {
+        // Regression: required trait methods carry no `visibility_modifier`
+        // (Rust forbids one), so they were classified Private and dropped under
+        // `--visibility public` — hiding a public trait's API. They must inherit
+        // the trait's visibility instead.
+        let source = r#"
+pub trait Drawable {
+    fn draw(&self);
+    fn area(&self) -> f64;
+}
+
+trait Hidden {
+    fn secret(&self);
+}
+"#;
+
+        let public_only = RustSupport.extract_signatures(source, Visibility::Public);
+        assert!(
+            public_only.iter().any(|s| s.name == "draw"),
+            "a public trait's required methods must pass the `public` filter"
+        );
+        assert!(
+            public_only.iter().any(|s| s.name == "area"),
+            "a public trait's required methods must pass the `public` filter"
+        );
+        assert!(
+            !public_only.iter().any(|s| s.name == "secret"),
+            "a private trait's methods must NOT pass the `public` filter"
+        );
+    }
+
+    #[test]
+    fn test_pub_crate_is_not_public() {
+        // Regression: pub(crate)/pub(super) were reported as fully public.
+        let source = r#"
+pub fn fully_public() {}
+pub(crate) fn crate_only() {}
+"#;
+
+        let public_only = RustSupport.extract_signatures(source, Visibility::Public);
+        assert!(public_only.iter().any(|s| s.name == "fully_public"));
+        assert!(
+            !public_only.iter().any(|s| s.name == "crate_only"),
+            "pub(crate) must not pass the `public` visibility filter"
+        );
     }
 
     #[test]
@@ -14306,10 +16255,10 @@ fn third() -> i32 {
 }
 ```
 
-### File: `src/tree_sitter/languages/typescript.rs`
+### File: `src\tree_sitter\languages\typescript.rs`
 
-- Size: 25167 bytes
-- Modified: 2026-02-16 04:28:24 UTC
+- Size: 36160 bytes
+- Modified: 2026-08-31 04:20:10 UTC
 
 ```rust
 //! TypeScript and TSX language support for tree-sitter.
@@ -14368,6 +16317,11 @@ macro_rules! impl_ts_language_support {
 
                 self.extract_signatures_from_node(source, &root, visibility, &mut signatures);
 
+                // v0.10: apply the --visibility filter. `all` keeps everything;
+                // `public` keeps module exports + public members; `private` keeps
+                // unexported items + private/protected members.
+                signatures.retain(|s| s.visibility.matches_filter(visibility));
+
                 signatures.sort_by_key(|s| s.line_number);
                 signatures
             }
@@ -14417,29 +16371,49 @@ macro_rules! impl_ts_language_support {
                 _visibility: Visibility,
                 signatures: &mut Vec<Signature>,
             ) {
+                // Visibility semantics (v0.10): a non-exported top-level
+                // declaration is module-private; `export` marks it Public (set
+                // in `extract_export_signatures`). Class members resolve via
+                // their explicit accessibility modifier (Public by default).
+                let mark_scope_private = |sig: &mut Signature| {
+                    if sig.visibility == Visibility::All {
+                        sig.visibility = Visibility::Private;
+                    }
+                };
+
                 match node.kind() {
                     "function_declaration" | "generator_function_declaration" => {
-                        if let Some(sig) = self.extract_function_signature(source, node) {
+                        if let Some(mut sig) = self.extract_function_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
                     "class_declaration" => {
-                        if let Some(sig) = self.extract_class_signature(source, node) {
+                        if let Some(mut sig) = self.extract_class_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
+                        // v0.10: also extract class members (methods/properties).
+                        // Class bodies are the majority of real TS code — without
+                        // this, `--signatures` on a TS file emitted only the class
+                        // header and lost every method (review §1.3).
+                        self.extract_class_members(source, node, signatures);
                     }
                     "interface_declaration" => {
-                        if let Some(sig) = self.extract_interface_signature(source, node) {
+                        if let Some(mut sig) = self.extract_interface_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
                     "type_alias_declaration" => {
-                        if let Some(sig) = self.extract_type_alias_signature(source, node) {
+                        if let Some(mut sig) = self.extract_type_alias_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
                     "enum_declaration" => {
-                        if let Some(sig) = self.extract_enum_signature(source, node) {
+                        if let Some(mut sig) = self.extract_enum_signature(source, node) {
+                            mark_scope_private(&mut sig);
                             signatures.push(sig);
                         }
                     }
@@ -14549,6 +16523,122 @@ macro_rules! impl_ts_language_support {
                     visibility: Visibility::All,
                     line_number: node.start_position().row + 1,
                     full_signature: full_sig,
+                })
+            }
+
+            /// Extract methods and properties from a class body (v0.10).
+            ///
+            /// Walks the `class_body` child and emits a `Signature` for every
+            /// `method_definition` / `abstract_method_signature` /
+            /// `public_field_definition`. Visibility is resolved from the
+            /// explicit `public`/`private`/`protected` modifier when present,
+            /// enabling `--visibility` for TS (review §1.2).
+            fn extract_class_members(
+                &self,
+                source: &str,
+                class_node: &tree_sitter::Node,
+                signatures: &mut Vec<Signature>,
+            ) {
+                let class_body = {
+                    let mut cursor = class_node.walk();
+                    class_node
+                        .children(&mut cursor)
+                        .find(|c| c.kind() == "class_body")
+                };
+                let Some(class_body) = class_body else {
+                    return;
+                };
+
+                let mut cursor = class_body.walk();
+                for child in class_body.children(&mut cursor) {
+                    let member = &child;
+                    match member.kind() {
+                        "method_definition" | "abstract_method_signature" => {
+                            if let Some(sig) = self.extract_method_signature(source, member) {
+                                signatures.push(sig);
+                            }
+                        }
+                        "public_field_definition" => {
+                            if let Some(sig) = self.extract_field_signature(source, member) {
+                                signatures.push(sig);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            /// Resolve a TS member's effective visibility from its modifiers.
+            ///
+            /// `private`/`protected` → Private; `public` or no modifier → Public
+            /// (TS class members are public by default, unlike Rust).
+            fn member_visibility(&self, member: &tree_sitter::Node, source: &str) -> Visibility {
+                let mut cursor = member.walk();
+                for child in member.children(&mut cursor) {
+                    if child.kind() == "accessibility_modifier" {
+                        let text = &source[child.start_byte()..child.end_byte()];
+                        return match text {
+                            "private" | "protected" => Visibility::Private,
+                            _ => Visibility::Public,
+                        };
+                    }
+                }
+                Visibility::Public
+            }
+
+            fn extract_method_signature(
+                &self,
+                source: &str,
+                member: &tree_sitter::Node,
+            ) -> Option<Signature> {
+                let name = self
+                    .find_child_text(member, "property_identifier", source)
+                    .or_else(|| self.find_child_text(member, "identifier", source))?;
+
+                let params = self.find_child_text(member, "formal_parameters", source);
+                let return_type = self.find_child_text(member, "type_annotation", source);
+                let visibility = self.member_visibility(member, source);
+
+                // Slice from the member start (preserving async/static/access
+                // modifiers) down to the body start.
+                let full_sig = slice_signature_before_body(
+                    source,
+                    member,
+                    &["statement_block", "abstract_clause"],
+                )
+                .unwrap_or_else(|| {
+                    // Abstract members have no body — fall back to a text render.
+                    let head = &source[member.start_byte()..member.end_byte()];
+                    head.trim_end().to_string()
+                });
+
+                Some(Signature {
+                    kind: SignatureKind::Method,
+                    name,
+                    params,
+                    return_type,
+                    visibility,
+                    line_number: member.start_position().row + 1,
+                    full_signature: full_sig,
+                })
+            }
+
+            fn extract_field_signature(
+                &self,
+                source: &str,
+                member: &tree_sitter::Node,
+            ) -> Option<Signature> {
+                let name = self.find_child_text(member, "property_identifier", source)?;
+                let visibility = self.member_visibility(member, source);
+
+                Some(Signature {
+                    kind: SignatureKind::Constant,
+                    name: name.clone(),
+                    params: None,
+                    return_type: None,
+                    visibility,
+                    line_number: member.start_position().row + 1,
+                    full_signature: format!("field {name}"),
                 })
             }
 
@@ -14698,27 +16788,46 @@ macro_rules! impl_ts_language_support {
                 node: &tree_sitter::Node,
                 signatures: &mut Vec<Signature>,
             ) {
+                // v0.10: `export` marks the declaration Public (module API);
+                // callers mark unexported top-level items Private.
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     match child.kind() {
                         "function_declaration" => {
-                            if let Some(sig) = self.extract_function_signature(source, &child) {
+                            if let Some(mut sig) = self.extract_function_signature(source, &child) {
+                                sig.visibility = Visibility::Public;
                                 signatures.push(sig);
                             }
                         }
                         "class_declaration" => {
-                            if let Some(sig) = self.extract_class_signature(source, &child) {
+                            if let Some(mut sig) = self.extract_class_signature(source, &child) {
+                                sig.visibility = Visibility::Public;
+                                signatures.push(sig);
+                            }
+                            // v0.10: exported classes get their members too.
+                            self.extract_class_members(source, &child, signatures);
+                        }
+                        "interface_declaration" => {
+                            if let Some(mut sig) = self.extract_interface_signature(source, &child)
+                            {
+                                sig.visibility = Visibility::Public;
                                 signatures.push(sig);
                             }
                         }
-                        "interface_declaration" => {
-                            if let Some(sig) = self.extract_interface_signature(source, &child) {
+                        "enum_declaration" => {
+                            if let Some(mut sig) = self.extract_enum_signature(source, &child) {
+                                sig.visibility = Visibility::Public;
                                 signatures.push(sig);
                             }
                         }
                         "lexical_declaration" | "variable_declaration" => {
                             // Capture exported arrow functions: export const foo = () => {}
-                            self.extract_variable_declarations(source, &child, signatures);
+                            let mut exported = Vec::new();
+                            self.extract_variable_declarations(source, &child, &mut exported);
+                            for mut sig in exported {
+                                sig.visibility = Visibility::Public;
+                                signatures.push(sig);
+                            }
                         }
                         _ => {}
                     }
@@ -14829,6 +16938,109 @@ mod tests {
         let sigs = TypeScriptSupport.extract_signatures(source, Visibility::All);
         assert!(!sigs.is_empty());
         assert_eq!(sigs[0].name, "MyComponent");
+    }
+
+    // --- v0.10: class-member extraction (review §1.3) ------------------ //
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_class_members_are_extracted() {
+        let source = r#"
+export class K {
+    public open(): void {}
+    private secret(): void {}
+    protected guarded(x: number): number { return x; }
+    static create(): K { return new K(); }
+}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::All);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"open"), "names: {names:?}");
+        assert!(names.contains(&"secret"), "names: {names:?}");
+        assert!(names.contains(&"guarded"), "names: {names:?}");
+        assert!(names.contains(&"create"), "names: {names:?}");
+        assert!(
+            names.contains(&"K"),
+            "class itself must be listed: {names:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_visibility_public_excludes_private_members() {
+        let source = r#"
+export class K {
+    public open(): void {}
+    private secret(): void {}
+}
+function helper(): void {}
+export function api(): void {}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::Public);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"open"),
+            "public method must be kept: {names:?}"
+        );
+        assert!(
+            !names.contains(&"secret"),
+            "private method must be filtered: {names:?}"
+        );
+        assert!(
+            !names.contains(&"helper"),
+            "unexported function must be filtered: {names:?}"
+        );
+        assert!(
+            names.contains(&"api"),
+            "exported function must be kept: {names:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_visibility_private_keeps_private_members() {
+        let source = r#"
+export class K {
+    public open(): void {}
+    private secret(): void {}
+}
+function helper(): void {}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::Private);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"secret"),
+            "private method must be kept: {names:?}"
+        );
+        assert!(
+            names.contains(&"helper"),
+            "module-private fn must be kept: {names:?}"
+        );
+        assert!(
+            !names.contains(&"open"),
+            "public member must be filtered: {names:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-ts")]
+    fn test_class_fields_extracted_with_visibility() {
+        let source = r#"
+export class K {
+    public visible: string;
+    private hidden: number;
+}
+"#;
+        let sigs = TypeScriptSupport.extract_signatures(source, Visibility::Public);
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"visible"),
+            "public field must be kept: {names:?}"
+        );
+        assert!(
+            !names.contains(&"hidden"),
+            "private field must be filtered: {names:?}"
+        );
     }
 
     #[test]
@@ -14948,10 +17160,10 @@ mod tests {
 }
 ```
 
-### File: `src/tree_sitter/signatures.rs`
+### File: `src\tree_sitter\signatures.rs`
 
-- Size: 7084 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 7274 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 //! Signature extraction utilities.
@@ -15146,10 +17358,10 @@ mod tests {
 }
 ```
 
-### File: `src/tree_sitter/structure.rs`
+### File: `src\tree_sitter\structure.rs`
 
-- Size: 2617 bytes
-- Modified: 2026-02-15 06:32:52 UTC
+- Size: 2709 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 //! Code structure extraction utilities.
@@ -15246,10 +17458,10 @@ mod tests {
 }
 ```
 
-### File: `src/tree_sitter/truncation.rs`
+### File: `src\tree_sitter\truncation.rs`
 
-- Size: 3307 bytes
-- Modified: 2026-02-15 20:58:48 UTC
+- Size: 4750 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Smart truncation at AST boundaries.
@@ -15269,7 +17481,11 @@ pub fn find_truncation_point(
         return source.len();
     }
 
-    support.find_truncation_point(source, max_bytes)
+    // Per-language impls return either a node boundary (already char-safe) or the
+    // raw `max_bytes` fallback (which may split a multi-byte char). Clamp to a
+    // UTF-8 boundary so callers can slice the result without panicking (B19).
+    let point = support.find_truncation_point(source, max_bytes);
+    ensure_utf8_boundary(source, point)
 }
 
 /// Check if truncation is needed at a UTF-8 boundary.
@@ -15350,6 +17566,26 @@ mod tests {
 
     #[test]
     #[cfg(feature = "tree-sitter-rust")]
+    fn test_find_truncation_point_clamps_to_char_boundary() {
+        // Regression (B19): a comment-only source has no AST item boundary, so the
+        // per-language walker falls back to `max_bytes`. With `max_bytes` landing
+        // inside a multi-byte char, the returned point must be clamped to a UTF-8
+        // boundary (otherwise slicing it panics once smart truncation is wired up).
+        let lang = super::super::languages::get_language_support("rs").unwrap();
+        let source = "// 世界世界世界"; // '世'/'界' are 3 bytes each
+        let max_bytes = 4; // byte 4 is inside the first '世' (bytes 3..6)
+        assert!(!source.is_char_boundary(max_bytes));
+        let point = find_truncation_point(source, max_bytes, lang);
+        assert!(
+            source.is_char_boundary(point),
+            "truncation point {point} is not a char boundary"
+        );
+        // Slicing must not panic.
+        let _ = &source[..point];
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-rust")]
     fn test_find_truncation_point_source_exceeds_limit() {
         let lang = super::super::languages::get_language_support("rs").unwrap();
         let source =
@@ -15363,8 +17599,8 @@ mod tests {
 
 ### File: `tarpaulin.toml`
 
-- Size: 304 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 321 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```toml
 [test_config]
@@ -15386,10 +17622,10 @@ color = "Auto"
 out = ["Html", "Xml"]
 ```
 
-### File: `winget/manifests/i/igorls/context-builder/0.8.2/igorls.context-builder.installer.yaml`
+### File: `winget\manifests\i\igorls\context-builder\0.8.2\igorls.context-builder.installer.yaml`
 
-- Size: 628 bytes
-- Modified: 2026-02-15 21:32:35 UTC
+- Size: 644 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```yaml
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
@@ -15410,10 +17646,10 @@ ManifestType: installer
 ManifestVersion: 1.6.0
 ```
 
-### File: `winget/manifests/i/igorls/context-builder/0.8.2/igorls.context-builder.locale.en-US.yaml`
+### File: `winget\manifests\i\igorls\context-builder\0.8.2\igorls.context-builder.locale.en-US.yaml`
 
-- Size: 1113 bytes
-- Modified: 2026-02-15 21:57:58 UTC
+- Size: 1144 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```yaml
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
@@ -15449,10 +17685,10 @@ ManifestType: defaultLocale
 ManifestVersion: 1.6.0
 ```
 
-### File: `winget/manifests/i/igorls/context-builder/0.8.2/igorls.context-builder.yaml`
+### File: `winget\manifests\i\igorls\context-builder\0.8.2\igorls.context-builder.yaml`
 
-- Size: 220 bytes
-- Modified: 2026-02-15 21:32:27 UTC
+- Size: 227 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```yaml
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
@@ -15464,10 +17700,89 @@ ManifestType: version
 ManifestVersion: 1.6.0
 ```
 
-### File: `benches/context_bench.rs`
+### File: `winget\manifests\i\igorls\context-builder\0.9.0\igorls.context-builder.installer.yaml`
 
-- Size: 11135 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 622 bytes
+- Modified: 2026-06-04 23:53:26 UTC
+
+```yaml
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
+PackageIdentifier: igorls.context-builder
+PackageVersion: 0.9.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: context-builder.exe
+  PortableCommandAlias: context-builder
+ReleaseDate: 2026-06-04
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/igorls/context-builder/releases/download/v0.9.0/context-builder-x86_64-pc-windows-msvc.zip
+  InstallerSha256: BA67926662FB489A1EBB5F7DEB51FC2C0200E246031D4411E4798C8DC5FB760D
+ManifestType: installer
+ManifestVersion: 1.12.0
+```
+
+### File: `winget\manifests\i\igorls\context-builder\0.9.0\igorls.context-builder.locale.en-US.yaml`
+
+- Size: 1165 bytes
+- Modified: 2026-06-04 23:53:31 UTC
+
+```yaml
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+
+PackageIdentifier: igorls.context-builder
+PackageVersion: 0.9.0
+PackageLocale: en-US
+Publisher: igorls
+PublisherUrl: https://github.com/igorls
+PublisherSupportUrl: https://github.com/igorls/context-builder/issues
+Author: Igor Lins e Silva
+PackageName: Context Builder
+PackageUrl: https://github.com/igorls/context-builder
+License: MIT
+LicenseUrl: https://github.com/igorls/context-builder/blob/master/LICENSE
+ShortDescription: A blazing-fast CLI for creating LLM context from your entire codebase
+Description: |-
+  Context Builder generates a single, structured markdown file from any codebase directory.
+  The output is optimized for LLM consumption with relevance-based file ordering, AST-aware
+  code signatures via Tree-Sitter, automatic token budgeting, and smart defaults.
+Moniker: context-builder
+Tags:
+- cli
+- llm
+- ai
+- codebase
+- context
+- tree-sitter
+- developer-tools
+- rust
+ReleaseNotes: 'Full Changelog: v0.8.3-1...v0.9.0'
+ReleaseNotesUrl: https://github.com/igorls/context-builder/releases/tag/v0.9.0
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0
+```
+
+### File: `winget\manifests\i\igorls\context-builder\0.9.0\igorls.context-builder.yaml`
+
+- Size: 222 bytes
+- Modified: 2026-06-04 23:25:07 UTC
+
+```yaml
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
+
+PackageIdentifier: igorls.context-builder
+PackageVersion: 0.9.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.12.0
+```
+
+### File: `benches\context_bench.rs`
+
+- Size: 11582 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 use std::fs;
@@ -15681,6 +17996,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -15729,6 +18045,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     yes: true,
                     diff_only: false,
                     clear_cache: false,
+                    encoding: "o200k_base".to_string(),
                     init: false,
                     max_tokens: None,
                     signatures: false,
@@ -15817,10 +18134,10 @@ criterion_group!(benches, context_benchmark);
 criterion_main!(benches);
 ```
 
-### File: `tests/cli_integration.rs`
+### File: `tests\cli_integration.rs`
 
-- Size: 13986 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 16435 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 use std::cell::Cell;
@@ -15890,6 +18207,7 @@ fn preview_mode_does_not_create_output_file() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -15935,6 +18253,7 @@ fn preview_mode_skips_overwrite_confirmation() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -15985,6 +18304,7 @@ fn token_count_mode_skips_overwrite_confirmation() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16032,6 +18352,7 @@ fn both_preview_and_token_count_modes_work_together() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16092,6 +18413,7 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16184,6 +18506,7 @@ fn overwrite_prompt_is_respected() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16228,6 +18551,7 @@ fn confirm_processing_receives_large_count() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16246,6 +18570,55 @@ fn confirm_processing_receives_large_count() {
         prompter.last_count() >= 150,
         "expected confirm_processing to be called with >=150 files, got {}",
         prompter.last_count()
+    );
+}
+
+#[test]
+fn pipe_mode_skips_processing_confirmation() {
+    // In `-o -` (stdout pipe) mode the confirmation prompt would `print!` to
+    // stdout and corrupt the piped document — so it must be skipped entirely,
+    // even with >100 files and without `--yes`. A prompter that would CANCEL
+    // proves the prompt is never consulted: the run still succeeds.
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    fs::create_dir_all(root.join("data")).unwrap();
+    for i in 0..150 {
+        write_file(&root.join("data").join(format!("f{}.txt", i)), "x");
+    }
+
+    let args = Args {
+        input: root.to_string_lossy().into_owned(),
+        output: "-".to_string(),
+        filter: vec!["txt".into()],
+        ignore: vec![],
+        preview: false,
+        token_count: false,
+        line_numbers: false,
+        yes: false,
+        diff_only: false,
+        clear_cache: false,
+        encoding: "o200k_base".to_string(),
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+    };
+
+    // processing_response = false → would cancel if the prompt were consulted.
+    let prompter = TestPrompter::new(true, false);
+
+    let res = run_with_args(args, Config::default(), &prompter);
+    assert!(
+        res.is_ok(),
+        "pipe mode must proceed without consulting the confirmation prompt"
+    );
+    assert_eq!(
+        prompter.last_count(),
+        0,
+        "confirm_processing must NOT be called in pipe mode"
     );
 }
 
@@ -16269,6 +18642,7 @@ fn token_count_mode_does_not_create_output_file() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16291,10 +18665,10 @@ fn token_count_mode_does_not_create_output_file() {
 }
 ```
 
-### File: `tests/diff_integration.rs`
+### File: `tests\diff_integration.rs`
 
-- Size: 1122 bytes
-- Modified: 2026-02-14 19:55:07 UTC
+- Size: 1185 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 use context_builder::diff::generate_diff;
@@ -16362,10 +18736,10 @@ More text here.
 }
 ```
 
-### File: `tests/test_auto_diff.rs`
+### File: `tests\test_auto_diff.rs`
 
-- Size: 34489 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 35853 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Integration tests for auto-diff functionality
@@ -16453,6 +18827,7 @@ fn test_auto_diff_workflow_basic() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16612,6 +18987,7 @@ fn test_auto_diff_added_and_removed_files() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16776,6 +19152,7 @@ diff_only = true
         yes: true,
         diff_only: false, // Config file should override this
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -16924,6 +19301,7 @@ fn test_cache_invalidation_on_config_change() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -17079,6 +19457,7 @@ fn test_concurrent_cache_access() {
                     yes: true,
                     diff_only: false,
                     clear_cache: false,
+                    encoding: "o200k_base".to_string(),
                     init: false,
                     max_tokens: None,
                     signatures: false,
@@ -17134,6 +19513,7 @@ fn test_corrupted_cache_recovery() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -17305,6 +19685,7 @@ diff_only = true
         yes: true,
         diff_only: false, // Will be overridden by config
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -17407,10 +19788,10 @@ diff_only = true
 }
 ```
 
-### File: `tests/test_binary_file_autodiff.rs`
+### File: `tests\test_binary_file_autodiff.rs`
 
-- Size: 8350 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 8769 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Integration tests for binary file handling in auto-diff mode
@@ -17524,6 +19905,7 @@ fn test_binary_files_dont_crash_autodiff() {
         yes: true, // Auto-confirm to avoid prompts
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -17607,6 +19989,7 @@ fn test_mixed_text_and_binary_files_autodiff() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -17674,6 +20057,7 @@ fn test_large_binary_file_autodiff() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -17699,10 +20083,10 @@ fn test_large_binary_file_autodiff() {
 }
 ```
 
-### File: `tests/test_comprehensive_edge_cases.rs`
+### File: `tests\test_comprehensive_edge_cases.rs`
 
-- Size: 23611 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 24818 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Comprehensive edge case testing suite for context-builder v0.5.0
@@ -17824,6 +20208,7 @@ fn test_comprehensive_binary_file_edge_cases() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -17913,6 +20298,7 @@ fn test_configuration_precedence_edge_cases() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -17953,6 +20339,7 @@ fn test_configuration_precedence_edge_cases() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18013,6 +20400,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18119,6 +20507,7 @@ fn test_error_conditions_and_exit_codes() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18149,6 +20538,7 @@ fn test_error_conditions_and_exit_codes() {
         yes: false, // Don't auto-confirm
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18176,6 +20566,7 @@ fn test_error_conditions_and_exit_codes() {
         yes: false,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18225,6 +20616,7 @@ fn test_memory_usage_under_parallel_processing() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18316,6 +20708,7 @@ line_numbers = true
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -18418,6 +20811,7 @@ fn test_edge_case_filenames_and_paths() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18456,10 +20850,10 @@ fn test_edge_case_filenames_and_paths() {
 }
 ```
 
-### File: `tests/test_config_resolution.rs`
+### File: `tests\test_config_resolution.rs`
 
-- Size: 15023 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 15858 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Integration tests for configuration resolution functionality
@@ -18512,7 +20906,11 @@ fn run_with_resolved_config(
     prompter: &impl Prompter,
 ) -> std::io::Result<()> {
     // Resolve final configuration using the new config resolver
-    let resolution = resolve_final_config(args, config.clone());
+    let resolution = resolve_final_config(
+        args,
+        config.clone(),
+        context_builder::config_resolver::ExplicitCli::default(),
+    );
 
     // Convert resolved config back to Args for run_with_args
     let final_args = Args {
@@ -18532,6 +20930,7 @@ fn run_with_resolved_config(
         structure: resolution.config.structure,
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
+        encoding: resolution.config.encoding,
     };
 
     // Create final Config with resolved values
@@ -18586,6 +20985,7 @@ output = "from_config.md"
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18668,6 +21068,7 @@ ignore = ["target"]
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18754,6 +21155,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18835,6 +21237,7 @@ yes = true
         yes: false,          // Default - should use config
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18911,6 +21314,7 @@ timestamped_output = false
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -18934,10 +21338,10 @@ timestamped_output = false
 }
 ```
 
-### File: `tests/test_cwd_independence.rs`
+### File: `tests\test_cwd_independence.rs`
 
-- Size: 13739 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 14260 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Integration tests for CWD independence
@@ -19036,6 +21440,7 @@ filter = ["txt"]
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -19128,6 +21533,7 @@ timestamped_output = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -19373,10 +21779,10 @@ filter = ["txt"]
 }
 ```
 
-### File: `tests/test_determinism.rs`
+### File: `tests\test_determinism.rs`
 
-- Size: 21480 bytes
-- Modified: 2026-02-15 08:22:30 UTC
+- Size: 22548 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Integration tests for determinism and robustness of context-builder
@@ -19471,6 +21877,7 @@ fn test_deterministic_output_multiple_runs() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -19498,6 +21905,7 @@ fn test_deterministic_output_multiple_runs() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -19649,6 +22057,7 @@ fn test_deterministic_file_tree_order() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -19717,6 +22126,7 @@ fn test_cache_collision_prevention() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -19744,6 +22154,7 @@ fn test_cache_collision_prevention() {
         diff_only: false,
 
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
 
         init: false,
         max_tokens: None,
@@ -19814,6 +22225,7 @@ fn test_custom_ignores_performance() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -19873,6 +22285,7 @@ fn test_configuration_affects_cache_key() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -19892,6 +22305,7 @@ fn test_configuration_affects_cache_key() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -19961,6 +22375,7 @@ auto_diff = true
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -20036,10 +22451,10 @@ auto_diff = true
 }
 ```
 
-### File: `tests/test_parallel_memory.rs`
+### File: `tests\test_parallel_memory.rs`
 
-- Size: 9136 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 9550 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Integration test for streaming parallel processing with memory efficiency
@@ -20108,6 +22523,7 @@ fn test_streaming_parallel_processing() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -20226,6 +22642,7 @@ fn test_parallel_error_handling() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -20288,6 +22705,7 @@ fn test_memory_efficiency_with_large_files() {
         yes: true,
         diff_only: false,
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -20323,10 +22741,10 @@ fn test_memory_efficiency_with_large_files() {
 }
 ```
 
-### File: `tests/test_phase4_integration.rs`
+### File: `tests\test_phase4_integration.rs`
 
-- Size: 11358 bytes
-- Modified: 2026-02-15 06:55:40 UTC
+- Size: 11791 bytes
+- Modified: 2026-06-04 22:44:44 UTC
 
 ```rust
 //! Integration test for all Phase 4 features working together
@@ -20451,6 +22869,7 @@ filter = ["rs", "txt"]
         yes: true,
         diff_only: false, // Will be overridden by config
         clear_cache: false,
+        encoding: "o200k_base".to_string(),
         init: false,
         max_tokens: None,
         signatures: false,
@@ -20629,6 +23048,7 @@ fn test_encoding_strategy_configuration() {
             yes: true,
             diff_only: false,
             clear_cache: false,
+            encoding: "o200k_base".to_string(),
             init: false,
             max_tokens: None,
             signatures: false,
@@ -20672,8 +23092,8 @@ fn test_encoding_strategy_configuration() {
 
 ### File: `BENCHMARKS.md`
 
-- Size: 6024 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 6191 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Benchmarks
@@ -20848,8 +23268,8 @@ Happy benchmarking!
 
 ### File: `DEVELOPMENT.md`
 
-- Size: 7600 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 7851 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Development Guide
@@ -21108,8 +23528,8 @@ Open an issue or start a discussion on GitHub. Thanks for contributing!
 
 ### File: `LICENSE`
 
-- Size: 1078 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 1099 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```text
 The MIT License
@@ -21137,15 +23557,19 @@ THE SOFTWARE.
 
 ### File: `SKILL.md`
 
-- Size: 10478 bytes
-- Modified: 2026-02-16 04:22:30 UTC
+- Size: 13742 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```markdown
 ---
 name: context-builder
-description: Generate LLM-optimized codebase context from any directory using context-builder CLI
+description: >
+  Package codebases into LLM-optimized markdown, and run the Deep Think Authority
+  pipeline (context-builder → Deep Think review → structured AUTHORITY → Flash/Antigravity
+  implementation agent). Use when generating project context, preparing Deep Think reviews,
+  or binding a weaker coding agent to a senior reasoning pass.
 homepage: https://github.com/igorls/context-builder
-version: 0.8.3
+version: 0.10.0
 requires:
   - context-builder
 ---
@@ -21154,32 +23578,18 @@ requires:
 
 Generate a single, structured markdown file from any codebase directory. The output is optimized for LLM consumption with relevance-based file ordering, AST-aware code signatures, automatic token budgeting, and smart defaults.
 
+**Also:** orchestrate the **Deep Think Authority** handoff so tool-using agents (Antigravity, Gemini Flash, etc.) implement senior one-shot reviews instead of freelancing. Full harness: [`docs/agent-harness/`](docs/agent-harness/README.md).
+
 ## Installation
 
-### From Source (recommended — fully verified)
-
 ```bash
-# Requires Rust toolchain (cargo). Builds from source with cryptographic verification via crates.io.
+# Requires Rust toolchain. Builds from source with cryptographic verification via crates.io.
 cargo install context-builder --features tree-sitter-all
 ```
 
-### Pre-built Binary (with SHA256 verification)
+Pre-built binaries with SHA256 checksums are also available for manual download from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
 
-Use the official install script, which downloads from GitHub Releases and verifies the binary checksum before installing:
-
-```bash
-curl -sSL https://github.com/igorls/context-builder/releases/latest/download/install.sh | bash
-```
-
-The install script:
-- Downloads the correct binary for your OS/architecture
-- **Verifies SHA256 checksum** against the published `.sha256` digest
-- Fails and cleans up if verification fails (fail-closed)
-- Installs to `~/.local/bin` (user-local, no sudo required)
-
-For manual download, binaries and their `.sha256` digests are available on the [GitHub Releases](https://github.com/igorls/context-builder/releases/latest) page.
-
-Verify: `context-builder --version` (expected: `0.8.3`)
+Verify: `context-builder --version` (expected: `0.10.0`)
 
 
 ## Security & Path Scoping
@@ -21200,10 +23610,62 @@ Verify: `context-builder --version` (expected: `0.8.3`)
 ## When to Use
 
 - **Deep code review** — Feed an entire codebase to an LLM for architecture analysis or bug hunting
+- **Deep Think → agent pipeline** — Package context for Ultra Deep Think, then bind Antigravity/Flash to the resulting AUTHORITY document
 - **Onboarding** — Generate a project snapshot for understanding unfamiliar codebases
 - **Diff-based updates** — After code changes, generate only the diffs to update an LLM's understanding
 - **AST signatures** — Extract function/class signatures for token-efficient structural understanding
 - **Cross-project research** — Quickly package a dependency's source for analysis
+
+## Deep Think Authority Pipeline (primary multi-model workflow)
+
+Weak agent harnesses (e.g. Gemini Flash in Antigravity) are strong at **tools** and weak at **novel reasoning**. Deep Think (Ultra web) is the inverse. Do not try to make Flash invent architecture. **Inject Deep Think as law**, then let Flash execute.
+
+```
+context-builder  →  Deep Think (AUTHORITY)  →  Agent BUILD  →  RESULT
+                         ↑                         │
+                         └──── CONFLICT / DEBUG ────┘
+```
+
+### Agent rules (always)
+
+1. **AUTHORITY is law** — do not redesign, re-prioritize, or “improve” beyond the packet
+2. **Stop on conflict** — if the live repo contradicts AUTHORITY, emit CONFLICT; do not freestyle
+3. **Do not re-inject the full context dump into the agent** — Deep Think already distilled it; the agent should use tools on the real tree
+4. **Prefer a tight AUTHORITY** (≈2–4k tokens): verdict, ordered file-level steps, verification commands
+5. **Verification is mandatory** before DONE
+
+### Step-by-step
+
+```bash
+# 0) Size check
+context-builder -d /abs/path/to/project --token-count
+
+# 1) Package for Deep Think (adjust -f to the language)
+mkdir -p docs/handoffs/$(date +%Y-%m-%d)-topic
+context-builder -d /abs/path/to/project \
+  -f rs,toml,md \
+  --max-tokens 120000 \
+  -y -o docs/handoffs/$(date +%Y-%m-%d)-topic/00-context.md
+```
+
+2. **Deep Think (Ultra web):** attach `00-context.md`, paste [`docs/agent-harness/templates/01-problem.md`](docs/agent-harness/templates/01-problem.md), require AUTHORITY shape from [`02-authority.md`](docs/agent-harness/templates/02-authority.md).
+3. **Human:** trim fluff → save `02-authority.md` (budget beats volume for Flash).
+4. **Agent:** load system prompt from [`docs/agent-harness/antigravity-system-prompt.md`](docs/agent-harness/antigravity-system-prompt.md); paste [`03-build.md`](docs/agent-harness/templates/03-build.md) with AUTHORITY inlined or path-referenced.
+5. **Agent returns** RESULT ([`04-result.md`](docs/agent-harness/templates/04-result.md)) or CONFLICT ([`05-conflict.md`](docs/agent-harness/templates/05-conflict.md)).
+6. **Optional second Deep Think pass:** `context-builder -d ... -y --diff-only` after implementation.
+
+Harness overview, attention budget, and re-escalation table: [`docs/agent-harness/README.md`](docs/agent-harness/README.md).
+
+### What this changes about Flash’s behavior
+
+| Without AUTHORITY | With engineered AUTHORITY |
+| --- | --- |
+| Invents architecture mid-task | Executes ordered steps |
+| Thrash-refactors “while here” | Surgical diffs only |
+| Vague “done” | Verification commands required |
+| Silent plan failure | CONFLICT stop → re-escalate |
+
+It does **not** give Flash Deep Think’s raw intelligence. It **meaningfully** raises implementation fidelity when AUTHORITY is high quality.
 
 ## Core Workflow
 
@@ -21316,26 +23778,20 @@ These behaviors require no configuration:
 | `--signatures` | AST signature extraction | Requires `tree-sitter-all` feature at install |
 | `--structure` | Structural summary | Pair with `--signatures` for compact output |
 | `--visibility <V>` | Filter by visibility | `all` (default), `public` (public API only) |
-| `--truncate <MODE>` | Truncation strategy | `smart` (AST-aware) or `simple` |
+| `--truncate <MODE>` | Truncation strategy for `--max-tokens` | `smart` (AST-aware) or `byte` |
 | `--init` | Create config file | Auto-detects project file types |
 | `--clear-cache` | Reset diff cache | Use if diff output seems stale |
 
 ## Recipes
 
-### Recipe: Deep Think Code Review
-
-Generate a scoped context file, then prompt an LLM for deep analysis:
+### Recipe: Deep Think Code Review (one-shot only)
 
 ```bash
-# Step 1: Generate focused context
 context-builder -d /path/to/project -f rs,toml --max-tokens 120000 -y -o docs/deep_think_context.md
-
-# Step 2: Feed to LLM with a review prompt
-# Attach docs/deep_think_context.md and ask for:
-# - Architecture review
-# - Bug hunting
-# - Performance analysis
+# Attach to Deep Think + a structured review prompt (see docs/research/prompts/)
 ```
+
+For **review → implement** (Deep Think then Antigravity), use the [Deep Think Authority Pipeline](#deep-think-authority-pipeline-primary-multi-model-workflow) above, not a freeform paste.
 
 ### Recipe: API Surface Review (signatures only)
 
@@ -21429,322 +23885,419 @@ When `--signatures` is active, file contents are replaced with extracted signatu
 - Use `--clear-cache` if diff output seems stale or incorrect
 ```
 
-### File: `docs/demo.cast`
+### File: `docs\agent-harness\antigravity-system-prompt.md`
 
-- Size: 13806 bytes
-- Modified: 2026-02-15 09:26:59 UTC
+- Size: 4427 bytes
+- Modified: 2026-07-23 00:40:20 UTC
 
-```cast
-{"version": 2, "width": 100, "height": 32, "timestamp": 1771147584, "env": {"SHELL": "/usr/bin/fish", "TERM": "xterm-256color"}}
-[0.023049, "o", "\u001b[H\u001b[2J\u001b[3J\r\n"]
-[0.023483, "o", "\u001b[1;33m  ╔══════════════════════════════════════════════════════╗\u001b[0m\r\n\u001b[1;33m  ║  ⚡ \u001b[1;37mcontext-builder\u001b[1;33m v0.8.0  — \u001b[0;36mTree-Sitter Edition\u001b[1;33m   ║\u001b[0m\r\n\u001b[1;33m  ╚══════════════════════════════════════════════════════╝\u001b[0m\r\n\u001b[2m    LLM context from your codebase, with AST superpowers\u001b[0m\r\n\r\n"]
-[1.52425, "o", "\r\n\u001b[1;35m━━━ 1. See what files will be included ━━━\u001b[0m\r\n"]
-[2.325628, "o", "\u001b[1;32m❯\u001b[0m c"]
-[2.366844, "o", "o"]
-[2.408036, "o", "n"]
-[2.44907, "o", "t"]
-[2.490164, "o", "e"]
-[2.531319, "o", "x"]
-[2.572405, "o", "t"]
-[2.613388, "o", "-"]
-[2.654369, "o", "b"]
-[2.695654, "o", "u"]
-[2.736815, "o", "i"]
-[2.777991, "o", "l"]
-[2.819078, "o", "d"]
-[2.860322, "o", "e"]
-[2.901392, "o", "r"]
-[2.942534, "o", " "]
-[2.98371, "o", "-"]
-[3.024843, "o", "f"]
-[3.065929, "o", " "]
-[3.107126, "o", "r"]
-[3.148224, "o", "s"]
-[3.18898, "o", " "]
-[3.23009, "o", "-"]
-[3.271048, "o", "-"]
-[3.31205, "o", "p"]
-[3.353076, "o", "r"]
-[3.394046, "o", "e"]
-[3.435221, "o", "v"]
-[3.476198, "o", "i"]
-[3.517227, "o", "e"]
-[3.558345, "o", "w"]
-[3.599351, "o", " "]
-[3.64035, "o", "-"]
-[3.681374, "o", "y"]
-[4.123473, "o", "\r\n"]
-[4.126183, "o", "\r\n# File Tree Structure (Preview)\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n"]
-[4.126263, "o", "  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs\r\n  - 📄 test_binary_file_autodiff.rs\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n  - 📄 test_parallel_memory.rs\r\n  - 📄 test_phase4_integration.rs\r\n"]
-[5.627677, "o", "\r\n\u001b[1;35m━━━ 2. Generate full LLM context ━━━\u001b[0m\r\n"]
-[6.428963, "o", "\u001b[1;32m❯\u001b[0m c"]
-[6.470116, "o", "o"]
-[6.511181, "o", "n"]
-[6.552213, "o", "t"]
-[6.593232, "o", "e"]
-[6.634532, "o", "x"]
-[6.675749, "o", "t"]
-[6.716916, "o", "-"]
-[6.757938, "o", "b"]
-[6.799015, "o", "u"]
-[6.84023, "o", "i"]
-[6.881186, "o", "l"]
-[6.922249, "o", "d"]
-[6.963228, "o", "e"]
-[7.00451, "o", "r"]
-[7.045748, "o", " "]
-[7.086776, "o", "-"]
-[7.127786, "o", "f"]
-[7.168929, "o", " "]
-[7.210107, "o", "r"]
-[7.251264, "o", "s"]
-[7.292352, "o", " "]
-[7.333567, "o", "-"]
-[7.374604, "o", "o"]
-[7.415715, "o", " "]
-[7.456897, "o", "f"]
-[7.497922, "o", "u"]
-[7.53911, "o", "l"]
-[7.580203, "o", "l"]
-[7.621332, "o", "."]
-[7.66244, "o", "m"]
-[7.703341, "o", "d"]
-[7.744296, "o", " "]
-[7.785267, "o", "-"]
-[7.826467, "o", "y"]
-[8.268495, "o", "\r\n"]
-[8.273211, "o", "Documentation created successfully: full.md\r\nProcessing time: 3.50ms\r\nEstimated tokens: ~128K\r\n"]
-[9.274775, "o", "\u001b[1;32m❯\u001b[0m h"]
-[9.31622, "o", "e"]
-[9.357221, "o", "a"]
-[9.398255, "o", "d"]
-[9.439276, "o", " "]
-[9.480563, "o", "-"]
-[9.521843, "o", "4"]
-[9.562925, "o", "5"]
-[9.603962, "o", " "]
-[9.645179, "o", "f"]
-[9.686265, "o", "u"]
-[9.727348, "o", "l"]
-[9.768483, "o", "l"]
-[9.809401, "o", "."]
-[9.850437, "o", "m"]
-[9.891538, "o", "d"]
-[10.333622, "o", "\r\n"]
-[10.334579, "o", "# Directory Structure Report\r\n\r\nThis document contains files from the `context-builder` directory with extensions: rs\r\nContent hash: 20c1224bb213609d\r\n\r\n## File Tree Structure\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n"]
-[10.334594, "o", "  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs\r\n  - 📄 test_binary_file_autodiff.rs\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n"]
-[12.835671, "o", "\r\n\u001b[1;35m━━━ 3. NEW: Extract signatures only (tree-sitter AST) ━━━\u001b[0m\r\n"]
-[13.636837, "o", "\u001b[1;32m❯\u001b[0m c"]
-[13.678005, "o", "o"]
-[13.719192, "o", "n"]
-[13.760301, "o", "t"]
-[13.80119, "o", "e"]
-[13.842211, "o", "x"]
-[13.883258, "o", "t"]
-[13.924465, "o", "-"]
-[13.96551, "o", "b"]
-[14.006569, "o", "u"]
-[14.04763, "o", "i"]
-[14.08871, "o", "l"]
-[14.129774, "o", "d"]
-[14.170951, "o", "e"]
-[14.21205, "o", "r"]
-[14.253144, "o", " "]
-[14.294145, "o", "-"]
-[14.335324, "o", "f"]
-[14.376436, "o", " "]
-[14.417453, "o", "r"]
-[14.458642, "o", "s"]
-[14.499657, "o", " "]
-[14.540757, "o", "-"]
-[14.581864, "o", "-"]
-[14.622902, "o", "s"]
-[14.66396, "o", "i"]
-[14.705099, "o", "g"]
-[14.746151, "o", "n"]
-[14.787211, "o", "a"]
-[14.828192, "o", "t"]
-[14.869101, "o", "u"]
-[14.910284, "o", "r"]
-[14.951167, "o", "e"]
-[14.992104, "o", "s"]
-[15.033219, "o", " "]
-[15.074372, "o", "-"]
-[15.115432, "o", "o"]
-[15.156468, "o", " "]
-[15.197578, "o", "s"]
-[15.238619, "o", "i"]
-[15.279681, "o", "g"]
-[15.320718, "o", "s"]
-[15.361837, "o", "."]
-[15.402868, "o", "m"]
-[15.444076, "o", "d"]
-[15.48526, "o", " "]
-[15.526113, "o", "-"]
-[15.567138, "o", "y"]
-[16.009056, "o", "\r\n"]
-[16.022268, "o", "Documentation created successfully: sigs.md\r\nProcessing time: 12.03ms\r\nEstimated tokens: ~10K\r\n"]
-[17.02473, "o", "\u001b[1;32m❯\u001b[0m h"]
-[17.065586, "o", "e"]
-[17.106656, "o", "a"]
-[17.147768, "o", "d"]
-[17.188813, "o", " "]
-[17.22972, "o", "-"]
-[17.270715, "o", "7"]
-[17.311913, "o", "0"]
-[17.352992, "o", " "]
-[17.394035, "o", "s"]
-[17.435067, "o", "i"]
-[17.476062, "o", "g"]
-[17.517133, "o", "s"]
-[17.558202, "o", "."]
-[17.599156, "o", "m"]
-[17.640264, "o", "d"]
-[18.08256, "o", "\r\n"]
-[18.083418, "o", "# Directory Structure Report\r\n\r\nThis document contains files from the `context-builder` directory with extensions: rs\r\nContent hash: 20c1224bb213609d\r\n\r\n## File Tree Structure\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs\r\n  - 📄 test_binary_file_autodiff.rs"]
-[18.083433, "o", "\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n  - 📄 test_parallel_memory.rs\r\n  - 📄 test_phase4_integration.rs\r\n\r\n\r\n### File: `src/lib.rs`\r\n\r\n- Size: 53340 bytes\r\n- Modified: 2026-02-15 09:26:24 UTC\r\n\r\n\r\n**Signatures:**\r\n\r\n```rust\r\n// Modules"]
-[18.083463, "o", "\r\npub mod cache\r\npub mod cli\r\npub mod config\r\npub mod config_resolver\r\npub mod diff\r\npub mod file_utils\r\npub mod markdown\r\n"]
-[18.083522, "o", "pub mod state\r\npub mod token_count\r\npub mod tree\r\npub mod tree_sitter\r\n"]
-[21.084513, "o", "\r\n\u001b[1;35m━━━ 4. Compare: full context vs signatures ━━━\u001b[0m\r\n"]
-[21.885691, "o", "\u001b[1;32m❯\u001b[0m w"]
-[21.926737, "o", "c"]
-[21.967923, "o", " "]
-[22.009002, "o", "-"]
-[22.049974, "o", "l"]
-[22.091113, "o", " "]
-[22.132296, "o", "f"]
-[22.173133, "o", "u"]
-[22.214313, "o", "l"]
-[22.255191, "o", "l"]
-[22.296165, "o", "."]
-[22.337183, "o", "m"]
-[22.378333, "o", "d"]
-[22.419273, "o", " "]
-[22.460274, "o", "s"]
-[22.501509, "o", "i"]
-[22.54259, "o", "g"]
-[22.583631, "o", "s"]
-[22.624789, "o", "."]
-[22.665872, "o", "m"]
-[22.707002, "o", "d"]
-[23.149204, "o", "\r\n"]
-[23.150178, "o", " 16049 full.md\r\n  1832 sigs.md\r\n"]
-[23.150267, "o", " 17881 total\r\n"]
-[25.651413, "o", "\r\n\u001b[1;35m━━━ 5. NEW: Structural summary per file ━━━\u001b[0m\r\n"]
-[26.452583, "o", "\u001b[1;32m❯\u001b[0m c"]
-[26.493737, "o", "o"]
-[26.534753, "o", "n"]
-[26.575805, "o", "t"]
-[26.617057, "o", "e"]
-[26.658281, "o", "x"]
-[26.699366, "o", "t"]
-[26.740553, "o", "-"]
-[26.781587, "o", "b"]
-[26.822713, "o", "u"]
-[26.86389, "o", "i"]
-[26.905, "o", "l"]
-[26.946062, "o", "d"]
-[26.9871, "o", "e"]
-[27.028097, "o", "r"]
-[27.068957, "o", " "]
-[27.110019, "o", "-"]
-[27.151184, "o", "f"]
-[27.192248, "o", " "]
-[27.233437, "o", "r"]
-[27.274396, "o", "s"]
-[27.315547, "o", " "]
-[27.356628, "o", "-"]
-[27.397765, "o", "-"]
-[27.438951, "o", "s"]
-[27.480005, "o", "t"]
-[27.520939, "o", "r"]
-[27.562059, "o", "u"]
-[27.603254, "o", "c"]
-[27.644513, "o", "t"]
-[27.685568, "o", "u"]
-[27.726608, "o", "r"]
-[27.767744, "o", "e"]
-[27.808862, "o", " "]
-[27.849886, "o", "-"]
-[27.890747, "o", "-"]
-[27.931983, "o", "s"]
-[27.972847, "o", "i"]
-[28.013971, "o", "g"]
-[28.054869, "o", "n"]
-[28.095877, "o", "a"]
-[28.136931, "o", "t"]
-[28.178029, "o", "u"]
-[28.218979, "o", "r"]
-[28.260009, "o", "e"]
-[28.301133, "o", "s"]
-[28.342181, "o", " "]
-[28.38314, "o", "-"]
-[28.424235, "o", "o"]
-[28.465219, "o", " "]
-[28.506309, "o", "o"]
-[28.54754, "o", "v"]
-[28.588605, "o", "e"]
-[28.629804, "o", "r"]
-[28.671053, "o", "v"]
-[28.712312, "o", "i"]
-[28.753334, "o", "e"]
-[28.794437, "o", "w"]
-[28.835675, "o", "."]
-[28.876869, "o", "m"]
-[28.917997, "o", "d"]
-[28.959135, "o", " "]
-[29.00016, "o", "-"]
-[29.041279, "o", "y"]
-[29.483361, "o", "\r\n"]
-[29.503174, "o", "Documentation created successfully: overview.md\r\nProcessing time: 18.36ms\r\nEstimated tokens: ~10K\r\n"]
-[30.505523, "o", "\u001b[1;32m❯\u001b[0m h"]
-[30.546636, "o", "e"]
-[30.587667, "o", "a"]
-[30.62885, "o", "d"]
-[30.66989, "o", " "]
-[30.710815, "o", "-"]
-[30.751873, "o", "8"]
-[30.792908, "o", "0"]
-[30.834102, "o", " "]
-[30.875272, "o", "o"]
-[30.916281, "o", "v"]
-[30.957099, "o", "e"]
-[30.997944, "o", "r"]
-[31.038835, "o", "v"]
-[31.079839, "o", "i"]
-[31.120795, "o", "e"]
-[31.161785, "o", "w"]
-[31.202764, "o", "."]
-[31.243754, "o", "m"]
-[31.284701, "o", "d"]
-[31.726734, "o", "\r\n"]
-[31.727631, "o", "# Directory Structure Report\r\n\r\nThis document contains files from the `context-builder` directory with extensions: rs\r\nContent hash: 20c1224bb213609d\r\n\r\n## File Tree Structure\r\n\r\n- 📁 src\r\n  - 📄 cache.rs\r\n  - 📄 cli.rs\r\n  - 📄 config.rs\r\n  - 📄 config_resolver.rs\r\n  - 📄 diff.rs\r\n  - 📄 file_utils.rs\r\n  - 📄 lib.rs\r\n  - 📄 main.rs\r\n  - 📄 markdown.rs\r\n  - 📄 state.rs\r\n  - 📄 token_count.rs\r\n  - 📄 tree.rs\r\n  - 📁 tree_sitter\r\n    - 📄 language_support.rs\r\n    - 📁 languages\r\n      - 📄 c.rs\r\n      - 📄 cpp.rs\r\n      - 📄 go.rs\r\n      - 📄 java.rs\r\n      - 📄 javascript.rs\r\n      - 📄 mod.rs\r\n      - 📄 python.rs\r\n      - 📄 rust.rs\r\n      - 📄 typescript.rs\r\n    - 📄 mod.rs\r\n    - 📄 signatures.rs\r\n    - 📄 structure.rs\r\n    - 📄 truncation.rs\r\n- 📁 tests\r\n  - 📄 cli_integration.rs\r\n  - 📄 diff_integration.rs\r\n  - 📄 test_auto_diff.rs"]
-[31.727693, "o", "\r\n  - 📄 test_binary_file_autodiff.rs\r\n  - 📄 test_comprehensive_edge_cases.rs\r\n  - 📄 test_config_resolution.rs\r\n  - 📄 test_cwd_independence.rs\r\n  - 📄 test_determinism.rs\r\n  - 📄 test_parallel_memory.rs\r\n  - 📄 test_phase4_integration.rs\r\n\r\n\r\n### File: `src/lib.rs`\r\n\r\n- Size: 53340 bytes\r\n- Modified: 2026-02-15 09:26:24 UTC\r\n\r\n\r\n**Structure:**\r\n- 27 functions, 3 structs, 1 traits, 2 constants\r\n- 1524 lines (1254 code)\r\n\r\n**Signatures:**\r\n\r\n```rust\r\n// Modules\r\npub mod cache\r\npub mod cli\r\npub mod config\r\npub mod config_resolver\r\npub mod diff\r\npub mod file_utils\r\npub mod markdown\r\npub mod state\r\npub mod token_count\r\npub mod tree\r\npub mod tree_sitter\r\n\r\n// Structs/Classes\r\npub struct DiffConfig\r\n\r\n// Implementations\r\nimpl Default\r\n"]
-[34.728894, "o", "\r\n\u001b[1;32m✨ Your codebase is now LLM-ready.\u001b[0m\r\n\u001b[2m   cargo install context-builder --features tree-sitter-all\u001b[0m\r\n"]
+```markdown
+# Antigravity / Agent System Prompt — Deep Think Authority Mode
+
+> Copy everything inside the fence into Antigravity custom instructions / AGENTS.md / system prompt.
+> Pair with a **BUILD packet** that embeds or points at an AUTHORITY document from Deep Think.
+
+```markdown
+# Role: Authority-bound implementation agent
+
+You are a coding agent with tools (read, edit, shell, test). You are **not** the architect.
+
+A senior reasoning pass (Gemini Deep Think or equivalent) already produced an **AUTHORITY**
+document for this task. Your job is faithful execution and verification against the live repo.
+
+## Authority hierarchy (highest wins)
+
+1. Explicit human overrides in the latest user message
+2. AUTHORITY document (Deep Think solution packet)
+3. Project AGENTS.md / local conventions
+4. Your defaults
+
+If (2) conflicts with the live codebase, **do not improvise a new design**. Stop and emit a CONFLICT report.
+
+## Hard rules
+
+1. **No redesign.** Do not invent alternate architectures, renames, or refactors outside AUTHORITY.
+2. **No re-prioritization.** Implement AUTHORITY steps in order unless a step is blocked.
+3. **Tools over memory.** Prefer reading the real files. Do not assume AUTHORITY line numbers are perfect;
+   resolve symbols by search. AUTHORITY *intent* still wins over your preference.
+4. **Smallest correct change.** Prefer surgical diffs that satisfy AUTHORITY + verification.
+5. **Verification is mandatory.** Run the commands listed under AUTHORITY → Verification before claiming DONE.
+6. **Stop conditions.** Emit CONFLICT and stop when:
+   - Required files/symbols do not exist as described
+   - Implementing a step would break an AUTHORITY invariant
+   - Two steps contradict after seeing real code
+   - You need a design decision not covered by AUTHORITY
+7. **Mechanical freedom.** You MAY fix compile errors, import paths, formatting, and obvious typos
+   required to implement AUTHORITY — document them under Deviations.
+8. **Secrets.** Never print tokens, cookies, or credentials. Never commit secrets.
+9. **Scope.** Do not "improve" unrelated modules while you are here.
+
+## Working loop
+
+For each AUTHORITY implementation step:
+
+1. Restate the step in one line
+2. Locate targets with tools (grep/read)
+3. Edit the minimum set of files
+4. Run relevant checks (unit test for that area if available)
+5. Continue only if checks pass or failure is clearly mechanical and fixed
+
+After all steps: run full Verification list from AUTHORITY.
+
+## Output contract (always end with this)
+
+### RESULT
+- **Status:** DONE | PARTIAL | BLOCKED | CONFLICT
+- **Changed files:** path — one-line why (each)
+- **Verification:** commands + exit codes + key output (trimmed)
+- **Deviations:** None | list (mechanical only)
+- **Remaining:** checklist if PARTIAL
+- **CONFLICT detail:** only if Status=CONFLICT — what plan assumed vs what code is; options A/B
+
+## Anti-patterns (never)
+
+- "While I was here I also refactored…"
+- Replacing AUTHORITY plan with a "cleaner" approach
+- Claiming DONE without running verification
+- Pasting huge irrelevant file dumps into the chat when tools can read them
+- Asking the user to re-explain AUTHORITY when the document is already in context — read it
+
+## If no AUTHORITY is present
+
+Say so in one sentence, then either:
+- ask the human for an AUTHORITY / BUILD packet, or
+- if the task is trivial/local (typo, renames, single known test fix), proceed with normal care
+  and label the result **UNAUTHORITATIVE** so the human knows Deep Think was not in the loop.
 ```
 
-### File: `docs/demo.gif`
+---
 
-- Size: 330448 bytes
-- Modified: 2026-02-15 09:27:28 UTC
+## How to mount this in practice
+
+| Surface | How |
+| --- | --- |
+| **Antigravity** | Project rules / custom instructions / paste at session start |
+| **Repo AGENTS.md** | Append a short pointer: "When `docs/handoffs/**/02-authority.md` exists, Authority Mode applies" |
+| **Per-task** | Prepend BUILD packet; do not rely on system prompt alone if the IDE strips custom rules |
+
+### Minimal AGENTS.md pointer (optional add to any repo)
+
+```markdown
+## Deep Think Authority Mode
+
+If the user references `docs/handoffs/` or an AUTHORITY document:
+- Follow `docs/agent-harness/antigravity-system-prompt.md` rules (or the inlined Authority Mode rules).
+- AUTHORITY is law; stop on CONFLICT instead of redesigning.
+```
+
+For **this** repository (context-builder), the full prompt may be linked from development docs; keep AGENTS.md focused on build/test unless you want Authority Mode always on.
+```
+
+### File: `docs\agent-harness\templates\01-problem.md`
+
+- Size: 1416 bytes
+- Modified: 2026-07-23 00:40:27 UTC
+
+```markdown
+# PROBLEM PACKET → Deep Think
+
+> Fill this, attach `00-context.md` from context-builder, paste into Gemini Ultra Deep Think.
+
+## Goal
+
+One sentence: what “done” looks like.
+
+## Context package
+
+- Context file: `docs/handoffs/<slug>/00-context.md` (attached)
+- Generated with: `context-builder ...` (paste exact command)
+- Project / version / branch:
+
+## Observed behavior
+
+- What happens:
+- What should happen:
+- Repro (commands / steps):
+
+## Evidence (minimal)
+
+- Logs / test output (trimmed):
+- Critical snippets only if not already in the context file:
+
+## Constraints
+
+- Must not break:
+- Prefer (smallest fix / no new deps / etc.):
+- Out of scope:
+
+## Prior art (optional)
+
+- Known fixed issues to avoid re-reporting:
+- Previous AUTHORITY IDs:
+
+## Required output shape
+
+Reply **only** with an AUTHORITY document matching this structure:
+
+1. **Verdict** (1–3 sentences)
+2. **Non-goals**
+3. **Findings** (numbered; severity; location by path + symbol; why it matters)
+4. **Design** (approach + why not alternatives)
+5. **Implementation plan** (ordered steps; each step: files/symbols + change + why)
+6. **Invariants** (must still hold after the change)
+7. **Verification** (exact commands + expected outcomes)
+8. **Open questions** (only if blocking; else state assumptions)
+
+Prefer the **smallest correct** change set. Depth over breadth. No full multi-file patches unless a step is trivial one-liners.
+```
+
+### File: `docs\agent-harness\templates\02-authority.md`
+
+- Size: 990 bytes
+- Modified: 2026-07-23 00:40:33 UTC
+
+```markdown
+# AUTHORITY ← Deep Think
+
+> Paste Deep Think’s response here. Human-edit: remove fluff; keep structure.
+> Target size for agent consumption: **prefer ≤ ~2–4k tokens**. Split large reviews into multiple handoffs by theme (bugs vs features).
+
+## Meta
+
+- Handoff slug:
+- Date:
+- Deep Think model / mode:
+- Context hash / filename:
+- Human edits: (what you trimmed or corrected)
+
+---
+
+## Verdict
+
+
+
+## Non-goals
+
+
+
+## Findings
+
+### F1 — (title)
+- **Severity:** P0 | P1 | P2
+- **Location:** `path` · `symbol`
+- **What’s wrong:**
+- **Why it matters:**
+
+### F2 — …
+
+
+
+## Design
+
+- **Approach:**
+- **Why not alternatives:**
+
+
+
+## Implementation plan
+
+1. **[step id]** `path` / `symbol` — change — why  
+2. …  
+3. …
+
+
+
+## Invariants
+
+- …
+
+
+
+## Verification
+
+```bash
+# exact commands the agent must run
+```
+
+Expected:
+
+- …
+
+
+
+## Open questions / assumptions
+
+- None | …
+
+
+
+## Agent budget notes (optional)
+
+- Max files to touch:
+- Do not open:
+- Preferred test subset:
+```
+
+### File: `docs\agent-harness\templates\03-build.md`
+
+- Size: 1115 bytes
+- Modified: 2026-07-23 00:40:40 UTC
+
+```markdown
+# BUILD PACKET → Agent (Antigravity / Flash)
+
+> Paste into the agent session. System prompt should already be in Authority Mode.
+> Do **not** re-attach the full context-builder dump unless the agent has no file tools.
+
+## Authority
+
+Implement **only** the AUTHORITY below (or at `docs/handoffs/<slug>/02-authority.md`).
+
+**Rules:**
+
+- AUTHORITY is law. Do not redesign.
+- If the live repo contradicts AUTHORITY, STOP with CONFLICT (see template 05).
+- Use tools to read/edit the real tree under the project root.
+- Run AUTHORITY verification before claiming DONE.
+- End with a RESULT block (template 04).
+
+## Definition of done
+
+- [ ] All implementation plan steps completed (or CONFLICT with evidence)
+- [ ] Verification commands run; outcomes recorded
+- [ ] Deviations listed (mechanical only)
+- [ ] No unrelated refactors
+
+## Repo notes
+
+- Project root:
+- Branch:
+- Commands known to work here:
+- Do not touch:
+
+## Scope for this session
+
+Implement steps: **all** | **only steps N–M** (if split handoff)
+
+## AUTHORITY
+
+```markdown
+(paste 02-authority.md body here — or tell the agent the path to read)
+```
+```
+
+### File: `docs\agent-harness\templates\04-result.md`
+
+- Size: 483 bytes
+- Modified: 2026-07-23 00:40:44 UTC
+
+```markdown
+# RESULT PACKET ← Agent
+
+## Status
+
+DONE | PARTIAL | BLOCKED | CONFLICT | UNAUTHORITATIVE
+
+## Changed files
+
+| Path | Why |
+| --- | --- |
+| | |
+
+## Verification
 
 ```text
-<Binary file or unsupported encoding: 330448 bytes>
+$ command
+(exit N)
+(key output trimmed)
 ```
 
-### File: `docs/demo.mp4`
+## Deviations from AUTHORITY
+
+None | list (mechanical only; if design deviation → should have been CONFLICT)
+
+## Remaining work
+
+- …
+
+## Suggested next packet
+
+None | BUILD (continue steps) | CONFLICT→Deep Think | PROBLEM (new goal)
+
+## Notes for human
+
+- …
+```
+
+### File: `docs\agent-harness\templates\05-conflict.md`
+
+- Size: 832 bytes
+- Modified: 2026-07-23 00:40:49 UTC
+
+```markdown
+# CONFLICT PACKET → Human / Deep Think
+
+> Agent stops here. Do not continue implementing alternative designs.
+
+## Plan step that failed
+
+- Step id / text from AUTHORITY:
+
+## What AUTHORITY assumed
+
+- …
+
+## What the codebase actually is
+
+- Paths / symbols / behavior (with evidence from tools):
+
+## Evidence
+
+```text
+(grep/read/test output trimmed)
+```
+
+## Options (agent must not choose silently)
+
+| Option | Description | Risk |
+| --- | --- | --- |
+| A | Force AUTHORITY as written | |
+| B | Minimal local adapt (describe) | |
+| C | Needs Deep Think redesign | |
+
+## Recommended for human
+
+A | B | C — one line why
+
+## Attach for Deep Think DEBUG
+
+- This CONFLICT
+- RESULT so far
+- Optional: `context-builder --diff-only` since baseline
+- Do **not** re-send entire unchanged context unless Deep Think lacks the prior package
+```
+
+### File: `docs\demo.gif`
+
+- Size: 439402 bytes
+- Modified: 2026-05-29 23:45:01 UTC
+
+```text
+<Binary file or unsupported encoding: 439402 bytes>
+```
+
+### File: `docs\demo.mp4`
 
 - Size: 377819 bytes
-- Modified: 2026-02-15 09:27:28 UTC
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```text
 <Binary file or unsupported encoding: 377819 bytes>
 ```
 
-### File: `docs/research/Babysitter v0.0.166.md`
+### File: `docs\research\Babysitter v0.0.166.md`
 
-- Size: 9717 bytes
-- Modified: 2026-02-15 11:00:29 UTC
+- Size: 9831 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 Based on the structural AST analysis of the babysitter monorepo, here is a deep-dive assessment of the architecture, security posture, code quality, and strategic recommendations.
@@ -21864,10 +24417,10 @@ Top 5 highest-impact improvements, ranked by (Value × Feasibility):
 * **Complexity**: **Medium**
 ```
 
-### File: `docs/research/babysitter_review_context.md`
+### File: `docs\research\babysitter_review_context.md`
 
 - Size: 334430 bytes
-- Modified: 2026-02-15 10:34:42 UTC
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -39589,10 +42142,10 @@ const patterns
 ```
 ```
 
-### File: `docs/research/competitive-analysis.md`
+### File: `docs\research\competitive-analysis.md`
 
-- Size: 13268 bytes
-- Modified: 2026-02-16 02:49:22 UTC
+- Size: 13598 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Competitive Analysis: Context Builder vs. Open-Source Alternatives
@@ -39927,10 +42480,10 @@ Converts Git repos and local codebases into structured Markdown. Supports GitHub
 5. **Remote repo processing would eliminate a major friction point** — Users shouldn't need to `git clone` before they can use the tool.
 ```
 
-### File: `docs/research/context-files/cb_demo_full_20260215092514.md`
+### File: `docs\research\context-files\cb_demo_full_20260215092514.md`
 
-- Size: 544597 bytes
-- Modified: 2026-02-15 09:25:14 UTC
+- Size: 561533 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -56871,10 +59424,10 @@ mod tests {
 
 ```
 
-### File: `docs/research/context-files/context-builder-deepthink_20260214174601.md`
+### File: `docs\research\context-files\context-builder-deepthink_20260214174601.md`
 
-- Size: 1758212 bytes
-- Modified: 2026-02-14 17:46:01 UTC
+- Size: 1807314 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -105981,10 +108534,10 @@ fn test_encoding_strategy_configuration() {
 
 ```
 
-### File: `docs/research/context-files/context-builder-deepthink_20260214174629.md`
+### File: `docs\research\context-files\context-builder-deepthink_20260214174629.md`
 
-- Size: 415694 bytes
-- Modified: 2026-02-14 17:46:29 UTC
+- Size: 428424 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -118719,10 +121272,10 @@ fn test_encoding_strategy_configuration() {
 
 ```
 
-### File: `docs/research/context-files/context_20260214175028.md`
+### File: `docs\research\context-files\context_20260214175028.md`
 
-- Size: 1758212 bytes
-- Modified: 2026-02-14 17:50:28 UTC
+- Size: 1807314 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -167829,10 +170382,10 @@ fn test_encoding_strategy_configuration() {
 
 ```
 
-### File: `docs/research/context-files/context_20260214225151.md`
+### File: `docs\research\context-files\context_20260214225151.md`
 
-- Size: 530331 bytes
-- Modified: 2026-02-14 22:51:51 UTC
+- Size: 543618 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -181124,10 +183677,10 @@ fn test_encoding_strategy_configuration() {
 
 ```
 
-### File: `docs/research/context-files/context_20260215085302.md`
+### File: `docs\research\context-files\context_20260215085302.md`
 
-- Size: 597572 bytes
-- Modified: 2026-02-15 08:53:02 UTC
+- Size: 615983 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -199543,10 +202096,10 @@ mod tests {
 
 ```
 
-### File: `docs/research/context-files/context_20260215085322.md`
+### File: `docs\research\context-files\context_20260215085322.md`
 
-- Size: 544573 bytes
-- Modified: 2026-02-15 08:53:22 UTC
+- Size: 561507 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -216485,10 +219038,10 @@ mod tests {
 
 ```
 
-### File: `docs/research/context-files/context_20260215085510.md`
+### File: `docs\research\context-files\context_20260215085510.md`
 
-- Size: 597596 bytes
-- Modified: 2026-02-15 08:55:10 UTC
+- Size: 616009 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -234906,10 +237459,10 @@ mod tests {
 
 ```
 
-### File: `docs/research/context-files/context_20260215092339.md`
+### File: `docs\research\context-files\context_20260215092339.md`
 
-- Size: 544597 bytes
-- Modified: 2026-02-15 09:23:39 UTC
+- Size: 561533 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -251850,10 +254403,10 @@ mod tests {
 
 ```
 
-### File: `docs/research/context-files/context_v0.8.3_full.md`
+### File: `docs\research\context-files\context_v0.8.3_full.md`
 
-- Size: 660602 bytes
-- Modified: 2026-02-16 03:28:18 UTC
+- Size: 680962 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -272218,10 +274771,10 @@ mod tests {
 
 ```
 
-### File: `docs/research/context-files/context_v0.8.3_signatures.md`
+### File: `docs\research\context-files\context_v0.8.3_signatures.md`
 
-- Size: 61301 bytes
-- Modified: 2026-02-16 03:27:53 UTC
+- Size: 63642 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -274567,10 +277120,10 @@ fn test_expect_value()
 
 ```
 
-### File: `docs/research/context-files/deep_think_context_v3_20260215221646.md`
+### File: `docs\research\context-files\deep_think_context_v3_20260215221646.md`
 
-- Size: 118241 bytes
-- Modified: 2026-02-15 22:16:46 UTC
+- Size: 122086 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -278420,10 +280973,10 @@ fn test_expect_value()
 
 ```
 
-### File: `docs/research/context-files/deep_think_context_v3_full.md`
+### File: `docs\research\context-files\deep_think_context_v3_full.md`
 
-- Size: 708181 bytes
-- Modified: 2026-02-15 22:25:26 UTC
+- Size: 729947 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -300194,10 +302747,10 @@ mod tests {
 
 ```
 
-### File: `docs/research/context-files/deep_think_context_v3_multimodel.md`
+### File: `docs\research\context-files\deep_think_context_v3_multimodel.md`
 
-- Size: 118265 bytes
-- Modified: 2026-02-15 22:25:04 UTC
+- Size: 122112 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -304049,10 +306602,10 @@ fn test_expect_value()
 
 ```
 
-### File: `docs/research/context-files/deep_think_review_v0.8.0.md`
+### File: `docs\research\context-files\deep_think_review_v0.8.0.md`
 
-- Size: 515934 bytes
-- Modified: 2026-02-15 09:48:44 UTC
+- Size: 531983 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -320106,10 +322659,10 @@ fn test_encoding_strategy_configuration() {
 ```
 ```
 
-### File: `docs/research/context-files/deepthink_context_20260214190729.md`
+### File: `docs\research\context-files\deepthink_context_20260214190729.md`
 
-- Size: 385302 bytes
-- Modified: 2026-02-14 19:07:29 UTC
+- Size: 397123 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -331935,10 +334488,10 @@ fn test_encoding_strategy_configuration() {
 
 ```
 
-### File: `docs/research/context-files/deepthink_context_v2.md`
+### File: `docs\research\context-files\deepthink_context_v2.md`
 
-- Size: 470920 bytes
-- Modified: 2026-02-14 20:09:34 UTC
+- Size: 485589 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -346612,10 +349165,10 @@ mod tests {
 ```
 ```
 
-### File: `docs/research/context-files/deepthink_context_v2_20260214200732.md`
+### File: `docs\research\context-files\deepthink_context_v2_20260214200732.md`
 
-- Size: 863470 bytes
-- Modified: 2026-02-14 20:07:32 UTC
+- Size: 889697 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -372847,10 +375400,10 @@ fn test_encoding_strategy_configuration() {
 
 ```
 
-### File: `docs/research/context-files/deepthink_context_v2_20260214200812.md`
+### File: `docs\research\context-files\deepthink_context_v2_20260214200812.md`
 
-- Size: 863475 bytes
-- Modified: 2026-02-14 20:08:12 UTC
+- Size: 889702 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -399082,10 +401635,10 @@ fn test_encoding_strategy_configuration() {
 
 ```
 
-### File: `docs/research/context-files/deepthink_context_v2_fixed.md`
+### File: `docs\research\context-files\deepthink_context_v2_fixed.md`
 
-- Size: 471886 bytes
-- Modified: 2026-02-14 20:33:42 UTC
+- Size: 486573 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -413777,10 +416330,10 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 ```
 ```
 
-### File: `docs/research/context-files/deepthink_context_v3.md`
+### File: `docs\research\context-files\deepthink_context_v3.md`
 
-- Size: 530331 bytes
-- Modified: 2026-02-14 22:53:12 UTC
+- Size: 543618 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -427072,10 +429625,10 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 ```
 
-### File: `docs/research/context-files/deepthink_context_v4.md`
+### File: `docs\research\context-files\deepthink_context_v4.md`
 
-- Size: 490142 bytes
-- Modified: 2026-02-15 04:19:13 UTC
+- Size: 502463 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -439401,10 +441954,10 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 ```
 
-### File: `docs/research/context-files/deepthink_context_v5_20260215111322.md`
+### File: `docs\research\context-files\deepthink_context_v5_20260215111322.md`
 
-- Size: 674580 bytes
-- Modified: 2026-02-15 11:13:22 UTC
+- Size: 691816 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -456645,10 +459198,10 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 ```
 
-### File: `docs/research/context-files/deepthink_context_v5_20260215111343.md`
+### File: `docs\research\context-files\deepthink_context_v5_20260215111343.md`
 
-- Size: 400073 bytes
-- Modified: 2026-02-15 11:13:43 UTC
+- Size: 412381 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -468961,10 +471514,10 @@ fn token_count_mode_does_not_create_output_file() {
 _Output truncated: exceeded 100000 token budget (estimated)._
 ```
 
-### File: `docs/research/context-files/deepthink_context_v5_20260215111448.md`
+### File: `docs\research\context-files\deepthink_context_v5_20260215111448.md`
 
-- Size: 674604 bytes
-- Modified: 2026-02-15 11:14:48 UTC
+- Size: 691842 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Directory Structure Report
@@ -486207,10 +488760,10 @@ _Output truncated: exceeded 100000 token budget (estimated)._
 
 ```
 
-### File: `docs/research/multi-model-code-review-analysis-v3.md`
+### File: `docs\research\multi-model-code-review-analysis-v3.md`
 
-- Size: 14862 bytes
-- Modified: 2026-02-16 03:10:10 UTC
+- Size: 15031 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Deep Think v3 — Multi-Model Code Review Analysis
@@ -486384,10 +488937,10 @@ Sorted by combined priority and effort:
 - **Prompt template**: [deep_think_prompt_v3_multimodel.md](prompts/deep_think_prompt_v3_multimodel.md)
 ```
 
-### File: `docs/research/multi-model-code-review-analysis.md`
+### File: `docs\research\multi-model-code-review-analysis.md`
 
-- Size: 19907 bytes
-- Modified: 2026-02-15 22:22:33 UTC
+- Size: 20233 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Multi-Model AI Code Review: 10 LLMs Analyze context-builder v0.7.0
@@ -486718,10 +489271,170 @@ This has implications for context-builder itself: **if the context file is well-
 
 ```
 
-### File: `docs/research/prompts/clean_benchmark_v6.md`
+### File: `docs\research\next-release-roadmap.md`
 
-- Size: 1180 bytes
-- Modified: 2026-02-16 03:15:06 UTC
+- Size: 19137 bytes
+- Modified: 2026-06-04 22:44:44 UTC
+
+```markdown
+# context-builder — Next Release Roadmap
+
+> **Generated:** 2026-06-04 via multi-agent codebase analysis (subsystem mapping, prior-research mining, competitive refresh to mid-2026, adversarially-verified bug hunt, dependency + DX audit). Bug findings were adversarially verified (20/22 confirmed); the four headline "broken feature" claims were independently re-verified against live source.
+
+_Current: v0.8.3 (Feb 2026), ~4 months dormant. All file:line references verified against live source unless marked "per corpus."_
+
+---
+
+## 1. Executive summary
+
+context-builder is a healthy, conservatively-engineered Rust CLI with a **genuinely differentiated core**: relevance-ordered traversal, deterministic content-hash output for prompt caching, snapshot auto-diff/`--diff-only`, and feature-gated tree-sitter signature/structure extraction across 8 languages. The dependency stack is clean (no open advisories; crossbeam-channel already on the patched 0.5.15), the test surface is large (~232 unit + ~51 integration tests), and CI runs a 3-OS matrix. This is not a project in trouble.
+
+It is, however, a project that has **stopped moving while the category accelerated**. Repomix shipped a release nearly every month of 2026 (v1.14.1 on 2026-05-27), and the Rust rival yek shipped v0.25.3 on 2026-06-02 — the most recent release of any tool reviewed — while context-builder's last release was Feb 2026. More importantly, the analysis surfaced a cluster of issues that are individually small but collectively corrosive to the project's *one core promise — accurate, trustworthy, LLM-optimized output*:
+
+- **Two flagship features are partially or wholly broken.** `--truncate smart` is dead code (`find_smart_truncation_point` has zero production callers — verified). `--visibility public` is completely non-functional for Java (and C++): `get_visibility` returns `Visibility::All` unconditionally (java.rs:151 — verified), so `--visibility public` drops *every* Java symbol and `--visibility private` leaks *all* of them.
+- **The token budget — the headline value prop — is inaccurate and non-deterministic.** `--max-tokens` is gated on a `buf.len()/4` byte heuristic (markdown.rs:156), the first file always bypasses the budget (`tokens_used > 0` guard, markdown.rs:160 — verified), parallel vs serial paths estimate differently (breaking the deterministic-hash guarantee across builds), and the tokenizer is hardcoded to `cl100k_base` (token_count.rs:10 — verified), which now *under-counts* every modern OpenAI model. The `--token-count` preview compounds this: it reads files via `read_to_string` and ignores tree-sitter enrichment and `--max-tokens` entirely, so even the *previewed* number won't match the produced document.
+- **Output is Markdown-only** while every serious competitor offers XML (Anthropic's recommended format for Claude) and stdout piping — the single most conspicuous competitive gap.
+
+### Recommended theme: **"Trustworthy output: accurate tokens, honest features, and pipe-friendly formats."**
+
+This theme is *focused* (not a grab-bag), plays directly to the project's existing identity as the precision/correctness tool, and is **shippable**. It bundles (a) the highest-consensus verified bugs that make advertised features lie, (b) the lowest-effort/highest-credibility table-stakes wins (o200k_base, XML, stdout), and (c) a tokenizer/budget unification that retires a whole family of bugs at once. It deliberately **defers** the big strategic bets (MCP, remote repos) to the *following* release, because shipping a credible, momentum-restoring 0.9.0 in weeks beats shipping a sprawling one in months — and because MCP/remote should be built on top of a *trustworthy* core and a clean library API, not on top of the current split-brain pipeline.
+
+A note on leverage: XML+stdout are the **table-stakes/competitive** king — they unblock the dominant 2026 pipe-to-LLM workflow and match every rival. They are not the *per-token-reasoning* king; by the corpus's own cross-model consensus, the dependency/module graph and doc-comment extraction are the highest output-quality wins. Those are deliberately deferred (graph to P2/v0.10, doc-comments to P2) so v0.9.0 stays focused and shippable.
+
+---
+
+## 2. Recommended next release — **v0.9.0 "Trustworthy Output"** (concrete, shippable scope)
+
+Effort: S (≤½ day), M (1–3 days), L (~1 week).
+
+### Core feature set
+| # | Item | Effort | Rationale |
+|---|------|--------|-----------|
+| F1 | **Selectable tokenizer `--encoding {cl100k_base\|o200k_base}`, default `o200k_base`** | S | `o200k_base` already exists in the pinned tiktoken-rs 0.9.1, so this needs **no dep bump to function**; cl100k_base now under-counts every current OpenAI model. Lowest-effort, highest-credibility fix; directly upgrades `--token-count`/`--max-tokens`. (token_count.rs:10) |
+| F2 | **`--stdout` / `-o -` output target** | M | The dominant 2026 usage pattern is `context-builder \| llm`; impossible today (always writes a file). The renderer already streams to `impl Write` — route it to stdout and gate chatter to stderr. |
+| F3 | **`--format {markdown\|xml}` with an output-renderer trait** | L | XML (`<files>`/`<file path=…>`) is Anthropic's recommended Claude structure and Repomix's default. Introduce an `OutputFormat`/renderer trait so the streaming pipeline is parameterized. **Scope note:** format logic is currently hardwired in `process_file`/`write_text_content` AND there is a near-duplicate language map at markdown.rs:332 and :607 — the trait must dedup that map too, or formats will drift. |
+| F4 | **Unify token budgeting on the real tokenizer + fix first-file bypass + debit header/tree + mirror counter** | M | Replace both `buf.len()/4` gates (markdown.rs:156; serial path) with `estimate_tokens()`, apply the budget to file index 0, **debit the document header + file-tree tokens before the per-file loop**, and **make `--token-count` share one rendering fn with the renderer** so the preview stops lying (folds B9). |
+| F5 | **Wire `--truncate smart` into the budget path** | M | `find_smart_truncation_point` is fully built and tested but has **zero callers**. **Hard prerequisite: B19** (fallback returns non-char-boundary `max_bytes` → panic on slice). |
+| F6 | **Implement Java + C++ visibility filtering (+ Java field-kind reclassification)** | M | `--visibility public` is a no-op (worse: actively wrong) for Java/C++. While in java.rs, also reclassify Java `field` (currently mis-kinded as `SignatureKind::Constant`). (B12) |
+| F7 | **Constrain `--truncate`/`--visibility`/`--encoding` to clap `ValueEnum`** | S | Free validation + auto-generated `[possible values]` in `--help` + makes `--help` the source of truth, killing the doc-drift bug class (B3, B4). Does *not* cover B5 (`encoding_strategy` is config-only) — that's a separate config-load validation fix. |
+| F8 | **Tree-sitter integration test through `run_with_args`** | M | The tree-sitter signature path has **zero integration-level coverage** today, yet F5/F6/B12–B18 rewrite it heavily. An end-to-end test driving `signatures`/`--visibility`/`--truncate smart` through `run_with_args` is a *dependency* of trusting those fixes. |
+
+### Sequencing (strict chains)
+- **F1 → F4 → B19 → F5.** F1 must land before F4 rewrites the budget gate onto `estimate_tokens()`. F4 establishes the per-file budget; F5 consumes it. B19 (char-boundary clamp) is a **blocking gate** on F5.
+- **B13 → B14.** Both touch `find_function_name` in c.rs/cpp.rs. B14 only works *after* B13 makes the walker descend through `pointer_declarator`.
+- **B6+B7 are one work item** (unified config-hash), not two.
+
+---
+
+## 3. Verified bug backlog (ordered by severity — quick wins)
+
+### HIGH
+| ID | Bug | File:line | Fix |
+|----|-----|-----------|-----|
+| B1 | **Token budget bypass: oversized first file always emitted in full** — `tokens_used > 0` guard short-circuits on index 0; parallel uses `buf.len()/4`, serial uses raw `metadata().len()/4`. | markdown.rs:158-178 (parallel), :257-268 (serial) | Apply budget to first file too; unify both paths on `estimate_tokens()`. (= F4) |
+| B12 | **Java visibility filter non-functional both directions** — `get_visibility` returns `Visibility::All` unconditionally. Same no-op in cpp.rs. Bundle the Java `field`→`Constant` mis-kinding fix. | java.rs:147-152 (applied :162,213,248,283,318); cpp.rs:211 | Scan the `modifiers` node for public/private/protected. (= F6) |
+| B13 | **C/C++ pointer/reference-return functions silently dropped** — `find_function_name` only checks direct `function_declarator` children. **Fix before B14.** | c.rs:302-315; cpp.rs:384-400 | Recurse through `pointer_declarator`/`reference_declarator`/`parenthesized_declarator`. |
+
+### MEDIUM
+| ID | Bug | File:line | Fix |
+|----|-----|-----------|-----|
+| B2 | **Content hash covers files that truncation omits — and the auto-diff path emits no content hash at all** (uses volatile `**Generated:**` timestamp). | markdown.rs:88-104; auto-diff path in lib.rs | Hash bytes actually written; give the auto-diff path a real content hash. (pairs with F4) |
+| B6+B7 | **Cache/auto-diff config-hash omits output-affecting fields — fix as ONE unified-hash pass** — both omit `encoding_strategy`, `diff_only`, `output_folder`, `timestamped_output`; separately `effective_config` (lib.rs:338-346) stops after line_numbers so resolved `--signatures/--structure/--truncate/--visibility` never reach `final_config`. | cache.rs:94-119; state.rs:225-250; lib.rs:338-346, 862-866 | Collapse both hashers into one shared canonical fingerprint fn; add the four omitted fields; propagate resolved fields into `final_config`. |
+| B8 | **`--diff-only` silently ignored when `auto_diff` off** — full content emitted, no warning. | lib.rs:333, 544-575 | Warn/error when `diff_only && !auto_diff`. |
+| B14 | **C++ qualified return type misread as function name** — `std::string s(...)` → name="std::string". **Sequence after B13.** | cpp.rs:384-400 | Resolve name strictly from inside `function_declarator`. |
+| B15 | **Rust bodiless trait methods (`function_signature_item`) dropped** — trait views, where signatures matter most, are incomplete. | rust.rs:138-184, :200 | Add `"function_signature_item"` arm; add to structure counter and `walk_for_boundary`. |
+
+### LOW (cheap, bundle opportunistically)
+| ID | Bug | File:line | Fix |
+|----|-----|-----------|-----|
+| B3 | Invalid `--visibility` values silently coerced to `all`. | cli.rs:67-69 | clap `ValueEnum`. (= F7) |
+| B4 | Invalid `--truncate` values silently accepted; flag inert. | cli.rs:63-65 | `ValueEnum {Smart,Byte}`. (= F5 + F7) |
+| B5 | Invalid `encoding_strategy` in config silently falls back to `detect`. **Config-only — NOT covered by F7.** | config.rs:71; markdown.rs:438-450 | Validate on config load; warn on others. |
+| B9 | Token-count estimate diverges from output for non-UTF-8/binary; ignores tree-sitter enrichment and `--max-tokens`. **Folded into F4.** | token_count.rs:34-46 | Share one rendering fn between counter and renderer. |
+| B16 | Python class base list double-parenthesized: `class User((Base))`. | python.rs:227, 236-240 | Strip parens before re-wrapping. |
+| B17 | C/C++ struct/enum/alias drop inheritance/base types/aliased targets (`format!`-based). TS class inheritance loss is the same bug. | cpp.rs:316-366; c.rs:230-284; typescript.rs | Byte-slice up to body node / trailing `;`. |
+| B18 | Rust `pub(crate)`/`pub(super)` reported as fully public. | rust.rs:221-237 | Inspect modifier text; treat restricted as a non-public tier. |
+| B19 | `find_smart_truncation_point` fallback can return a non-char-boundary offset → panic when wired up. **Blocking gate on F5.** | truncation.rs:9-19 + per-lang fallback | Clamp with `ensure_utf8_boundary` before returning. |
+| B20 | fs2 lock not atomic on crash (`set_len(0)` then write); truncated cache → silently dropped baseline. | cache.rs:167-204 | Write temp file + `fs::rename`. (pairs with fs2→fs4) |
+
+---
+
+## 4. Feature roadmap (prioritized)
+
+| Priority | Feature | Effort | Impact | Rationale |
+|----------|---------|--------|--------|-----------|
+| **P0** | Model-accurate tokenizers (`--encoding`, o200k_base default) | S | High | cl100k_base under-counts every current OpenAI model; o200k_base already in pinned 0.9.1 |
+| **P0** | stdout/pipe output | M | High | Unblocks `context-builder \| llm`; renderer already writes to `impl Write` |
+| **P0** | Multi-format output (XML for Claude; later JSON) | L | High | Repomix *defaults* to XML; Anthropic recommends XML tags. Most-cited competitive gap |
+| **P0** | Wire up `--truncate smart` (verified dead code) | M | High | Headline feature that does nothing today |
+| **P1** | MCP server (`--mcp`, rmcp, stdio) | M-L | High | Both top Rust competitors ship it; agents consume context via MCP. Build on a library API first. Defer to v0.10 |
+| **P1** | Secret scanning/redaction (`--redact`) | M | Med-High | Piping a repo to an LLM leaks keys; pure-Rust fits single-binary ethos |
+| **P1** | Glob include patterns (`--include 'src/**/*.rs'`) | M | Medium | We only filter by extension; `file_utils.rs` already uses `OverrideBuilder` |
+| **P1** | Remote-repo ingestion (`--remote <url>`, shallow clone) | M | Medium | Repomix/gitingest/codefetch all do it; removes first-use friction |
+| **P1** | Git-aware diff baselines (`--diff-against <ref>`) | L | High | Turns auto-diff into "vs main" — highest-value evolution of the diff moat |
+| **P2** | Doc-comment extraction into signatures | M | High (reasoning) | High cross-model consensus as a per-token-reasoning win |
+| **P2** | Dependency/module graph + symbol map | L | High (reasoning) | Highest-consensus unshipped feature (9/10 models) |
+| **P2** | More tree-sitter languages (C#, Ruby, PHP, Kotlin, Swift, Bash) | L | Medium | 8 langs misses popular ecosystems; pair with query-migration refactor |
+| **P2** | Make tree-sitter a default feature | S | Medium | `cargo install` silently degrades AST features today |
+| **P2** | Library/crate API surface | M | Medium | Foundation an MCP server should build on |
+| **P3** | Watch mode, template engine, web playground/VSCode ext | M-L | Low-Med | Nice-to-haves / heavy distribution lifts; later |
+
+---
+
+## 5. Dependency & maintenance
+
+Stack health is **good** — no open advisory affects pinned versions; crossbeam-channel already on patched 0.5.15.
+
+**Bump (feature-relevant):** `tiktoken-rs` 0.9.1 → 0.12.0 (adds o-series/gpt-5/o200k_harmony mappings — an *enhancement* to F1, not a hard blocker since o200k_base already exists in 0.9.1).
+
+**Dependency diet (one mechanical pass, edition-2024 MSRV makes std swaps free):**
+- **Drop `walkdir`** — declared direct dep but *never imported* (traversal is all via `ignore`).
+- **`fs2` → `fs4`** — fs2 unreleased since 2017 (RustSec unmaintained profile). Single lock site (cache.rs:7). Do alongside B20.
+- **`num_cpus` → `std::thread::available_parallelism()`** — one site (markdown.rs:125).
+- **`once_cell::Lazy` → `std::sync::LazyLock`** — one site (token_count.rs:10).
+
+**Routine patch bumps** (manifest is source of truth): clap, chrono, tempfile (and de-dupe — listed in both `[dependencies]` and `[dev-dependencies]`), serde_json, toml, rayon floor, env_logger; **tree-sitter core + grammars together** (ABI pairing).
+
+**CI/tooling gap:** No `cargo audit`/`cargo deny` and no dependabot/renovate. Add both (parallel infra track, not on the v0.9.0 critical path).
+
+---
+
+## 6. DX, docs & distribution
+
+**Critical-path doc fixes (ship in v0.9.0):**
+- **README.md:270** — `--truncate` documents `none (default) or smart`. Both wrong: clap default is `smart` (cli.rs:64), and `none` is fabricated. Fix to `smart (AST-aware, default) or byte`.
+- **SKILL.md:160** — documents `smart … or simple`. `simple` isn't a real mode. Standardize on `smart`/`byte` everywhere.
+- **README/SKILL** advertise "smart AST-boundary truncation" as working (README:80) — it's dead code. Either ship F5 or soften the claim.
+- **README.md:257-272** — omits `--visibility` entirely (a real shipping flag) and never documents the `private` value.
+- **README.md:95** still has `curl … | bash` despite commit 87657bf removing it from SKILL.md for a VirusTotal flag. Make this a release-gate checklist item.
+
+**Critical-path distribution (ship in v0.9.0):**
+1. **`[package.metadata.binstall]`** (S) — prebuilt archives already exist but `cargo binstall context-builder` can't find them.
+2. **aarch64-unknown-linux-gnu release target** (M, **HIGH**) — install.sh advertises ARM Linux but release.yml never builds it → `curl|install.sh` 404s on Raspberry Pi/ARM cloud/WSL-ARM today.
+3. **`examples/` dir + sample output.md** (S) — no before/after sample showcases the differentiators.
+
+**Parallel infra track (does NOT gate the feature release):**
+- AGENTS.md release process covers only crates.io; omits the tag-triggered binary release and winget bump. AGENTS.md/DEVELOPMENT.md layout omits `src/tree_sitter/`.
+- CI MSRV job is fake — pins `stable`, no `rust-version` in Cargo.toml. Add `rust-version = "1.85"`.
+- Homebrew tap (L), Winget automation (manifest stuck at 0.8.2), CHANGELOG-driven release notes (S), `cargo audit` + dependabot.
+
+---
+
+## 7. Deferred / stretch (later releases)
+
+- **v0.10 strategic bets:** MCP server, remote-repo ingestion, git-aware `--diff-against <ref>`, library/crate API. Ship the clean **library API first**, then build MCP on top of it.
+- **Architectural refactor (high internal leverage):** unify on `ResolvedConfig` end-to-end + stream auto-diff through a `Writer` + store hashes-not-content in the cache — retires an entire cluster of bugs (B6/B7, BTreeMap-ordering family, auto-diff OOM, encoding-bypass). Worth doing **before** building MCP/library API. Pairs with extracting `auto_diff.rs` out of the 2505-line lib.rs. (F4's diff-path point-patches are knowingly throwaway once this lands.)
+- **Output-quality bets:** dependency/module graph + symbol map, doc-comment extraction, per-file token statistics, smart lockfile summarization, configurable relevance rules in TOML.
+- **tree-sitter depth:** migrate hand-rolled walkers to `.scm` queries (de-risks every future language), add C#/Ruby/PHP/Kotlin/Swift/Bash, TS class inheritance/generics preservation (B17's TS parallel).
+- **Distribution/ecosystem (heavy):** web playground, VSCode/browser extensions, Docker image + GHCR, GitHub Action.
+
+**Bottom line:** Ship v0.9.0 "Trustworthy Output" soon — accurate tokenizers, honest features (truncate/visibility actually work, verified by a new tree-sitter integration test), and XML+stdout — bundled with the verified bug fixes and the dependency diet. Keep the infra overhaul on a parallel track. It restores momentum, plays to the project's precision identity, and lays clean groundwork (library API, unified config, streamed diff) for the MCP/remote-repo bets in v0.10.
+```
+
+### File: `docs\research\prompts\clean_benchmark_v6.md`
+
+- Size: 1213 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Clean Benchmark Prompt (v6)
@@ -486759,10 +489472,10 @@ Rank by impact × feasibility. For each:
 ```
 ```
 
-### File: `docs/research/prompts/deep_think_prompt_v3_multimodel.md`
+### File: `docs\research\prompts\deep_think_prompt_v3_multimodel.md`
 
-- Size: 7697 bytes
-- Modified: 2026-02-15 22:23:52 UTC
+- Size: 7851 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Deep Think v3 Multi-Model Review Prompt
@@ -486921,10 +489634,10 @@ Focus on things that would make YOU (the LLM reading this output) significantly 
 ```
 ```
 
-### File: `docs/research/prompts/deepthink_prompt_v2.md`
+### File: `docs\research\prompts\deepthink_prompt_v2.md`
 
-- Size: 5108 bytes
-- Modified: 2026-02-14 20:10:24 UTC
+- Size: 5191 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Deep Think v2 Evaluation Prompt
@@ -487012,10 +489725,10 @@ Provide a concrete example of what the first ~200 lines of an ideal v2 output wo
 | **File ordering** | Alphabetical | Relevance-based (config → source → tests → docs) |
 ```
 
-### File: `docs/research/prompts/deepthink_prompt_v5.md`
+### File: `docs\research\prompts\deepthink_prompt_v5.md`
 
-- Size: 5872 bytes
-- Modified: 2026-02-15 09:57:44 UTC
+- Size: 5984 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Deep Think v5 Evaluation Prompt
@@ -487132,10 +489845,81 @@ Focus exclusively on things that would make YOU (the LLM reading this output) si
 ```
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-chat-gpt-5.2.md`
+### File: `docs\research\v0.10-plan.md`
 
-- Size: 9616 bytes
-- Modified: 2026-02-14 20:37:28 UTC
+- Size: 4936 bytes
+- Modified: 2026-08-31 04:55:07 UTC
+
+```markdown
+# context-builder — v0.10 Release Plan
+
+Generated: 2026-08-31, against `master` @ `7e4dce4` (v0.9.0).
+Derived from the post-v0.9.0 review (`v0.10-review.md`, commit `2499dc3`) — every
+finding there was re-verified against the live tree before being accepted into
+this plan. Theme: **"Honest signatures"** — close every gap where a documented
+flag silently does nothing, then harden packaging and CI.
+
+> **Status: EXECUTED (2026-08-31).** All 9 items shipped. `cargo fmt` clean,
+> `cargo clippy --all-targets --all-features -- -D warnings` clean,
+> 394 tests passing (379 → 394). Every behavioral finding from the review was
+> re-reproduced after the fix and verified byte-identical between parallel and
+> serial builds. Remaining decision for the maintainer: commit + tag
+> `v0.10.0` (see CHANGELOG).
+
+## Scope summary
+
+| # | Item | Size | Priority | Acceptance criteria | Status |
+|---|---|---|---|---|---|
+| 1 | Single `language_for_extension` map | S | P1 | One `pub fn` in `src/languages.rs`, all 3 call sites use it; no other `match extension` language maps exist in `src/`; any given extension yields the same fence language in body, signature, and auto-diff paths (the `.mjs`/`.jsx`/`.sh` divergences from the review are gone) | ✅ done |
+| 2 | Wire `--truncate smart/byte` into the budget path | M | P0 | Over-budget file is truncated (not omitted) with per-file marker; `smart` cuts at AST boundary when parseable, `byte` at char boundary; serial and parallel paths truncate identically | ✅ done |
+| 3 | TypeScript class-member extraction | S–M | P0 | `--signatures` on a TS file with `class K { method() }` lists the methods; methods respect `--visibility` | ✅ done |
+| 4 | `--visibility` for TS + warn for unsupported | M | P1 | TS honors public/private via modifier scan; C, C++, Python, JS emit a one-line `warn!` when a visibility filter is passed | ✅ done |
+| 5 | Doc sync (README/SKILL/AGENTS/CHANGELOG) | S | P0 | `--truncate` documented as `smart`/`byte`; truncate/visibility claims match shipped behavior; AGENTS.md tech-stack, structure, feature table updated | ✅ done |
+| 6 | Dependency pass | S | P1 | `walkdir`, `num_cpus`, `once_cell` gone; `tempfile` only in dev-deps; `similar` 3.x; `tiktoken-rs` 0.12; `cargo update` green | ✅ done |
+| 7 | CI/packaging: real MSRV job, aarch64-linux target, binstall metadata, dependabot | S–M | P1 | CI `msrv` job pins `1.89`; release matrix builds `aarch64-unknown-linux-gnu`; `cargo binstall` resolves; dependabot watches cargo + actions | ✅ done |
+| 8 | Repo hygiene | S | P2 | `test.md` untracked; `Cargo.lock` line dropped from `.gitignore`; context-files pruning decided (default: keep, note in docs) | ✅ done (context-files kept — see note) |
+| 9 | Final gate | S | — | `cargo fmt --all`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo test --all-features -- --test-threads=1` all pass | ✅ done |
+
+**Out of scope (deferred to v0.11+):** `--format xml`, tree-sitter 0.27 (MSRV
+1.90 + day-old release risk), MCP server, library API, parallel-writer
+BTreeMap backpressure fix, visibility classification for C/C++/Python/JS.
+
+## Execution order
+
+Items 1 → 2 → 3 → 4 → 5 are sequenced so docs can only claim what has shipped.
+6 → 7 → 8 can proceed in parallel with the code items but land last. Item 9
+gates the release tag.
+
+### Design notes that came out of re-verification
+
+- **§1.1 nuance:** the review's "byte-identical" wording is technically imprecise —
+  the `Content hash:` header differs between `--truncate smart` and `byte`
+  because the flag is folded into the hash (`markdown.rs:113`). File *bodies*
+  are identical. The finding (no truncation happens) stands.
+- **Truncation semantics decision:** the serial path currently `break`s at the
+  first over-budget file. After item 2, both paths must switch to
+  "truncate the crossing file, continue while budget remains, emit the notice
+  when exhausted", and both paths must truncate at the same byte boundary so
+  the content hash stays stable across `parallel`/no-`parallel` builds.
+- **`--visibility` partial honesty:** full filtering for C (static linkage),
+  C++ (access specifiers), Python (`_`/`__` convention), JS (`#private`, export)
+  is a v0.11 candidate; v0.10 ships TS filtering + a `warn!` for the rest.
+- **MSRV decision:** `tree-sitter` 0.27 requires Rust 1.90, above this crate's
+  declared 1.89. Defer the bump; v0.10 stays on tree-sitter 0.26 and keeps
+  MSRV 1.89. The real MSRV CI job (item 7) makes future bumps verifiable.
+
+## Post-release (next review cycle)
+
+- v0.11 candidates: visibility for C/C++/Python/JS, tree-sitter 0.27 + MSRV 1.90,
+  parallel-writer memory backpressure, `--format xml` behind the renderer trait.
+- Uncommitted working-tree changes (AGENTS.md/SKILL.md Deep Think sections,
+  test.md churn) should be committed before tagging v0.10.
+```
+
+### File: `docs\research\v2-responses\context_v2_resp-chat-gpt-5.2.md`
+
+- Size: 10270 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 I’ve completed a full v0.7.0 architectural + consumption-quality review using the relevance-ordered bundle you attached .
@@ -487794,10 +490578,10 @@ If v0.7.1 only fixed:
 you would see a disproportionately large gain in reasoning accuracy per token.
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-claude-opus-4.6.md`
+### File: `docs\research\v2-responses\context_v2_resp-claude-opus-4.6.md`
 
-- Size: 24864 bytes
-- Modified: 2026-02-14 20:54:04 UTC
+- Size: 25290 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Context Builder v0.7.0 — Deep Analysis Report
@@ -488228,10 +491012,10 @@ impl CacheManager {
 5. **Test file bodies**: In budget-constrained mode, emit only test file signatures (function names). Tests are high-volume, low-signal for LLM comprehension.
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-gemini-3-deepthink.md`
+### File: `docs\research\v2-responses\context_v2_resp-gemini-3-deepthink.md`
 
-- Size: 10542 bytes
-- Modified: 2026-02-14 20:26:04 UTC
+- Size: 10743 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 Here is a deep-dive architectural analysis of `context-builder` v0.7.0.
@@ -488438,10 +491222,10 @@ use clap::{CommandFactory, Parser};
 3. **Token Efficiency**: Consolidating markdown bullet points (`- Size: X`) into XML attributes (`size_bytes="X"`) saves ~10-15 tokens per file, scaling massively across large repositories.
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-gemini-pro.md`
+### File: `docs\research\v2-responses\context_v2_resp-gemini-pro.md`
 
-- Size: 9177 bytes
-- Modified: 2026-02-14 20:22:54 UTC
+- Size: 9340 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 You have provided the full source code for **Context Builder v0.7.0**, a Rust CLI tool for aggregating codebases into LLM-ready markdown. I have analyzed the codebase, focusing on the new features (relevance sorting, deterministic output, token budgeting), the architecture, and the strategic roadmap.
@@ -488610,10 +491394,10 @@ impl LegacyHandler {
 This preserves the *interface* (critical for understanding usage) while discarding the *implementation* (irrelevant for context), saving 80%+ tokens per file.
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-glm5-run2.md`
+### File: `docs\research\v2-responses\context_v2_resp-glm5-run2.md`
 
-- Size: 11251 bytes
-- Modified: 2026-02-14 20:57:06 UTC
+- Size: 11416 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 This is a comprehensive analysis based on the provided v0.7.0 source code. Note that while the file tree lists `src/markdown.rs` and `src/file_utils.rs`, their content was not included in the provided text snippet. My architectural review in Part 2 focuses on the available integration points (CLI, Config, Cache) and the logical implications of the new features.
@@ -488784,10 +491568,10 @@ graph TD
     - This allows the LLM to selectively read only `src/main.rs` and `src/config.rs` if the task is configuration-related, ignoring `cache.rs` entirely.
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-glm5.md`
+### File: `docs\research\v2-responses\context_v2_resp-glm5.md`
 
-- Size: 10809 bytes
-- Modified: 2026-02-14 20:22:50 UTC
+- Size: 11011 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 Based on the provided document, here is the analysis. Note that the provided text truncates abruptly after `src/cache.rs`. The implementations for `markdown.rs`, `file_utils.rs`, and `cli.rs`—which contain the core logic for the new v0.7.0 features—are missing. This absence is a primary data point for the following assessment.
@@ -488995,10 +491779,10 @@ version = "0.7.0"
 ```
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-grok.md`
+### File: `docs\research\v2-responses\context_v2_resp-grok.md`
 
-- Size: 10077 bytes
-- Modified: 2026-02-14 20:16:09 UTC
+- Size: 10284 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 ### Part 1: Relevance Ordering Impact Assessment
@@ -489211,10 +491995,10 @@ Purpose: User documentation, usage examples
 This format gives immediate context, visual relationships, and progressive depth while remaining streaming-friendly and token-efficient.
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-kimi-k2.5.md`
+### File: `docs\research\v2-responses\context_v2_resp-kimi-k2.5.md`
 
-- Size: 23601 bytes
-- Modified: 2026-02-14 20:57:04 UTC
+- Size: 24068 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
  I'll analyze this codebase systematically, starting with the relevance ordering experience, then diving into the new v0.7.0 features, and finally proposing the roadmap and ideal format.
@@ -489687,10 +492471,10 @@ use clap::{CommandFactory, Parser};
 This v2 format would transform the tool from a "file packager" into a "codebase intelligence system" — dramatically improving reasoning quality per token consumed.
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-minimax-agent.md`
+### File: `docs\research\v2-responses\context_v2_resp-minimax-agent.md`
 
-- Size: 34521 bytes
-- Modified: 2026-02-14 20:58:50 UTC
+- Size: 35051 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 # Comprehensive Code Review: context-builder v0.7.0
@@ -490225,10 +493009,10 @@ The tool is in good architectural shape, and the identified issues are refinemen
 **Source Reviewed**: context-builder v0.7.0 (460KB relevance-ordered output)
 ```
 
-### File: `docs/research/v2-responses/context_v2_resp-qwen3-max.md`
+### File: `docs\research\v2-responses\context_v2_resp-qwen3-max.md`
 
-- Size: 15213 bytes
-- Modified: 2026-02-14 20:19:51 UTC
+- Size: 15537 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 ## Part 1: Relevance Ordering Impact Assessment
@@ -490558,10 +493342,10 @@ ENTRYPOINT ["context-builder"]
 This v2 format would reduce tokens needed for equivalent understanding by **~35%** while improving comprehension quality through explicit architectural context – critical for maximizing LLM reasoning per token consumed.
 ```
 
-### File: `docs/research/v2-responses/deepthink_response_v1.md`
+### File: `docs\research\v2-responses\deepthink_response_v1.md`
 
-- Size: 12075 bytes
-- Modified: 2026-02-14 19:23:46 UTC
+- Size: 12281 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 This is a phenomenal, highly meta exercise. As an LLM, I am simultaneously the code reviewer and the exact target consumer of this execution output. Processing the context generated by `context-builder` provides a perfect closed-loop lens to assess both its internal engineering and its external utility.
@@ -490773,10 +493557,10 @@ pub struct Args {
 ```
 ```
 
-### File: `docs/research/v3-responses/context_v3_resp-gemini-3-deepthink.md`
+### File: `docs\research\v3-responses\context_v3_resp-gemini-3-deepthink.md`
 
-- Size: 9944 bytes
-- Modified: 2026-02-14 23:46:31 UTC
+- Size: 10048 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 This is an excellent evolution of the codebase. The structural improvements—particularly the transition to JSON state caching, relevance-based ordering, and the elimination of `DefaultHasher`—make this tool significantly more robust. The shift from alphabetical file dumps to a structured, LLM-optimized narrative is a massive win for context ingestion.
@@ -490886,10 +493670,10 @@ To make this the undisputed best-in-class tool for LLM context generation, here 
 * **Complexity:** Medium. *Risk:* Low.
 ```
 
-### File: `docs/research/v3-responses/context_v4_resp-gemini-3-deepthink.md`
+### File: `docs\research\v3-responses\context_v4_resp-gemini-3-deepthink.md`
 
-- Size: 9115 bytes
-- Modified: 2026-02-15 04:28:28 UTC
+- Size: 9193 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 Here is a deep architectural and correctness review of the third iteration of `context-builder`.
@@ -490973,10 +493757,10 @@ Ranked strictly by the impact they have on **me (the LLM)** successfully underst
 * **Complexity**: S
 ```
 
-### File: `docs/research/v3-responses/context_v5_resp-gemini.md`
+### File: `docs\research\v3-responses\context_v5_resp-gemini.md`
 
-- Size: 9456 bytes
-- Modified: 2026-02-15 10:39:11 UTC
+- Size: 9554 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 This is a massive and ambitious release. Integrating Tree-Sitter brings `context-builder` into a new tier of LLM tooling. The module scaffolding, thread-safe parser initialization, and feature gating are structurally excellent.
@@ -491080,10 +493864,10 @@ Ranked by (Value × Feasibility) to immediately improve LLM codebase comprehensi
 * **Complexity:** Small
 ```
 
-### File: `docs/research/v3-responses/context_v6_resp-gemini.md`
+### File: `docs\research\v3-responses\context_v6_resp-gemini.md`
 
-- Size: 9258 bytes
-- Modified: 2026-02-15 11:30:10 UTC
+- Size: 9375 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 This is a massive step forward for the codebase. Moving away from brittle string concatenation to AST-driven byte slicing solves the hardest problem of signature extraction: preserving complex language semantics like generics, lifetimes, and modifiers.
@@ -491206,10 +493990,10 @@ Ranked by **Value to LLM Consumer** × **Implementation Feasibility**.
 * **Complexity:** **Small**
 ```
 
-### File: `docs/research/v3-responses/deep_think_v3_resp-claude-chatgpt-5.3-codex-xhigh.mc`
+### File: `docs\research\v3-responses\deep_think_v3_resp-claude-chatgpt-5.3-codex-xhigh.mc`
 
-- Size: 4980 bytes
-- Modified: 2026-02-16 03:06:52 UTC
+- Size: 5044 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```mc
 Findings (ordered by severity)
@@ -491279,10 +494063,10 @@ Problem: max token guarantees are soft and can overshoot heavily.
 Design: remove first-item bypass in markdown.rs; optionally add exact tokenizer-based accounting for chunk boundaries.
 ```
 
-### File: `docs/research/v3-responses/deep_think_v3_resp-claude-opus-4.6.mc`
+### File: `docs\research\v3-responses\deep_think_v3_resp-claude-opus-4.6.mc`
 
-- Size: 13766 bytes
-- Modified: 2026-02-16 02:37:08 UTC
+- Size: 14067 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```mc
 Context Builder v0.8.2 — Deep Code Review
@@ -491589,10 +494373,10 @@ Tests	B	Good unit coverage, missing integration tests for TS features
 The codebase is mature and well-engineered. The top 3 fixes (TSX parsing, duplicate signatures, .jsx registry) are small patches that would meaningfully improve quality for the most common user workflows.
 ```
 
-### File: `docs/research/v3-responses/deep_think_v3_resp-gemini-3-deepthink.md`
+### File: `docs\research\v3-responses\deep_think_v3_resp-gemini-3-deepthink.md`
 
-- Size: 10208 bytes
-- Modified: 2026-02-16 00:51:18 UTC
+- Size: 10326 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 This is an incredibly thorough and mature iteration of the codebase. The architectural evolution over six rounds is evident: the Tree-Sitter integration is beautifully abstracted via the `LanguageSupport` trait, the parallel processing pipeline is sophisticated, and the shift toward a compiled distribution pipeline with SHA256 checksums is a massive leap forward for adoption.
@@ -491716,10 +494500,10 @@ Ranked by **Impact × Feasibility**:
 <br>Auto-diff crashes on legacy encodings and ignores CLI TS flags. | **1.** Centralize `detect_text_encoding` and call it from `state.rs`. **2.** In `main.rs`, copy `signatures` and `structure` from `resolution.config` into `final_config` so the hash updates. | **M** |
 ```
 
-### File: `docs/research/v3-responses/deep_think_v3_resp-grok.md`
+### File: `docs\research\v3-responses\deep_think_v3_resp-grok.md`
 
-- Size: 9118 bytes
-- Modified: 2026-02-16 00:51:17 UTC
+- Size: 9227 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 **Excellent work on v0.8.2.** This is a polished, production-ready release. The Tree-Sitter integration is the standout feature—smart, safe, and genuinely useful for LLMs. The distribution pipeline is secure and cross-platform. The bug history shows real iterative improvement.
@@ -491834,10 +494618,10 @@ The highest-leverage next step for LLM consumption is **doc-comment extraction**
 Great work—keep iterating! This tool is already one of the best ways to feed real codebases to models.
 ```
 
-### File: `docs/research/v3-responses/deep_think_v3_resp-kimi.md`
+### File: `docs\research\v3-responses\deep_think_v3_resp-kimi.md`
 
-- Size: 9813 bytes
-- Modified: 2026-02-16 00:51:41 UTC
+- Size: 10043 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
  I'll conduct a thorough review of the context-builder v0.8.2 codebase. Let me start by analyzing the key files systematically. 
@@ -492073,10 +494857,10 @@ fn parse(&self, source: &str) -> Option<Tree> {
 **v0.9.0 focus**: LLM-quality improvements—symbol maps, incremental parsing, and accurate token budgeting will maximize user value.
 ```
 
-### File: `docs/research/v3-responses/deep_think_v3_resp-minimax.md`
+### File: `docs\research\v3-responses\deep_think_v3_resp-minimax.md`
 
-- Size: 9474 bytes
-- Modified: 2026-02-16 02:35:29 UTC
+- Size: 9633 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 Code Review Report: context-builder v0.8.2 (Sixth Iteration)
@@ -492241,10 +495025,10 @@ The context-builder v0.8.2 demonstrates mature engineering with well-structured 
 Confidence Level: High for architecture and core functionality; Medium for edge case handling where some scenarios remain untested.
 ```
 
-### File: `docs/research/v6-responses/gemini-3-deep-think.md`
+### File: `docs\research\v6-responses\gemini-3-deep-think.md`
 
-- Size: 9215 bytes
-- Modified: 2026-02-16 03:39:18 UTC
+- Size: 9327 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```markdown
 Here is a comprehensive review of the `context-builder` codebase, evaluating bugs, architecture, and providing actionable improvements.
@@ -492362,14 +495146,14 @@ Ranked by **Impact × Feasibility**:
 * **Complexity:** S (Files: `src/file_utils.rs`)
 ```
 
-### File: `scripts/demo.sh`
+### File: `scripts\demo.sh`
 
-- Size: 2948 bytes
-- Modified: 2026-02-15 09:26:12 UTC
+- Size: 3049 bytes
+- Modified: 2026-08-31 04:55:07 UTC
 
 ```bash
 #!/usr/bin/env bash
-# Demo script for context-builder v0.8.0 — records a clean asciinema demo
+# Demo script for context-builder v0.10.0 — records a clean asciinema demo
 # Usage: asciinema rec --cols 100 --rows 32 --command="bash scripts/demo.sh" docs/demo.cast
 
 set -e
@@ -492412,7 +495196,7 @@ cd "$PROJECT"
 clear
 echo ""
 printf '\033[1;33m  ╔══════════════════════════════════════════════════════╗\033[0m\n'
-printf '\033[1;33m  ║  ⚡ \033[1;37mcontext-builder\033[1;33m v0.8.0  — \033[0;36mTree-Sitter Edition\033[1;33m   ║\033[0m\n'
+printf '\033[1;33m  ║  ⚡ \033[1;37mcontext-builder\033[1;33m v0.10.0  — \033[0;36mTree-Sitter Edition\033[1;33m   ║\033[0m\n'
 printf '\033[1;33m  ╚══════════════════════════════════════════════════════╝\033[0m\n'
 printf '\033[2m    LLM context from your codebase, with AST superpowers\033[0m\n'
 echo ""
@@ -492469,10 +495253,10 @@ sleep 3
 rm -rf "$DEMO_DIR"
 ```
 
-### File: `scripts/generate_samples.rs`
+### File: `scripts\generate_samples.rs`
 
-- Size: 16036 bytes
-- Modified: 2026-02-14 07:14:48 UTC
+- Size: 16552 bytes
+- Modified: 2026-05-29 23:45:01 UTC
 
 ```rust
 #![allow(
@@ -492993,10 +495777,10 @@ mod tests {
 }
 ```
 
-### File: `scripts/pre-release.sh`
+### File: `scripts\pre-release.sh`
 
-- Size: 6882 bytes
-- Modified: 2026-02-16 04:35:48 UTC
+- Size: 7380 bytes
+- Modified: 2026-06-04 22:47:19 UTC
 
 ```bash
 #!/usr/bin/env bash
@@ -493089,11 +495873,15 @@ fi
 # ═══════════════════════════════════════
 header "4. Tests"
 # ═══════════════════════════════════════
-if cargo test --features tree-sitter-all 2>&1; then
-    TEST_SUMMARY=$(cargo test --features tree-sitter-all 2>&1 | grep "^test result:" | tail -1)
+# Tests share process-wide state (cwd, env), so they must run single-threaded —
+# matching how CI runs them. Running parallel produces spurious failures.
+# Capture the output once (in the `if` so `set -e` doesn't abort on test failure).
+if TEST_OUTPUT=$(cargo test --features tree-sitter-all -- --test-threads=1 2>&1); then
+    TEST_SUMMARY=$(echo "$TEST_OUTPUT" | grep "^test result:" | tail -1)
     pass "Tests passed — $TEST_SUMMARY"
 else
     fail "Tests failed"
+    echo "$TEST_OUTPUT" | grep -E "FAILED|^error" | head -20 | sed 's/^/    /'
 fi
 
 # ═══════════════════════════════════════
@@ -493163,4 +495951,1533 @@ else
     printf '    git tag v%s && git push && git push --tags\n\n' "$CARGO_VERSION"
     exit 0
 fi
+```
+
+### File: `Cargo.lock`
+
+- Size: 39031 bytes
+- Modified: 2026-08-31 04:16:55 UTC
+
+```toml
+# This file is automatically @generated by Cargo.
+# It is not intended for manual editing.
+version = 4
+
+[[package]]
+name = "aho-corasick"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "alloca"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5a7d05ea6aea7e9e64d25b9156ba2fee3fdd659e34e41063cd2fc7cd020d7f4"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "android_system_properties"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "anes"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
+
+[[package]]
+name = "anstream"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "824a212faf96e9acacdbd09febd34438f8f711fb84e09a8916013cd7815ca28d"
+dependencies = [
+ "anstyle",
+ "anstyle-parse",
+ "anstyle-query",
+ "anstyle-wincon",
+ "colorchoice",
+ "is_terminal_polyfill",
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
+
+[[package]]
+name = "anstyle-parse"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52ce7f38b242319f7cabaa6813055467063ecdc9d355bbb4ce0c68908cd8130e"
+dependencies = [
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle-query"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "anstyle-wincon"
+version = "3.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
+dependencies = [
+ "anstyle",
+ "once_cell_polyfill",
+ "windows-sys",
+]
+
+[[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
+name = "autocfg"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
+name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
+version = "2.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+
+[[package]]
+name = "bstr"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
+dependencies = [
+ "memchr",
+ "regex-automata",
+ "serde_core",
+]
+
+[[package]]
+name = "bumpalo"
+version = "3.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+
+[[package]]
+name = "cast"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
+name = "cc"
+version = "1.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
+dependencies = [
+ "find-msvc-tools",
+ "shlex",
+]
+
+[[package]]
+name = "cfg-if"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "chrono"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
+dependencies = [
+ "iana-time-zone",
+ "js-sys",
+ "num-traits",
+ "serde",
+ "wasm-bindgen",
+ "windows-link",
+]
+
+[[package]]
+name = "ciborium"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
+dependencies = [
+ "ciborium-io",
+ "ciborium-ll",
+ "serde",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half",
+]
+
+[[package]]
+name = "clap"
+version = "4.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca"
+dependencies = [
+ "clap_builder",
+ "clap_derive",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap_lex",
+ "strsim",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d012d2b9d65aca7f18f4d9878a045bc17899bba951561ba5ec3c2ba1eed9a061"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "clap_lex"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
+name = "colorchoice"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+
+[[package]]
+name = "context-builder"
+version = "0.10.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "criterion",
+ "crossbeam-channel",
+ "encoding_rs",
+ "env_logger",
+ "ignore",
+ "log",
+ "pretty_assertions",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "similar",
+ "tempfile",
+ "tiktoken-rs",
+ "toml",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "core-foundation-sys"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "criterion"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "950046b2aa2492f9a536f5f4f9a3de7b9e2476e575e05bd6c333371add4d98f3"
+dependencies = [
+ "alloca",
+ "anes",
+ "cast",
+ "ciborium",
+ "clap",
+ "criterion-plot",
+ "itertools",
+ "num-traits",
+ "oorandom",
+ "page_size",
+ "plotters",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "tinytemplate",
+ "walkdir",
+]
+
+[[package]]
+name = "criterion-plot"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8d80a2f4f5b554395e47b5d8305bc3d27813bacb73493eb1001e8f76dae29ea"
+dependencies = [
+ "cast",
+ "itertools",
+]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d85363c37faeca707aef026efa9f3b34d077bce547e48f770770625c6013679e"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-deque"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
+
+[[package]]
+name = "crunchy"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
+
+[[package]]
+name = "defmt"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8"
+dependencies = [
+ "defmt-parser",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "diff"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
+
+[[package]]
+name = "either"
+version = "1.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
+name = "env_filter"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
+dependencies = [
+ "log",
+ "regex",
+]
+
+[[package]]
+name = "env_logger"
+version = "0.11.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "env_filter",
+ "jiff",
+ "log",
+]
+
+[[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "fastrand"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "find-msvc-tools"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
+
+[[package]]
+name = "futures-core"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
+
+[[package]]
+name = "futures-executor"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "031b47cf1a3c6cc8bc2fc76cd437f521619387907d469316e7c0bc278f1f5432"
+dependencies = [
+ "futures-core",
+ "futures-task",
+ "futures-util",
+]
+
+[[package]]
+name = "futures-task"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
+
+[[package]]
+name = "futures-util"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
+dependencies = [
+ "futures-core",
+ "futures-task",
+ "pin-project-lite",
+ "slab",
+]
+
+[[package]]
+name = "getrandom"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi",
+]
+
+[[package]]
+name = "globset"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "half"
+version = "2.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
+dependencies = [
+ "cfg-if",
+ "crunchy",
+ "zerocopy",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "iana-time-zone"
+version = "0.1.65"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
+dependencies = [
+ "android_system_properties",
+ "core-foundation-sys",
+ "iana-time-zone-haiku",
+ "js-sys",
+ "log",
+ "wasm-bindgen",
+ "windows-core",
+]
+
+[[package]]
+name = "iana-time-zone-haiku"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "ignore"
+version = "0.4.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b69833ed729dc5aa7d19541d96d6cf8e9137194207a04916d658e43168402f"
+dependencies = [
+ "crossbeam-deque",
+ "globset",
+ "log",
+ "memchr",
+ "regex-automata",
+ "same-file",
+ "walkdir",
+ "winapi-util",
+]
+
+[[package]]
+name = "indexmap"
+version = "2.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
+dependencies = [
+ "equivalent",
+ "hashbrown",
+]
+
+[[package]]
+name = "is_terminal_polyfill"
+version = "1.70.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "itertools"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "jiff"
+version = "0.2.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "668b7183bd07af9a4885f5c35b0cc5c83c4607a913c16b7e17291832910d2dcc"
+dependencies = [
+ "defmt",
+ "jiff-core",
+ "jiff-static",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
+]
+
+[[package]]
+name = "jiff-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7feca88439efe53da3754500c1851dedf3cb36c524dd5cf8225cc0794de95d09"
+dependencies = [
+ "defmt",
+]
+
+[[package]]
+name = "jiff-static"
+version = "0.2.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a69dcb3a21cfb32ce1cd056169337ca284af0766dd766e7878819b251a49204"
+dependencies = [
+ "jiff-core",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "js-sys"
+version = "0.3.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e0c1080212aad755ea003d18543e8768dd432c48819efd73a7bf1e39b7a5a3a"
+dependencies = [
+ "cfg-if",
+ "futures-util",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
+name = "libc"
+version = "0.2.189"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
+name = "log"
+version = "0.4.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "num-traits"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
+name = "once_cell"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "once_cell_polyfill"
+version = "1.70.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "oorandom"
+version = "11.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
+name = "page_size"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
+dependencies = [
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
+name = "pin-project-lite"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "plotters"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747"
+dependencies = [
+ "num-traits",
+ "plotters-backend",
+ "plotters-svg",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "plotters-backend"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df42e13c12958a16b3f7f4386b9ab1f3e7933914ecea48da7139435263a4172a"
+
+[[package]]
+name = "plotters-svg"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
+dependencies = [
+ "plotters-backend",
+]
+
+[[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
+dependencies = [
+ "portable-atomic",
+]
+
+[[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
+]
+
+[[package]]
+name = "proc-macro2"
+version = "1.0.107"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+dependencies = [
+ "unicode-ident",
+]
+
+[[package]]
+name = "quote"
+version = "1.0.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
+dependencies = [
+ "proc-macro2",
+]
+
+[[package]]
+name = "r-efi"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "redox_syscall"
+version = "0.5.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+dependencies = [
+ "bitflags 2.13.1",
+]
+
+[[package]]
+name = "regex"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-syntax"
+version = "0.8.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
+
+[[package]]
+name = "rustix"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+dependencies = [
+ "bitflags 2.13.1",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys",
+]
+
+[[package]]
+name = "rustversion"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "same-file"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
+dependencies = [
+ "winapi-util",
+]
+
+[[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "serde"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+dependencies = [
+ "serde_core",
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_core"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "serial_test"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699f4197115b8a7e7ff19c9a315a4bd6fffec26cc4626ef45ecaea389e081c6d"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e153fc76e1c6a068703d6d29c508a0b15c061c4b7e43da59cc097bc342673c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "shlex"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "similar"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f66ca1f7aca2474dc10c942eb22feffc897735f54cd1db90138c2fddb490987"
+dependencies = [
+ "bstr",
+]
+
+[[package]]
+name = "slab"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "smallvec"
+version = "1.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
+
+[[package]]
+name = "strsim"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "syn"
+version = "2.0.119"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom",
+ "once_cell",
+ "rustix",
+ "windows-sys",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "tiktoken-rs"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "027853bbf8c7763b77c5c595f1c271c7d536ced7d6f83452911b944621e57fc2"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bstr",
+ "fancy-regex",
+ "lazy_static",
+ "regex",
+ "rustc-hash",
+]
+
+[[package]]
+name = "tinytemplate"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "toml"
+version = "1.1.4+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+dependencies = [
+ "winnow",
+]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+
+[[package]]
+name = "tree-sitter"
+version = "0.26.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17ebdd3a5a7e28a1890b876fdbd0c3c0fe0a6336cffaa104f11b9f720c9daa29"
+dependencies = [
+ "cc",
+ "regex",
+ "regex-syntax",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-c"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9b2eb57a55fed6b00812912e730b7a275cf4fe98bfd6a5d76263d4438371728"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-cpp"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-go"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-java"
+version = "0.23.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0aa6cbcdc8c679b214e616fd3300da67da0e492e066df01bcf5a5921a71e90d6"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-javascript"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+
+[[package]]
+name = "tree-sitter-python"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-rust"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-typescript"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "unicode-ident"
+version = "1.0.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "utf8parse"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "walkdir"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
+dependencies = [
+ "same-file",
+ "winapi-util",
+]
+
+[[package]]
+name = "wasm-bindgen"
+version = "0.2.127"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b70935747edd64d89de3efa29d73789b806c15798f8e7dca4d8ac356b50ce70"
+dependencies = [
+ "cfg-if",
+ "once_cell",
+ "rustversion",
+ "wasm-bindgen-macro",
+ "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-macro"
+version = "0.2.127"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77775f8f3f7217702089053b94958f8f54061a3f663417df76e19cbdcca29bc1"
+dependencies = [
+ "quote",
+ "wasm-bindgen-macro-support",
+]
+
+[[package]]
+name = "wasm-bindgen-macro-support"
+version = "0.2.127"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e11d33f857dc2fb11b8bc75aee111aa9cbeb12cd9f25efd3d4c2a3dd4e235284"
+dependencies = [
+ "bumpalo",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-shared"
+version = "0.2.127"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ef64dbcc55df09c7e5a46182d181c2cfa3e925f3da937ea764728b4bbb9dcbf"
+dependencies = [
+ "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c435338968042f4f59a557f690a253676d47ce13ceb55d70100e7facf6620a30"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
+name = "winapi-util"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "windows-core"
+version = "0.62.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
+dependencies = [
+ "windows-implement",
+ "windows-interface",
+ "windows-link",
+ "windows-result",
+ "windows-strings",
+]
+
+[[package]]
+name = "windows-implement"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.59.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-result"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
+dependencies = [
+ "windows-link",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
+dependencies = [
+ "windows-link",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+dependencies = [
+ "windows-link",
+]
+
+[[package]]
+name = "winnow"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aee1b19627c7c60102ab80d3a9cbe18de90bfe03bfa6c3715447681f0e8c8af6"
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
+
+[[package]]
+name = "zerocopy"
+version = "0.8.56"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "556764e583adb45a9f8d413c2a147fa7e8d821e48e12b14fd560b607998b75eb"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.56"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2ab42fc20575779bd240faa45f94a74256f755c0fa9e89f0ede20d91d0cdfc1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 ```

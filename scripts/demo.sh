@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Demo script for context-builder v0.9.0 — records a clean asciinema demo
+# Demo script for context-builder v0.10.0 — records a clean asciinema demo
 # Usage: asciinema rec --cols 100 --rows 32 --command="bash scripts/demo.sh" docs/demo.cast
 
 set -e
@@ -42,7 +42,7 @@ cd "$PROJECT"
 clear
 echo ""
 printf '\033[1;33m  ╔══════════════════════════════════════════════════════╗\033[0m\n'
-printf '\033[1;33m  ║  ⚡ \033[1;37mcontext-builder\033[1;33m v0.9.0  — \033[0;36mTree-Sitter Edition\033[1;33m   ║\033[0m\n'
+printf '\033[1;33m  ║  ⚡ \033[1;37mcontext-builder\033[1;33m v0.10.0  — \033[0;36mTree-Sitter Edition\033[1;33m   ║\033[0m\n'
 printf '\033[1;33m  ╚══════════════════════════════════════════════════════╝\033[0m\n'
 printf '\033[2m    LLM context from your codebase, with AST superpowers\033[0m\n'
 echo ""

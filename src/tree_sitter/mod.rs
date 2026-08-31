@@ -48,6 +48,32 @@ pub fn is_supported_extension(_ext: &str) -> bool {
     false
 }
 
+/// Languages whose signature extractors honor `--visibility` filtering.
+///
+/// v0.10: Rust, Go, Java, and TypeScript assign real visibility to
+/// signatures; the others still extract everything and ignore the filter
+/// (tracked for v0.11). Callers use this to warn the user instead of
+/// silently returning unfiltered output.
+#[cfg(feature = "tree-sitter-base")]
+pub fn supports_visibility_filtering(ext: &str) -> bool {
+    match ext.to_lowercase().as_str() {
+        #[cfg(feature = "tree-sitter-rust")]
+        "rs" => true,
+        #[cfg(feature = "tree-sitter-go")]
+        "go" => true,
+        #[cfg(feature = "tree-sitter-java")]
+        "java" => true,
+        #[cfg(feature = "tree-sitter-ts")]
+        "ts" | "mts" | "cts" | "tsx" => true,
+        _ => false,
+    }
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+pub fn supports_visibility_filtering(_ext: &str) -> bool {
+    false
+}
+
 /// Extract file extension from a path.
 #[cfg(feature = "tree-sitter-base")]
 fn get_extension(path: &Path) -> Option<String> {

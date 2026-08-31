@@ -246,7 +246,7 @@ impl JavaScriptSupport {
                         full_signature,
                     });
                 } else if let Some(name) = self.find_child_text(&child, "identifier", source) {
-                    let full_signature = format!("const {}", &name);
+                    let full_signature = format!("const {name}");
                     signatures.push(Signature {
                         kind: SignatureKind::Constant,
                         name,

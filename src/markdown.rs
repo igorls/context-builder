@@ -158,12 +158,34 @@ pub fn generate_markdown(
         // Create a bounded channel for ordered chunks
         type ChunkResult = (usize, io::Result<Vec<u8>>);
         let (sender, receiver): (Sender<ChunkResult>, Receiver<ChunkResult>) =
-            bounded(num_cpus::get() * 2); // Buffer size based on CPU count
+            // Buffer size based on CPU count (std replacement — num_cpus was
+            // dropped in the v0.10 dependency diet).
+            bounded(
+                std::thread::available_parallelism()
+                    .map(|n| n.get() * 2)
+                    .unwrap_or(8),
+            );
 
         let writer_handle = {
             let mut output = output;
             let total_files = files.len();
             let budget = max_tokens;
+
+            // v0.10: the writer thread may need to re-render the crossing file
+            // with a content limit (--truncate wiring), so it needs the entries.
+            // Cloning the paths up front keeps the thread 'static and lets the
+            // rest of the function borrow `files` for par_iter.
+            let entry_paths: Vec<std::path::PathBuf> =
+                files.iter().map(|e| e.path().to_path_buf()).collect();
+
+            // Config data the writer may need to re-render with a content limit.
+            let w_line_numbers = line_numbers;
+            let w_encoding_strategy = encoding_strategy.map(|s| s.to_string());
+            let w_ts_config = ts_config.clone();
+            let w_token_encoding = token_encoding;
+            // `base_path` is a borrow from the caller; the writer thread must
+            // be 'static, so it gets an owned copy for any re-render.
+            let w_base_path = base_path.to_path_buf();
 
             thread::spawn(move || -> io::Result<()> {
                 let mut completed_chunks = std::collections::BTreeMap::new();
@@ -207,7 +229,35 @@ pub fn generate_markdown(
                                         if let Some(max) = budget
                                             && tokens_used + chunk_tokens > max
                                         {
-                                            let remaining = total_files - next_index;
+                                            // v0.10: --truncate wiring. Instead of omitting
+                                            // the crossing file, try to fit it into the
+                                            // remaining allowance (bytes ≈ tokens × 4).
+                                            // Falls back to omission when even a minimal
+                                            // section cannot fit.
+                                            let remaining_tokens = max.saturating_sub(tokens_used);
+                                            let mut limited_buf: Vec<u8> = Vec::new();
+                                            let fits = render_truncated_to_fit(
+                                                &w_base_path,
+                                                &entry_paths[next_index],
+                                                &mut limited_buf,
+                                                w_line_numbers,
+                                                w_encoding_strategy.as_deref(),
+                                                &w_ts_config,
+                                                w_token_encoding,
+                                                remaining_tokens,
+                                            );
+                                            if let Some(limited_tokens) = fits {
+                                                if let Err(e) = output.write_all(&limited_buf) {
+                                                    errors.push(format!(
+                                                        "Failed to write output for file index {}: {}",
+                                                        next_index, e
+                                                    ));
+                                                }
+                                                tokens_used += limited_tokens;
+                                            }
+                                            let remaining = total_files
+                                                - next_index
+                                                - if fits.is_some() { 1 } else { 0 };
                                             let notice = format!(
                                                 "---\n\n_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
                                                 max, remaining
@@ -331,7 +381,27 @@ pub fn generate_markdown(
 
                     // Budget applies to every file, including the first (no bypass).
                     if tokens_used + chunk_tokens > budget {
-                        let remaining = files.len() - idx;
+                        // v0.10: --truncate wiring. Instead of omitting the crossing
+                        // file, try to fit it into the remaining allowance (bytes ≈
+                        // tokens × 4 for typical source). If even a minimal section
+                        // (header + fence) cannot fit, fall back to omission.
+                        let remaining_tokens = budget.saturating_sub(tokens_used);
+                        let mut limited_buf: Vec<u8> = Vec::new();
+                        let fits = render_truncated_to_fit(
+                            base_path,
+                            entry.path(),
+                            &mut limited_buf,
+                            line_numbers,
+                            encoding_strategy,
+                            ts_config,
+                            token_encoding,
+                            remaining_tokens,
+                        );
+                        if let Some(limited_tokens) = fits {
+                            output.write_all(&limited_buf)?;
+                            tokens_used += limited_tokens;
+                        }
+                        let remaining = files.len() - idx - if fits.is_some() { 1 } else { 0 };
                         writeln!(output, "---\n")?;
                         writeln!(
                             output,
@@ -359,6 +429,35 @@ pub fn process_file(
     line_numbers: bool,
     encoding_strategy: Option<&str>,
     ts_config: &TreeSitterConfig,
+) -> io::Result<()> {
+    process_file_with_content_limit(
+        base_path,
+        file_path,
+        output,
+        line_numbers,
+        encoding_strategy,
+        ts_config,
+        None,
+    )
+}
+
+/// Processes a single file, optionally clamping its content to
+/// `content_limit` bytes (v0.10 `--truncate` wiring).
+///
+/// `content_limit` is the remaining byte allowance for a file that crossed the
+/// `--max-tokens` budget. The cut point honors the truncation mode:
+/// `smart` prefers an AST boundary via tree-sitter (char-safe per B19),
+/// `byte` (and any fallback) clamps to a UTF-8 char boundary. When truncation
+/// happens, a visible marker is emitted in the file section so downstream
+/// LLMs know the content is partial.
+pub fn process_file_with_content_limit(
+    base_path: &Path,
+    file_path: &Path,
+    output: &mut impl Write,
+    line_numbers: bool,
+    encoding_strategy: Option<&str>,
+    ts_config: &TreeSitterConfig,
+    content_limit: Option<usize>,
 ) -> io::Result<()> {
     let relative_path = file_path.strip_prefix(base_path).unwrap_or(file_path);
     info!("Processing file: {}", relative_path.display());
@@ -398,30 +497,7 @@ pub fn process_file(
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("text");
-    let language = match extension {
-        "rs" => "rust",
-        "js" => "javascript",
-        "ts" => "typescript",
-        "jsx" => "jsx",
-        "tsx" => "tsx",
-        "json" => "json",
-        "toml" => "toml",
-        "md" => "markdown",
-        "yaml" | "yml" => "yaml",
-        "html" => "html",
-        "css" => "css",
-        "py" => "python",
-        "java" => "java",
-        "cpp" => "cpp",
-        "c" => "c",
-        "h" => "c",
-        "hpp" => "cpp",
-        "sql" => "sql",
-        "sh" => "bash",
-        "xml" => "xml",
-        "lock" => "toml",
-        _ => extension,
-    };
+    let language = crate::languages::language_for_extension(extension);
 
     // Enhanced binary file handling with encoding detection and transcoding
     match fs::File::open(file_path) {
@@ -610,16 +686,35 @@ pub fn process_file(
             let signatures_only =
                 ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
 
+            // v0.10: --truncate wiring. When the file crossed the token budget, clamp
+            // its content to the remaining byte allowance at a mode-appropriate boundary
+            // (`smart` = AST boundary via tree-sitter; `byte` = char-boundary clamp).
+            let (content, original_len, truncated) = match content_limit {
+                Some(limit) if content.len() > limit => {
+                    let cut =
+                        content_cut_point(&content, limit, extension, ts_config.truncate.as_str());
+                    (&content[..cut], content.len(), cut < content.len())
+                }
+                _ => (content.as_str(), content.len(), false),
+            };
+
             if !signatures_only {
-                // Note: Smart truncation (`truncate: "smart"`) indicates AST-boundary
-                // truncation should be preferred when content needs truncating.
-                // Without a per-file max_tokens budget, no truncation is applied.
-                // The flag is stored for future use when per-file token limits are implemented.
-                write_text_content(output, &content, language, line_numbers)?;
+                write_text_content(output, content, language, line_numbers)?;
+                if truncated {
+                    writeln!(
+                        output,
+                        "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
+                        content.len(),
+                        original_len,
+                        ts_config.truncate
+                    )?;
+                }
             }
 
             // Tree-sitter enrichment: signatures and/or structure
-            write_tree_sitter_enrichment(output, &content, extension, ts_config)?;
+            // (computed over the *truncated* content when a budget cut applies,
+            // so the signature block matches what is actually displayed)
+            write_tree_sitter_enrichment(output, content, extension, ts_config)?;
         }
         Err(e) => {
             warn!(
@@ -637,6 +732,149 @@ pub fn process_file(
     }
 
     Ok(())
+}
+
+/// Compute the byte cut point for truncating `content` to `limit` bytes,
+/// honoring the `--truncate` mode.
+///
+/// - `smart`: prefers an AST boundary found via tree-sitter (falling back to a
+///   char-boundary clamp when the parser or grammar is unavailable). The
+///   returned point is always char-safe (B19), so slicing cannot panic.
+/// - `byte` (and any unknown mode): clamps `limit` down to a UTF-8 char
+///   boundary.
+///
+/// Returns 0 only if no valid cut fits the allowance.
+pub fn content_cut_point(
+    content: &str,
+    limit: usize,
+    extension: &str,
+    truncate_mode: &str,
+) -> usize {
+    if content.len() <= limit {
+        return content.len();
+    }
+
+    let point = if truncate_mode == "smart" {
+        crate::tree_sitter::find_smart_truncation_point(content, limit, extension)
+            // Grammar/parser unavailable (or no tree-sitter feature compiled in):
+            // fall back to the char-boundary clamp. Never raw-cut a multi-byte char.
+            .unwrap_or_else(|| char_boundary_clamp(content, limit))
+    } else {
+        char_boundary_clamp(content, limit)
+    };
+
+    // Belt-and-suspenders: any smart-cut result must still be char-safe to slice.
+    if !content.is_char_boundary(point) {
+        return char_boundary_clamp(content, point);
+    }
+    point
+}
+
+/// Clamp `position` down to the nearest preceding UTF-8 char boundary.
+fn char_boundary_clamp(content: &str, position: usize) -> usize {
+    let mut pos = position.min(content.len());
+    while pos > 0 && !content.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+/// Re-render a file clamped so the *whole rendered chunk* fits within
+/// `remaining_tokens`, verified with the real tokenizer.
+///
+/// Returns `Some(chunk_tokens)` and fills `buf` when the file can be emitted
+/// (truncated to fit), or `None` when even a minimal section cannot fit — the
+/// caller then omits the file exactly as pre-v0.10 behavior did. Shared by the
+/// serial and parallel budget paths so both builds truncate at the same
+/// boundary.
+///
+/// The section header (`### File: …`, size/mtime, fence, truncation marker) is
+/// a fixed token cost paid before any content fits, so it is measured first
+/// with a zero-byte content probe; the content allowance is what remains
+/// after it, converted to bytes at ~4 bytes/token and shrunk proportionally
+/// (with margin) if the rendered chunk overshoots.
+#[allow(clippy::too_many_arguments)]
+pub fn render_truncated_to_fit(
+    base_path: &Path,
+    file_path: &Path,
+    buf: &mut Vec<u8>,
+    line_numbers: bool,
+    encoding_strategy: Option<&str>,
+    ts_config: &TreeSitterConfig,
+    token_encoding: TokenEncoding,
+    remaining_tokens: usize,
+) -> Option<usize> {
+    if remaining_tokens == 0 {
+        return None;
+    }
+
+    // 1. Measure the fixed section cost (header + empty fence + marker) by
+    //    rendering with a zero-byte content allowance.
+    let mut base_probe: Vec<u8> = Vec::new();
+    if process_file_with_content_limit(
+        base_path,
+        file_path,
+        &mut base_probe,
+        line_numbers,
+        encoding_strategy,
+        ts_config,
+        Some(0),
+    )
+    .is_err()
+    {
+        return None;
+    }
+    let base_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&base_probe));
+
+    // Even an empty section would overdraw — omit the file instead.
+    if base_tokens >= remaining_tokens {
+        return None;
+    }
+
+    let content_token_budget = remaining_tokens - base_tokens;
+    let mut byte_allowance = content_token_budget.saturating_mul(4);
+
+    // 2. Render with the estimated content allowance and verify with the real
+    //    tokenizer; shrink proportionally on overshoot. Bounded attempts —
+    //    if it still doesn't fit, omission is safer than an over-budget emit.
+    for _ in 0..5 {
+        let mut probe: Vec<u8> = Vec::new();
+        if process_file_with_content_limit(
+            base_path,
+            file_path,
+            &mut probe,
+            line_numbers,
+            encoding_strategy,
+            ts_config,
+            Some(byte_allowance),
+        )
+        .is_err()
+        {
+            return None;
+        }
+
+        let chunk_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&probe));
+        if chunk_tokens <= remaining_tokens {
+            *buf = probe;
+            return Some(chunk_tokens);
+        }
+
+        if byte_allowance == 0 {
+            return None;
+        }
+
+        // Overshoot → shrink the content allowance proportionally with a 20%
+        // safety margin (covers `--line-numbers` inflating tokens per byte).
+        // Always shrinks by at least one byte so the loop terminates.
+        let scaled = byte_allowance
+            .saturating_mul(remaining_tokens)
+            .saturating_mul(4)
+            / 5
+            / chunk_tokens.max(1);
+        byte_allowance = scaled.min(byte_allowance.saturating_sub(1));
+    }
+
+    None
 }
 
 /// Write tree-sitter enrichment (signatures, structure) after file content.
@@ -657,6 +895,24 @@ pub fn write_tree_sitter_enrichment(
 
         let vis_filter: Visibility = ts_config.visibility.parse().unwrap_or(Visibility::All);
 
+        // v0.10: honest warnings. A non-"all" --visibility filter on a language
+        // whose extractor ignores it silently returns unfiltered signatures —
+        // warn once (per process, per language) instead of lying quietly.
+        // The full set (C, C++, Python, JS) is a v0.11 roadmap item.
+        if vis_filter != Visibility::All
+            && ts_config.signatures
+            && crate::tree_sitter::is_supported_extension(extension)
+            && !crate::tree_sitter::supports_visibility_filtering(extension)
+            && first_visibility_warning_for(extension)
+        {
+            warn!(
+                "--visibility {} has no effect for '{}' files: the extractor \
+                 does not classify visibility yet (planned for v0.11). \
+                 Signatures will include all symbols.",
+                ts_config.visibility, extension
+            );
+        }
+
         if ts_config.structure
             && let Some(structure) =
                 crate::tree_sitter::extract_structure_for_file(content, extension)
@@ -673,17 +929,7 @@ pub fn write_tree_sitter_enrichment(
                 crate::tree_sitter::extract_signatures_for_file(content, extension, vis_filter)
             && !signatures.is_empty()
         {
-            let language = match extension {
-                "rs" => "rust",
-                "js" | "mjs" | "cjs" => "javascript",
-                "ts" | "tsx" | "mts" | "cts" => "typescript",
-                "py" | "pyw" => "python",
-                "go" => "go",
-                "java" => "java",
-                "c" | "h" => "c",
-                "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => "cpp",
-                _ => extension,
-            };
+            let language = crate::languages::language_for_extension(extension);
             writeln!(output)?;
             writeln!(output, "**Signatures:**")?;
             writeln!(output)?;
@@ -702,6 +948,19 @@ pub fn write_tree_sitter_enrichment(
     }
 
     Ok(())
+}
+
+/// One-shot warning guard for `--visibility` no-op languages: returns `true`
+/// the first time `ext` is seen in this process, `false` after, so a
+/// 10,000-file repo logs one warning per language instead of per file.
+#[cfg(feature = "tree-sitter-base")]
+fn first_visibility_warning_for(ext: &str) -> bool {
+    use std::sync::OnceLock;
+    static WARNED: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let set = WARNED.get_or_init(Default::default);
+    let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
+    // `insert` returns true when the value was newly added (first time).
+    guard.insert(ext.to_string())
 }
 
 /// Detect text encoding using heuristics for common encodings
@@ -1755,5 +2014,193 @@ mod tests {
         assert!(result.is_ok());
         let content = fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("Directory Structure Report"));
+    }
+
+    // --- v0.10: --truncate wiring ------------------------------------- //
+
+    /// Helper: render a file with a content limit and return the output text.
+    fn render_limited(
+        base_path: &Path,
+        file_name: &str,
+        limit: Option<usize>,
+        truncate: &str,
+    ) -> String {
+        let file_path = base_path.join(file_name);
+        let mut buf: Vec<u8> = Vec::new();
+        process_file_with_content_limit(
+            base_path,
+            &file_path,
+            &mut buf,
+            false,
+            None,
+            &TreeSitterConfig {
+                truncate: truncate.to_string(),
+                ..Default::default()
+            },
+            limit,
+        )
+        .unwrap();
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    #[test]
+    fn test_truncate_smart_cuts_at_function_boundary() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(
+            base_path.join("a.rs"),
+            "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+        )
+        .unwrap();
+
+        // Limit smaller than full content — smart mode must return a complete
+        // function, not a mid-line cut.
+        let out = render_limited(base_path, "a.rs", Some(20), "smart");
+        assert!(out.contains("File content truncated"), "{out}");
+        // The smart cut should land on a complete function boundary: the last
+        // rendered line ends with '}' (no dangling partial signature).
+        let body_lines: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with("fn ") && l.ends_with("}"))
+            .collect();
+        assert!(!body_lines.is_empty(), "expected complete fns, got: {out}");
+    }
+
+    #[test]
+    fn test_truncate_byte_clamps_to_char_boundary() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        // Multibyte content: cutting inside a char must not produce invalid UTF-8.
+        fs::write(
+            base_path.join("u.rs"),
+            "// 世界世界世界世界世界\nfn u() {}\n",
+        )
+        .unwrap();
+
+        let out = render_limited(base_path, "u.rs", Some(10), "byte");
+        assert!(out.contains("File content truncated"), "{out}");
+        // Rendered output must remain valid UTF-8 (lossy conversion never fails,
+        // but the content slice itself must have been char-boundary safe: the
+        // rendered fn body survives intact whenever it is included).
+        assert!(out.contains("```rust"));
+    }
+
+    #[test]
+    fn test_truncate_no_limit_emits_full_content() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(base_path.join("a.rs"), "fn one() {}\nfn two() {}\n").unwrap();
+
+        let out = render_limited(base_path, "a.rs", None, "smart");
+        assert!(out.contains("fn one() {}"));
+        assert!(out.contains("fn two() {}"));
+        assert!(!out.contains("File content truncated"));
+    }
+
+    #[test]
+    fn test_truncate_limit_above_content_no_marker() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(base_path.join("a.rs"), "fn one() {}\n").unwrap();
+
+        // Limit larger than content: no truncation, no marker.
+        let out = render_limited(base_path, "a.rs", Some(1000), "smart");
+        assert!(out.contains("fn one() {}"));
+        assert!(!out.contains("File content truncated"));
+    }
+
+    #[test]
+    fn test_render_truncated_to_fit_fits_or_none() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        fs::write(
+            base_path.join("a.rs"),
+            "fn one() {}\nfn two() {}\nfn three() {}\n",
+        )
+        .unwrap();
+
+        // Generous allowance → fits (truncated or whole).
+        let mut buf: Vec<u8> = Vec::new();
+        let fits = render_truncated_to_fit(
+            base_path,
+            &base_path.join("a.rs"),
+            &mut buf,
+            false,
+            None,
+            &TreeSitterConfig {
+                truncate: "smart".to_string(),
+                ..Default::default()
+            },
+            TokenEncoding::default(),
+            60,
+        );
+        assert!(fits.is_some(), "expected the section to fit");
+        assert!(!buf.is_empty());
+
+        // Zero allowance → omitted.
+        let mut buf2: Vec<u8> = Vec::new();
+        let fits2 = render_truncated_to_fit(
+            base_path,
+            &base_path.join("a.rs"),
+            &mut buf2,
+            false,
+            None,
+            &TreeSitterConfig {
+                truncate: "smart".to_string(),
+                ..Default::default()
+            },
+            TokenEncoding::default(),
+            0,
+        );
+        assert!(fits2.is_none());
+        assert!(buf2.is_empty());
+    }
+
+    #[test]
+    fn test_budget_truncates_crossing_file_instead_of_omitting() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let output_path = base_path.join("out.md");
+
+        fs::write(base_path.join("small.rs"), "fn small() {}\n").unwrap();
+        // 60 functions ≈ 250 rendered tokens — guaranteed to cross the
+        // remaining allowance after the header + small.rs on any OS.
+        let big_content: String = (0..60)
+            .map(|i| format!("fn pad_{i}() {{ let v = {i}; }}\n"))
+            .collect();
+        fs::write(base_path.join("big.rs"), big_content).unwrap();
+
+        let files = crate::file_utils::collect_files(base_path, &["rs".into()], &[], &[]).unwrap();
+        let file_tree = crate::tree::build_file_tree(&files, base_path);
+
+        let result = generate_markdown(
+            &output_path.to_string_lossy(),
+            &base_path.to_string_lossy(),
+            &["rs".to_string()],
+            &[],
+            &file_tree,
+            &files,
+            base_path,
+            false,
+            None,
+            // 250 tokens: header consumes ~100 (long temp path), small.rs ~30, so
+            // big.rs crosses the line — it must be truncated in place, not omitted.
+            // (A much smaller budget would correctly omit everything; that case is
+            // covered by render_truncated_to_fit returning None.)
+            Some(250),
+            TokenEncoding::default(),
+            &TreeSitterConfig {
+                truncate: "smart".to_string(),
+                ..Default::default()
+            },
+        );
+
+        assert!(result.is_ok());
+        let out = fs::read_to_string(&output_path).unwrap();
+        // The crossing file must be *present* (truncated), not omitted wholesale.
+        assert!(
+            out.contains("big.rs") && out.contains("File content truncated"),
+            "expected big.rs to be truncated in place, got:\n{out}"
+        );
     }
 }

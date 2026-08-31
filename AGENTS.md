@@ -10,6 +10,20 @@ Context Builder is a **blazing-fast Rust CLI** for aggregating entire codebases 
 
 ---
 
+## Deep Think Authority Mode (optional handoffs)
+
+When the user points at `docs/handoffs/**` or an AUTHORITY document:
+
+1. Follow **Authority Mode** rules in `docs/agent-harness/antigravity-system-prompt.md`.
+2. AUTHORITY is law for implementation; do **not** redesign.
+3. If the live tree contradicts AUTHORITY, stop with a **CONFLICT** packet (`docs/agent-harness/templates/05-conflict.md`).
+4. Prefer tools on the real repo; do not demand a re-dump of the full context-builder snapshot unless tools are unavailable.
+5. End with a **RESULT** block (`docs/agent-harness/templates/04-result.md`).
+
+Pipeline overview: `docs/agent-harness/README.md`. Skill entrypoint: `SKILL.md`.
+
+---
+
 ## Tech Stack
 
 | Technology | Usage |
@@ -21,7 +35,7 @@ Context Builder is a **blazing-fast Rust CLI** for aggregating entire codebases 
 | **Diffing** | `similar` (unified diffs) |
 | **File traversal** | `ignore` crate (gitignore-aware) |
 | **Token counting** | `tiktoken-rs` (`cl100k_base`) |
-| **Caching** | JSON + `fs2` file locking |
+| **Caching** | JSON snapshots + `std::fs::File` advisory locking (fs2 removed in v0.9.0) |
 | **Config** | TOML (`context-builder.toml`) |
 | **Encoding** | `encoding_rs` (transcoding non-UTF-8) |
 | **Logging** | `env_logger` |
@@ -43,9 +57,18 @@ context-builder/
 │   ├── tree.rs              # BTreeMap file tree (deterministic ordering)
 │   ├── state.rs             # ProjectState/FileState structured snapshots
 │   ├── markdown.rs          # Streaming file renderer, binary detection, encoding, parallel
-│   ├── cache.rs             # JSON-based caching with fs2 locking, old cache migration
+│   ├── cache.rs             # JSON-based caching with std::fs::File locking, old cache migration
 │   ├── diff.rs              # Per-file unified diffs via similar
-│   └── token_count.rs       # Real tokenization via tiktoken-rs (cl100k_base, lazy init)
+│   ├── token_count.rs       # Real tokenization via tiktoken-rs (o200k/cl100k, lazy init)
+│   ├── languages.rs         # Canonical extension → code-fence language map (v0.10)
+│   └── tree_sitter/         # AST signatures/structure/smart-truncation (feature-gated)
+│       ├── language_support.rs  # Signature/Visibility types, LanguageSupport trait
+│       ├── signatures.rs        # extract_signatures + markdown formatting
+│       ├── structure.rs         # structural summaries
+│       ├── truncation.rs        # AST-boundary smart truncation (char-safe per B19)
+│       ├── mod.rs               # feature-gated facade (is_supported_extension, etc.)
+│       └── languages/           # per-language extractors: rust, javascript, typescript,
+│                                #   python, go, java, c, cpp
 ├── tests/                   # 10 integration test files
 ├── benches/                 # Criterion benchmark suite
 ├── scripts/                 # generate_samples.rs (benchmark dataset generator)
@@ -103,6 +126,16 @@ cargo fmt --all
 |---|---|---|
 | `parallel` | ✅ | Rayon for parallel file processing |
 | `samples-bin` | ❌ | Exposes `generate_samples` binary for benchmarking |
+| `tree-sitter-base` | ❌ | Core tree-sitter parsing plumbing |
+| `tree-sitter-rust` | ❌ | Rust signature extraction |
+| `tree-sitter-js` | ❌ | JavaScript signature extraction |
+| `tree-sitter-ts` | ❌ | TypeScript/TSX signature extraction |
+| `tree-sitter-python` | ❌ | Python signature extraction |
+| `tree-sitter-go` | ❌ | Go signature extraction |
+| `tree-sitter-java` | ❌ | Java signature extraction |
+| `tree-sitter-c` | ❌ | C signature extraction |
+| `tree-sitter-cpp` | ❌ | C++ signature extraction |
+| `tree-sitter-all` | ❌ | Enables all eight language extractors |
 
 ---
 
@@ -160,3 +193,5 @@ cargo fmt --all
 2. Bump `version` in `Cargo.toml`, add entry to `CHANGELOG.md`
 3. `git commit -am "chore(release): vX.Y.Z" && git tag vX.Y.Z && git push && git push --tags`
 4. `cargo publish`
+5. Tag push triggers `.github/workflows/release.yml` — builds binaries for linux/darwin/windows targets and publishes the GitHub release (with SHA256SUMS).
+6. Bump the winget manifest under `winget/manifests/i/igorls/context-builder/<version>/` and submit to the winget-pkgs flow.

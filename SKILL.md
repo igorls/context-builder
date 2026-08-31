@@ -1,8 +1,12 @@
 ---
 name: context-builder
-description: Generate LLM-optimized codebase context from any directory using context-builder CLI
+description: >
+  Package codebases into LLM-optimized markdown, and run the Deep Think Authority
+  pipeline (context-builder → Deep Think review → structured AUTHORITY → Flash/Antigravity
+  implementation agent). Use when generating project context, preparing Deep Think reviews,
+  or binding a weaker coding agent to a senior reasoning pass.
 homepage: https://github.com/igorls/context-builder
-version: 0.9.0
+version: 0.10.0
 requires:
   - context-builder
 ---
@@ -10,6 +14,8 @@ requires:
 # Context Builder — Agentic Skill
 
 Generate a single, structured markdown file from any codebase directory. The output is optimized for LLM consumption with relevance-based file ordering, AST-aware code signatures, automatic token budgeting, and smart defaults.
+
+**Also:** orchestrate the **Deep Think Authority** handoff so tool-using agents (Antigravity, Gemini Flash, etc.) implement senior one-shot reviews instead of freelancing. Full harness: [`docs/agent-harness/`](docs/agent-harness/README.md).
 
 ## Installation
 
@@ -20,7 +26,7 @@ cargo install context-builder --features tree-sitter-all
 
 Pre-built binaries with SHA256 checksums are also available for manual download from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
 
-Verify: `context-builder --version` (expected: `0.9.0`)
+Verify: `context-builder --version` (expected: `0.10.0`)
 
 
 ## Security & Path Scoping
@@ -41,10 +47,62 @@ Verify: `context-builder --version` (expected: `0.9.0`)
 ## When to Use
 
 - **Deep code review** — Feed an entire codebase to an LLM for architecture analysis or bug hunting
+- **Deep Think → agent pipeline** — Package context for Ultra Deep Think, then bind Antigravity/Flash to the resulting AUTHORITY document
 - **Onboarding** — Generate a project snapshot for understanding unfamiliar codebases
 - **Diff-based updates** — After code changes, generate only the diffs to update an LLM's understanding
 - **AST signatures** — Extract function/class signatures for token-efficient structural understanding
 - **Cross-project research** — Quickly package a dependency's source for analysis
+
+## Deep Think Authority Pipeline (primary multi-model workflow)
+
+Weak agent harnesses (e.g. Gemini Flash in Antigravity) are strong at **tools** and weak at **novel reasoning**. Deep Think (Ultra web) is the inverse. Do not try to make Flash invent architecture. **Inject Deep Think as law**, then let Flash execute.
+
+```
+context-builder  →  Deep Think (AUTHORITY)  →  Agent BUILD  →  RESULT
+                         ↑                         │
+                         └──── CONFLICT / DEBUG ────┘
+```
+
+### Agent rules (always)
+
+1. **AUTHORITY is law** — do not redesign, re-prioritize, or “improve” beyond the packet
+2. **Stop on conflict** — if the live repo contradicts AUTHORITY, emit CONFLICT; do not freestyle
+3. **Do not re-inject the full context dump into the agent** — Deep Think already distilled it; the agent should use tools on the real tree
+4. **Prefer a tight AUTHORITY** (≈2–4k tokens): verdict, ordered file-level steps, verification commands
+5. **Verification is mandatory** before DONE
+
+### Step-by-step
+
+```bash
+# 0) Size check
+context-builder -d /abs/path/to/project --token-count
+
+# 1) Package for Deep Think (adjust -f to the language)
+mkdir -p docs/handoffs/$(date +%Y-%m-%d)-topic
+context-builder -d /abs/path/to/project \
+  -f rs,toml,md \
+  --max-tokens 120000 \
+  -y -o docs/handoffs/$(date +%Y-%m-%d)-topic/00-context.md
+```
+
+2. **Deep Think (Ultra web):** attach `00-context.md`, paste [`docs/agent-harness/templates/01-problem.md`](docs/agent-harness/templates/01-problem.md), require AUTHORITY shape from [`02-authority.md`](docs/agent-harness/templates/02-authority.md).
+3. **Human:** trim fluff → save `02-authority.md` (budget beats volume for Flash).
+4. **Agent:** load system prompt from [`docs/agent-harness/antigravity-system-prompt.md`](docs/agent-harness/antigravity-system-prompt.md); paste [`03-build.md`](docs/agent-harness/templates/03-build.md) with AUTHORITY inlined or path-referenced.
+5. **Agent returns** RESULT ([`04-result.md`](docs/agent-harness/templates/04-result.md)) or CONFLICT ([`05-conflict.md`](docs/agent-harness/templates/05-conflict.md)).
+6. **Optional second Deep Think pass:** `context-builder -d ... -y --diff-only` after implementation.
+
+Harness overview, attention budget, and re-escalation table: [`docs/agent-harness/README.md`](docs/agent-harness/README.md).
+
+### What this changes about Flash’s behavior
+
+| Without AUTHORITY | With engineered AUTHORITY |
+| --- | --- |
+| Invents architecture mid-task | Executes ordered steps |
+| Thrash-refactors “while here” | Surgical diffs only |
+| Vague “done” | Verification commands required |
+| Silent plan failure | CONFLICT stop → re-escalate |
+
+It does **not** give Flash Deep Think’s raw intelligence. It **meaningfully** raises implementation fidelity when AUTHORITY is high quality.
 
 ## Core Workflow
 
@@ -157,26 +215,20 @@ These behaviors require no configuration:
 | `--signatures` | AST signature extraction | Requires `tree-sitter-all` feature at install |
 | `--structure` | Structural summary | Pair with `--signatures` for compact output |
 | `--visibility <V>` | Filter by visibility | `all` (default), `public` (public API only) |
-| `--truncate <MODE>` | Truncation strategy | `smart` (AST-aware) or `simple` |
+| `--truncate <MODE>` | Truncation strategy for `--max-tokens` | `smart` (AST-aware) or `byte` |
 | `--init` | Create config file | Auto-detects project file types |
 | `--clear-cache` | Reset diff cache | Use if diff output seems stale |
 
 ## Recipes
 
-### Recipe: Deep Think Code Review
-
-Generate a scoped context file, then prompt an LLM for deep analysis:
+### Recipe: Deep Think Code Review (one-shot only)
 
 ```bash
-# Step 1: Generate focused context
 context-builder -d /path/to/project -f rs,toml --max-tokens 120000 -y -o docs/deep_think_context.md
-
-# Step 2: Feed to LLM with a review prompt
-# Attach docs/deep_think_context.md and ask for:
-# - Architecture review
-# - Bug hunting
-# - Performance analysis
+# Attach to Deep Think + a structured review prompt (see docs/research/prompts/)
 ```
+
+For **review → implement** (Deep Think then Antigravity), use the [Deep Think Authority Pipeline](#deep-think-authority-pipeline-primary-multi-model-workflow) above, not a freeform paste.
 
 ### Recipe: API Surface Review (signatures only)
 

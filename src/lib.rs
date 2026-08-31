@@ -11,6 +11,7 @@ pub mod config;
 pub mod config_resolver;
 pub mod diff;
 pub mod file_utils;
+pub mod languages;
 pub mod markdown;
 pub mod state;
 pub mod token_count;
@@ -797,21 +798,10 @@ fn generate_markdown_with_diff(
                 output.push_str(&format!("- Size: {} bytes\n", file_state.size));
                 output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
 
-                // Determine language from file extension
+                // Determine language from file extension (canonical map —
+                // same fence language as the main rendering path)
                 let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
-                let language = match extension {
-                    "rs" => "rust",
-                    "js" => "javascript",
-                    "ts" => "typescript",
-                    "py" => "python",
-                    "json" => "json",
-                    "toml" => "toml",
-                    "md" => "markdown",
-                    "yaml" | "yml" => "yaml",
-                    "html" => "html",
-                    "css" => "css",
-                    _ => extension,
-                };
+                let language = crate::languages::language_for_extension(extension);
 
                 // When --signatures is active, only suppress content for supported code files
                 let signatures_only =

@@ -92,16 +92,19 @@ jobs:
           file: ./coverage/lcov.info
 
   msrv:
-    name: Minimum Supported Rust Version
+    name: Minimum Supported Rust Version (1.89)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin the exact declared MSRV (rust-version = "1.89") — previously this
+      # job built with `stable`, so it duplicated the main job and never
+      # actually verified the MSRV (review §4.1).
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
+          toolchain: "1.89"
 
-      - name: Check if project builds with MSRV
-        run: cargo check --verbose
+      - name: Verify MSRV build (all features)
+        run: cargo check --all-features --verbose
