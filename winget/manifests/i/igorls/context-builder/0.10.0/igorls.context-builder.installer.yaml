@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
+PackageIdentifier: igorls.context-builder
+PackageVersion: 0.10.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: context-builder.exe
+  PortableCommandAlias: context-builder
+ReleaseDate: 2026-08-31
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/igorls/context-builder/releases/download/v0.10.0/context-builder-x86_64-pc-windows-msvc.zip
+  # PLACEHOLDER — must be replaced with the SHA256 from the release's
+  # SHA256SUMS before submitting the winget-pkgs PR. The release workflow
+  # generates it at the end of the build matrix.
+  InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: installer
+ManifestVersion: 1.12.0
