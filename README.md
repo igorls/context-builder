@@ -21,7 +21,7 @@ A blazing-fast CLI for creating LLM context from your entire codebase.
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/igorls/context-builder/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/igorls/context-builder/blob/master/LICENSE)
 
 </div>
 
