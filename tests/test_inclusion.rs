@@ -240,3 +240,123 @@ fn default_output_name_from_parent_keeps_nested_output_md() {
     assert!(content.contains("PARENT_NESTED_MARKER"));
     assert!(sections.contains(&"### File: `a.txt`"));
 }
+
+fn run_cli(current_dir: &Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_context-builder"))
+        .current_dir(current_dir)
+        .args(args)
+        .env_remove("CB_SILENT")
+        .output()
+        .expect("failed to spawn context-builder")
+}
+
+/// Repro: `$HOME`-style `.gitignore` (`*` and `!*/`) above a project that has
+/// no `.git`. Those parent rules must not apply. `-d .` is relative, so the
+/// ancestor search has to resolve the working directory.
+#[test]
+fn parent_gitignore_without_repo_keeps_project_files() {
+    let dir = tempdir().unwrap();
+    let parent = dir.path();
+    fs::write(parent.join(".gitignore"), "*\n!*/\n").unwrap();
+    let proj = parent.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    fs::write(proj.join("keep.txt"), "PARENT_IGNORE_KEEP\n").unwrap();
+    fs::write(proj.join(".gitignore"), "secret.txt\n").unwrap();
+    fs::write(proj.join("secret.txt"), "PARENT_SECRET\n").unwrap();
+
+    let result = run_cli(&proj, &["-d", ".", "-o", "out.md", "-y"]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "status: {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        result.status
+    );
+    assert!(
+        !stderr.contains("No files matched"),
+        "non-empty walk warned: {stderr}"
+    );
+    assert!(stdout.contains("Documentation created successfully"));
+
+    let content = fs::read_to_string(proj.join("out.md")).unwrap();
+    let sections = file_sections(&content);
+    assert!(
+        sections.contains(&"### File: `keep.txt`"),
+        "parent .gitignore hid the tree: {sections:?}\n{content}"
+    );
+    assert!(content.contains("PARENT_IGNORE_KEEP"));
+    assert!(
+        !content.contains("PARENT_SECRET"),
+        "in-tree .gitignore was ignored: {content}"
+    );
+}
+
+/// A project nested inside a repository still honors the repo-root
+/// `.gitignore`, including when `-d` is relative. A `*` pattern above the
+/// repository must not apply.
+#[test]
+fn nested_project_inside_git_repo_honors_repo_gitignore() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    fs::write(home.join(".gitignore"), "*\n!*/\n").unwrap();
+    let repo = home.join("repo");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::write(repo.join(".gitignore"), "secret.txt\n").unwrap();
+    let proj = repo.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    fs::write(proj.join("keep.txt"), "REPO_KEEP\n").unwrap();
+    fs::write(proj.join("secret.txt"), "REPO_SECRET\n").unwrap();
+
+    let result = run_cli(&proj, &["-d", ".", "-o", "out.md", "-y"]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "status: {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        result.status
+    );
+
+    let content = fs::read_to_string(proj.join("out.md")).unwrap();
+    assert!(
+        content.contains("REPO_KEEP"),
+        "repo parent rules or the dotfiles pattern hid keep.txt:\n{content}"
+    );
+    assert!(
+        !content.contains("REPO_SECRET"),
+        "repo-root .gitignore was not applied:\n{content}"
+    );
+}
+
+/// An in-tree `.gitignore` that matches every file still exits 0 and writes
+/// the document, and prints one stderr warning.
+#[test]
+fn empty_walk_warns_once_and_exits_zero() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), "*\n!*/\n").unwrap();
+    fs::write(root.join("a.txt"), "hidden-by-gitignore\n").unwrap();
+
+    let result = run_cli(root, &["-d", ".", "-o", "out.md", "-y"]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "status: {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        result.status
+    );
+    assert_eq!(
+        stderr.matches("No files matched").count(),
+        1,
+        "expected one warning, stderr was: {stderr}"
+    );
+    assert!(stderr.contains("check .gitignore, --ignore, and --filter"));
+    assert!(stdout.contains("Documentation created successfully"));
+
+    let content = fs::read_to_string(root.join("out.md")).unwrap();
+    assert!(content.contains("# Directory Structure Report"));
+    assert!(
+        file_sections(&content).is_empty(),
+        "expected no file sections: {content}"
+    );
+    assert!(!content.contains("hidden-by-gitignore"));
+}

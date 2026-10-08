@@ -254,6 +254,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         &final_args.ignore,
         &auto_ignores,
     )?;
+    if !silent && files.is_empty() {
+        eprintln!("Warning: No files matched; check .gitignore, --ignore, and --filter");
+    }
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
         eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);

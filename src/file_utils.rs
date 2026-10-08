@@ -173,10 +173,22 @@ pub fn collect_files(
     auto_ignores: &[String],
 ) -> io::Result<Vec<DirEntry>> {
     let mut walker = WalkBuilder::new(base_path);
-    // Honor `.gitignore` even when the directory is not a git checkout.
-    // The crate defaults to `require_git(true)`, which parses `.gitignore`
-    // but does not apply it unless a `.git` directory is present.
-    walker.require_git(false);
+    // A `.git` directory or gitdir file at the walk root or any ancestor is a
+    // real checkout. Keep the crate defaults (`require_git(true)`,
+    // `parents(true)`): parent ignore files inside that repo apply, and ignore
+    // files above the repository do not.
+    //
+    // With no checkout, `require_git(false)` alone would still read every
+    // ancestor `.gitignore` (a `$HOME` dotfiles pattern of `*` and `!*/`
+    // then hides every file). `parents(false)` limits `.gitignore` and
+    // `.ignore` to files inside the walk root, which is the B6 fix.
+    if git_link_in_ancestors(base_path) {
+        walker.require_git(true);
+        walker.parents(true);
+    } else {
+        walker.require_git(false);
+        walker.parents(false);
+    }
     // Skip cache directories (Cargo's `target/` ships a CACHEDIR.TAG) without
     // descending into them. The root itself is never filtered out by the walker.
     walker.filter_entry(|entry| !directory_has_cachedir_tag(entry));
@@ -214,7 +226,6 @@ pub fn collect_files(
         ".angular",    // Angular cache
         "dist",        // Common build output
         "build",       // Common build output
-        "target",      // Cargo build output
         ".gradle",     // Gradle cache
         ".cargo",      // Cargo registry cache
     ];
@@ -224,6 +235,12 @@ pub fn collect_files(
         if let Err(e) = override_builder.add(&pattern) {
             log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
         }
+    }
+    // `target` is anchored to the walk root. An unanchored name would hide a
+    // real source directory such as `src/target/`. Cargo build output at any
+    // depth still carries a CACHEDIR.TAG and is skipped above.
+    if let Err(e) = override_builder.add("!/target") {
+        log::warn!("Skipping invalid default-ignore '/target': {}", e);
     }
 
     // User-specified ignore patterns (added AFTER defaults so they can override)
@@ -302,6 +319,60 @@ pub fn collect_files(
 /// True when `entry` is a directory that contains a `CACHEDIR.TAG` file.
 fn directory_has_cachedir_tag(entry: &DirEntry) -> bool {
     entry.file_type().is_some_and(|ft| ft.is_dir()) && entry.path().join(CACHEDIR_TAG).is_file()
+}
+
+/// True when the walk root or one of its ancestors contains a `.git` directory
+/// or file (worktrees and submodules use a gitdir file).
+///
+/// Relative roots are resolved against the current directory first. A relative
+/// `-d .` otherwise has no real ancestors, so a repository above the process
+/// cwd would be missed.
+fn git_link_in_ancestors(base_path: &Path) -> bool {
+    let mut current = absolute_walk_root(base_path);
+    loop {
+        if is_git_link(&current.join(".git")) {
+            return true;
+        }
+        if !current.pop() {
+            return false;
+        }
+    }
+}
+
+fn is_git_link(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_dir() || meta.is_file())
+}
+
+fn absolute_walk_root(base_path: &Path) -> PathBuf {
+    let joined = if base_path.is_absolute() {
+        base_path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(base_path),
+            Err(_) => base_path.to_path_buf(),
+        }
+    };
+    let normalized = normalize_lexically(&joined);
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+/// Collapse `.` and `..` without touching the filesystem.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// True when `path` is a previous context-builder report.
@@ -918,14 +989,24 @@ mod tests {
         fs::create_dir_all(base.join("generated")).unwrap();
         fs::write(base.join("generated/junk.txt"), "junk").unwrap();
 
-        // Cargo-style build dir: name `target` plus CACHEDIR.TAG.
+        // Root `target/` with no tag. The default ignore is anchored at the
+        // walk root, so this directory is still excluded.
         fs::create_dir_all(base.join("target/debug")).unwrap();
+        fs::write(base.join("target/debug/x.d"), "dep").unwrap();
+
+        // Nested source directory named `target`, no tag — must be kept.
+        fs::create_dir_all(base.join("src/target")).unwrap();
+        fs::write(base.join("src/target/notes.rs"), "fn notes() {}").unwrap();
+
+        // Nested Cargo output: the tag skips it even though the name is not
+        // anchored past the walk root.
+        fs::create_dir_all(base.join("pkg/target")).unwrap();
         fs::write(
-            base.join("target/CACHEDIR.TAG"),
+            base.join("pkg/target/CACHEDIR.TAG"),
             "Signature: 8a477f597d28d172789f06886806bc55\n",
         )
         .unwrap();
-        fs::write(base.join("target/debug/x.d"), "dep").unwrap();
+        fs::write(base.join("pkg/target/out.txt"), "artifact").unwrap();
 
         // Cache dir that is not named `target` — only the tag should exclude it.
         fs::create_dir_all(base.join("my-cache")).unwrap();
@@ -936,17 +1017,83 @@ mod tests {
         .unwrap();
         fs::write(base.join("my-cache/blob.txt"), "blob").unwrap();
 
-        // Name-based default, no tag.
-        fs::create_dir_all(base.join("pkg/target")).unwrap();
-        fs::write(base.join("pkg/target/out.txt"), "artifact").unwrap();
+        // Nested `.gitignore` still applies when there is no checkout.
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("sub/.gitignore"), "nested-secret.txt\n").unwrap();
+        fs::write(base.join("sub/nested-secret.txt"), "nope").unwrap();
+        fs::write(base.join("sub/ok.txt"), "yes").unwrap();
 
         let rel = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
         assert!(rel.contains(&"src/main.rs".to_string()));
         assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(rel.contains(&"src/target/notes.rs".to_string()));
+        assert!(rel.contains(&"sub/ok.txt".to_string()));
         assert!(!rel.iter().any(|p| p.contains("secret.log")));
         assert!(!rel.iter().any(|p| p.contains("generated/")));
-        assert!(!rel.iter().any(|p| p.contains("target/")));
+        assert!(
+            !rel.iter()
+                .any(|p| p == "target" || p.starts_with("target/"))
+        );
+        assert!(!rel.iter().any(|p| p.contains("pkg/target")));
         assert!(!rel.iter().any(|p| p.contains("my-cache/")));
+        assert!(!rel.iter().any(|p| p.contains("nested-secret.txt")));
+    }
+
+    #[test]
+    fn parent_gitignore_without_git_keeps_tree_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "*\n!*/\n").unwrap();
+        let proj = dir.path().join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(proj.join("keep.txt"), "keep").unwrap();
+        fs::write(proj.join(".gitignore"), "secret.txt\n").unwrap();
+        fs::write(proj.join("secret.txt"), "nope").unwrap();
+
+        let rel = to_rel_paths(collect_files(&proj, &[], &[], &[]).unwrap(), &proj);
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(!rel.iter().any(|p| p == "secret.txt"));
+    }
+
+    #[test]
+    fn repo_root_gitignore_applies_inside_nested_project() {
+        let dir = tempdir().unwrap();
+        // Dotfiles pattern above the repository must not apply.
+        fs::write(dir.path().join(".gitignore"), "*\n!*/\n").unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(repo.join(".gitignore"), "secret.txt\n").unwrap();
+        let proj = repo.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(proj.join("keep.txt"), "keep").unwrap();
+        fs::write(proj.join("secret.txt"), "nope").unwrap();
+
+        let rel = to_rel_paths(collect_files(&proj, &[], &[], &[]).unwrap(), &proj);
+        assert!(
+            rel.contains(&"keep.txt".to_string()),
+            "parent dotfiles gitignore hid the tree: {rel:?}"
+        );
+        assert!(
+            !rel.iter().any(|p| p == "secret.txt"),
+            "repo-root .gitignore was not applied: {rel:?}"
+        );
+    }
+
+    #[test]
+    fn gitdir_file_counts_as_a_repo() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "*\n!*/\n").unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(".git"), "gitdir: /somewhere\n").unwrap();
+        fs::write(repo.join(".gitignore"), "secret.txt\n").unwrap();
+        let proj = repo.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(proj.join("keep.txt"), "keep").unwrap();
+        fs::write(proj.join("secret.txt"), "nope").unwrap();
+
+        let rel = to_rel_paths(collect_files(&proj, &[], &[], &[]).unwrap(), &proj);
+        assert!(rel.contains(&"keep.txt".to_string()), "{rel:?}");
+        assert!(!rel.iter().any(|p| p == "secret.txt"), "{rel:?}");
     }
 
     #[test]

@@ -5,8 +5,9 @@ All notable changes to this project will be documented in this file.
 ## Unreleased
 
 - **File inclusion**
-  - `.gitignore` is applied even when the directory has no `.git` checkout
-  - Directories containing a `CACHEDIR.TAG` file are skipped, and `target` is now a default excluded directory (with `build` and `dist`)
+  - `.gitignore` and `.ignore` files inside the `-d` tree apply even when that tree has no checkout. Ignore files above `-d` apply only when a `.git` directory or file exists at the walk root or an ancestor (a real repository, including worktrees). Otherwise parent ignore files are not read
+  - Directories containing a `CACHEDIR.TAG` file are skipped. `target` is a default ignore only at the walk root (`/target`); a nested source directory such as `src/target/` is kept. Nested Cargo `target/` directories are still skipped via `CACHEDIR.TAG`
+  - When the walk matches no files, one stderr warning is printed (`No files matched; check .gitignore, --ignore, and --filter`) and the process still exits 0
   - A previous context-builder report is not pulled back in. A file is skipped when its header is `# Directory Structure Report` followed by a `Content hash:` line; only a small prefix is read
   - The output auto-ignore is anchored to the resolved output path relative to the project, so a nested `docs/output.md` is kept when the default output name is `output.md`
 
