@@ -13,23 +13,15 @@ use tempfile::tempdir;
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-        }
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -126,7 +118,7 @@ fn test_comprehensive_binary_file_edge_cases() {
             visibility: "all".to_string(),
         };
 
-        let prompter = TestPrompter::new(true, true);
+        let prompter = TestPrompter::new(true);
         let result = run_with_args(args, config, &prompter);
 
         assert!(
@@ -216,7 +208,7 @@ fn test_configuration_precedence_edge_cases() {
         visibility: "all".to_string(),
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
     let result = run_with_args(args, Config::default(), &prompter);
     assert!(result.is_ok(), "Basic configuration test should succeed");
 
@@ -319,7 +311,7 @@ timestamped_output = true
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // First run - establish cache
     let result1 = run_with_args(base_args.clone(), config.clone(), &prompter);
@@ -398,7 +390,7 @@ fn test_error_conditions_and_exit_codes() {
     fs::create_dir_all(&project_dir).unwrap();
     fs::create_dir_all(&output_dir).unwrap();
 
-    let prompter = TestPrompter::new(false, true); // Deny overwrite
+    let prompter = TestPrompter::new(false); // Deny overwrite
 
     // Test 1: Non-existent input directory
     let args = Args {
@@ -456,11 +448,11 @@ fn test_error_conditions_and_exit_codes() {
         visibility: "all".to_string(),
     };
 
-    let prompter_deny = TestPrompter::new(false, true); // Deny overwrite
+    let prompter_deny = TestPrompter::new(false); // Deny overwrite
     let result = run_with_args(args, Config::default(), &prompter_deny);
     assert!(result.is_err(), "Should fail when overwrite is denied");
 
-    // Test 3: User cancellation during processing
+    // Test 3: A run without --yes is not cancelled (no file-count prompt)
     let args = Args {
         input: project_dir.to_string_lossy().to_string(),
         output: output_dir
@@ -484,9 +476,13 @@ fn test_error_conditions_and_exit_codes() {
         visibility: "all".to_string(),
     };
 
-    let prompter_cancel = TestPrompter::new(true, false); // Allow overwrite, deny processing
-    let result = run_with_args(args, Config::default(), &prompter_cancel);
-    assert!(result.is_err(), "Should fail when processing is cancelled");
+    // The >100-file confirmation was removed. A run without `--yes` proceeds.
+    let prompter_ok = TestPrompter::new(true);
+    let result = run_with_args(args, Config::default(), &prompter_ok);
+    assert!(
+        result.is_ok(),
+        "processing must not be cancelled; there is no file-count prompt"
+    );
 }
 
 #[test]
@@ -534,7 +530,7 @@ fn test_memory_usage_under_parallel_processing() {
         visibility: "all".to_string(),
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
     let result = run_with_args(args, Config::default(), &prompter);
 
     assert!(
@@ -628,7 +624,7 @@ line_numbers = true
 
         let config =
             context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
-        let prompter = TestPrompter::new(true, true);
+        let prompter = TestPrompter::new(true);
 
         let result = run_with_args(args, config, &prompter);
         assert!(result.is_ok(), "Should work regardless of CWD (test {})", i);
@@ -729,7 +725,7 @@ fn test_edge_case_filenames_and_paths() {
         visibility: "all".to_string(),
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
     let result = run_with_args(args, Config::default(), &prompter);
 
     assert!(

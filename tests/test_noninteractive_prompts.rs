@@ -1,13 +1,10 @@
-//! Regression tests for dogfood bug B4.
+//! Prompts and the large-output warning (dogfood B4, then v0.11.0 issue #23 (b)).
 //!
-//! Non-interactive runs used to break once more than 100 files were found:
-//! `context-builder -d <repo> </dev/null` printed "Operation cancelled" and
-//! exited 1, and `sleep 10 | context-builder -d <repo>` hung, because the
-//! over-100-file prompt (and the overwrite prompt) were written to stdout and
-//! blocked on stdin. Both prompts are skipped when stdin is not a terminal.
-//!
-//! These tests spawn the real binary so they exercise `DefaultPrompter`, not
-//! an injected test double. A timeout fails the test if the process blocks.
+//! The >100-file confirmation was removed entirely. These tests spawn the real
+//! binary: more than 100 files must exit 0 on null stdin, an empty pipe, an
+//! open pipe, and (on Unix) a TTY, with no "Continue?" prompt. The overwrite
+//! prompt remains on a TTY and is written to stderr. A timeout fails the test
+//! if the process blocks.
 
 use std::fs;
 use std::io::Read;
@@ -214,7 +211,230 @@ fn open_pipe_stdin_overwrites_existing_output() {
 
 #[test]
 fn open_pipe_stdin_over_100_files_also_overwrites() {
-    // Both prompts would fire: the output already exists, and the walk finds
-    // more than 100 files. An open pipe must not hang on either question.
+    // The output already exists and the walk finds more than 100 files.
+    // Non-TTY stdin skips the overwrite prompt and never asks about file count.
     assert_noninteractive(StdinMode::OpenPipe, 101, true);
+}
+
+#[test]
+fn large_output_warning_goes_to_stderr_not_stdout() {
+    let dir = tempdir().unwrap();
+    let fixture = dir.path().join("repo");
+    fs::create_dir_all(&fixture).unwrap();
+    // bytes/4 must exceed the 128K warning threshold. 600_000 bytes of text
+    // plus the markdown wrapper is well over 512_000 output bytes.
+    fs::write(fixture.join("big.txt"), "a".repeat(600_000)).unwrap();
+
+    let output = dir.path().join("out.md");
+    let file_run = run_binary(
+        &fixture.to_string_lossy(),
+        &output.to_string_lossy(),
+        StdinMode::Null,
+    );
+    assert!(
+        file_run.status.success(),
+        "exit {:?}\nstderr:\n{}",
+        file_run.status.code(),
+        file_run.stderr
+    );
+    assert_warning_on_stderr_only(&file_run);
+
+    let pipe_run = run_binary(&fixture.to_string_lossy(), "-", StdinMode::Null);
+    assert!(
+        pipe_run.status.success(),
+        "pipe exit {:?}\nstderr:\n{}",
+        pipe_run.status.code(),
+        pipe_run.stderr
+    );
+    assert!(
+        pipe_run.stdout.contains("# Directory Structure Report"),
+        "piped stdout should be the document"
+    );
+    assert_warning_on_stderr_only(&pipe_run);
+}
+
+fn assert_warning_on_stderr_only(run: &RunOutput) {
+    assert!(
+        run.stderr.contains("recommended limit is 128K"),
+        "large-output warning missing from stderr:\n{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("Estimated tokens:"),
+        "token estimate missing from stderr:\n{}",
+        run.stderr
+    );
+    assert!(
+        !run.stdout.contains("recommended limit"),
+        "warning leaked to stdout:\n{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout.contains("Estimated tokens:"),
+        "token estimate leaked to stdout:\n{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout.contains("128K"),
+        "warning leaked to stdout:\n{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("Continue?"));
+    assert!(!run.stderr.contains("Continue?"));
+}
+
+/// More than 100 files on a real terminal must not ask to continue.
+#[cfg(unix)]
+#[test]
+fn tty_over_100_files_does_not_prompt() {
+    let dir = tempdir().unwrap();
+    let fixture = dir.path().join("repo");
+    let output = dir.path().join("out.md");
+    write_fixture(&fixture, 101);
+
+    let run = run_on_pty(
+        &fixture.to_string_lossy(),
+        &output.to_string_lossy(),
+        &[],
+        None,
+    );
+    assert!(
+        run.status.success(),
+        "TTY run should not wait for confirmation, exit {:?}\nstderr:\n{}",
+        run.status.code(),
+        run.stderr
+    );
+    assert!(!run.stdout.contains("Continue?"));
+    assert!(!run.stderr.contains("Continue?"));
+    assert!(!run.stderr.contains("might take a while"));
+    let body = fs::read_to_string(&output).unwrap();
+    assert!(body.contains(MARKER));
+}
+
+/// The overwrite prompt is unchanged on a TTY: stderr, default no, `-y` skips it.
+#[cfg(unix)]
+#[test]
+fn tty_overwrite_prompt_unchanged() {
+    let dir = tempdir().unwrap();
+    let fixture = dir.path().join("repo");
+    let output = dir.path().join("out.md");
+    write_fixture(&fixture, 3);
+    fs::write(&output, SENTINEL).unwrap();
+
+    let declined = run_on_pty(
+        &fixture.to_string_lossy(),
+        &output.to_string_lossy(),
+        &[],
+        Some(b"n\n"),
+    );
+    assert!(
+        !declined.status.success(),
+        "declining overwrite should cancel, stderr:\n{}",
+        declined.stderr
+    );
+    assert!(
+        declined.stderr.contains("Overwrite?"),
+        "overwrite prompt should be on stderr:\n{}",
+        declined.stderr
+    );
+    assert!(
+        !declined.stdout.contains("Overwrite?"),
+        "overwrite prompt leaked to stdout:\n{}",
+        declined.stdout
+    );
+    assert_eq!(fs::read_to_string(&output).unwrap(), SENTINEL);
+
+    fs::write(&output, SENTINEL).unwrap();
+    let accepted = run_on_pty(
+        &fixture.to_string_lossy(),
+        &output.to_string_lossy(),
+        &[],
+        Some(b"y\n"),
+    );
+    assert!(
+        accepted.status.success(),
+        "accepting overwrite should succeed, stderr:\n{}",
+        accepted.stderr
+    );
+    let body = fs::read_to_string(&output).unwrap();
+    assert!(body.contains("# Directory Structure Report"));
+    assert!(!body.contains(SENTINEL));
+
+    fs::write(&output, SENTINEL).unwrap();
+    let yes = run_on_pty(
+        &fixture.to_string_lossy(),
+        &output.to_string_lossy(),
+        &["--yes"],
+        None,
+    );
+    assert!(
+        yes.status.success(),
+        "`--yes` should overwrite without asking, exit {:?}\nstderr:\n{}",
+        yes.status.code(),
+        yes.stderr
+    );
+    assert!(
+        !yes.stderr.contains("Overwrite?"),
+        "`--yes` still asked:\n{}",
+        yes.stderr
+    );
+    assert!(!yes.stdout.contains("Overwrite?"));
+    assert!(fs::read_to_string(&output).unwrap().contains(MARKER));
+}
+
+#[cfg(unix)]
+fn run_on_pty(input: &str, output: &str, extra: &[&str], answer: Option<&[u8]>) -> RunOutput {
+    use std::io::Write;
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    let mut master_fd: libc::c_int = -1;
+    let mut slave_fd: libc::c_int = -1;
+    let rc = unsafe {
+        libc::openpty(
+            &mut master_fd,
+            &mut slave_fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut::<libc::termios>(),
+            std::ptr::null_mut::<libc::winsize>(),
+        )
+    };
+    assert_eq!(rc, 0, "openpty failed");
+    let slave = unsafe { OwnedFd::from_raw_fd(slave_fd) };
+    let mut master = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(master_fd) });
+
+    let mut child = Command::new(bin_path())
+        .args(["-d", input, "-o", output])
+        .args(extra)
+        .env_remove("CB_SILENT")
+        .stdin(Stdio::from(slave))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn context-builder");
+
+    if let Some(bytes) = answer {
+        // Queued before the child reads, so a prompt receives the answer
+        // without the test racing the question.
+        master.write_all(bytes).expect("write pty answer");
+        let _ = master.flush();
+    }
+
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
+    let stdout_thread = thread::spawn(move || read_pipe(stdout_pipe));
+    let stderr_thread = thread::spawn(move || read_pipe(stderr_pipe));
+
+    let waited = wait_timeout(&mut child, TIMEOUT);
+    drop(master);
+
+    let stdout = stdout_thread.join().expect("stdout reader panicked");
+    let stderr = stderr_thread.join().expect("stderr reader panicked");
+    match waited {
+        Ok(status) => RunOutput {
+            status,
+            stdout,
+            stderr,
+        },
+        Err(reason) => panic!("{reason}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"),
+    }
 }

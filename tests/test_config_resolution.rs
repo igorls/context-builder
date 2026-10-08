@@ -12,23 +12,15 @@ use context_builder::{Prompter, cli::Args, config_resolver::resolve_final_config
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-        }
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -137,7 +129,7 @@ output = "from_config.md"
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -220,7 +212,7 @@ ignore = ["target"]
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -307,7 +299,7 @@ timestamped_output = true
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -389,7 +381,7 @@ yes = true
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -466,7 +458,7 @@ timestamped_output = false
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Capture stderr to check for warnings
     let result = run_with_resolved_config(args, Some(config), &prompter);

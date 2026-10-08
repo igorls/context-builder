@@ -24,7 +24,7 @@ use cache::CacheManager;
 use cli::Args;
 use config::{Config, load_config_from_path};
 use diff::render_per_file_diffs;
-use file_utils::{collect_files, confirm_overwrite, confirm_processing};
+use file_utils::{collect_files, confirm_overwrite};
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
 use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
@@ -49,16 +49,12 @@ impl Default for DiffConfig {
 }
 
 pub trait Prompter {
-    fn confirm_processing(&self, file_count: usize) -> io::Result<bool>;
     fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool>;
 }
 
 pub struct DefaultPrompter;
 
 impl Prompter for DefaultPrompter {
-    fn confirm_processing(&self, file_count: usize) -> io::Result<bool> {
-        confirm_processing(file_count)
-    }
     fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool> {
         confirm_overwrite(file_path)
     }
@@ -359,22 +355,6 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         return Ok(());
     }
 
-    // In pipe mode (`-o -`) there is no interactive terminal to answer a prompt,
-    // and waiting on stdin would stall `context-builder -o - | llm`. Skip the
-    // >100-file confirmation and proceed, exactly as `--yes` would.
-    // Non-TTY stdin (CI, `</dev/null`, an open pipe) is handled inside
-    // `confirm_processing`: the prompt is skipped and the run proceeds.
-    // Interactive prompts are written to stderr.
-    if !final_args.yes && !to_stdout && !prompter.confirm_processing(files.len())? {
-        if !silent {
-            eprintln!("Operation cancelled.");
-        }
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "Operation cancelled by user",
-        ));
-    }
-
     // NOTE: config-driven flags (line_numbers, diff_only) are already merged
     // by config_resolver.rs with proper CLI-takes-precedence semantics.
     // Do NOT re-apply them here as that would silently overwrite CLI flags.
@@ -597,10 +577,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 );
             }
             println!("Processing time: {:.2?}", duration);
-
-            // Warn about context window overflow
-            let output_bytes = final_doc.len();
-            print_context_window_warning(output_bytes, final_args.max_tokens);
+        }
+        if !silent {
+            // Non-blocking. File count is not a cost proxy; this estimate is.
+            // Stderr so `-o -` stays a clean document.
+            print_context_window_warning(final_doc.len(), final_args.max_tokens);
         }
         return Ok(());
     }
@@ -624,7 +605,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
     }
 
-    generate_markdown(
+    let output_bytes = generate_markdown(
         &final_args.output,
         &final_args.input,
         &final_args.filter,
@@ -643,11 +624,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent && !to_stdout {
         println!("Documentation created successfully: {}", final_args.output);
         println!("Processing time: {:.2?}", duration);
-
-        // Warn about context window overflow
-        let output_bytes = fs::metadata(&final_args.output)
-            .map(|m| m.len() as usize)
-            .unwrap_or(0);
+    }
+    if !silent {
+        // Non-blocking. File count is not a cost proxy; this estimate is.
+        // Stderr so `-o -` stays a clean document.
         print_context_window_warning(output_bytes, final_args.max_tokens);
     }
 
@@ -661,7 +641,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) {
     let estimated_tokens = output_bytes / 4;
 
-    println!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+    // Stderr only: this notice must never mix into a captured or piped document.
+    eprintln!("Estimated tokens: ~{}K", estimated_tokens / 1000);
 
     // If the user already set --max-tokens, they're managing their budget
     if max_tokens.is_some() {
@@ -1042,24 +1023,18 @@ mod tests {
 
     // Mock prompter for testing
     struct MockPrompter {
-        confirm_processing_response: bool,
         confirm_overwrite_response: bool,
     }
 
     impl MockPrompter {
-        fn new(processing: bool, overwrite: bool) -> Self {
+        fn new(overwrite: bool) -> Self {
             Self {
-                confirm_processing_response: processing,
                 confirm_overwrite_response: overwrite,
             }
         }
     }
 
     impl Prompter for MockPrompter {
-        fn confirm_processing(&self, _file_count: usize) -> Result<bool> {
-            Ok(self.confirm_processing_response)
-        }
-
         fn confirm_overwrite(&self, _file_path: &str) -> Result<bool> {
             Ok(self.confirm_overwrite_response)
         }
@@ -1086,16 +1061,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_prompter() {
-        let prompter = DefaultPrompter;
-
-        // Test small file count (should not prompt)
-        let result = prompter.confirm_processing(50);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[test]
     fn test_run_with_args_nonexistent_directory() {
         let args = Args {
             input: "/nonexistent/directory".to_string(),
@@ -1117,7 +1082,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         let result = run_with_args(args, config, &prompter);
         assert!(result.is_err());
@@ -1154,7 +1119,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         // Set CB_SILENT to avoid console output during test
         unsafe {
@@ -1196,7 +1161,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1236,7 +1201,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1279,7 +1244,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, false); // Deny overwrite
+        let prompter = MockPrompter::new(false); // Deny overwrite
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1294,19 +1259,21 @@ mod tests {
     }
 
     #[test]
-    fn test_run_with_args_user_cancels_processing() {
+    fn test_run_with_args_many_files_does_not_prompt() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("out.md");
 
-        // Create many test files to trigger processing confirmation
+        // More than 100 files used to ask for confirmation. It must proceed
+        // without `--yes` and without consulting a processing prompt.
         for i in 0..105 {
             fs::write(base_path.join(format!("file{}.txt", i)), "content").unwrap();
         }
 
         let args = Args {
             input: base_path.to_string_lossy().to_string(),
-            output: "test.md".to_string(),
-            filter: vec!["rs".to_string()],
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
             ignore: vec![],
             line_numbers: false,
             preview: false,
@@ -1323,7 +1290,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(false, true); // Deny processing
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1333,8 +1300,8 @@ mod tests {
             std::env::remove_var("CB_SILENT");
         }
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert!(result.is_ok(), "a large file set must not ask to continue");
+        assert!(output_path.exists(), "output should be written");
     }
 
     #[test]
@@ -1366,7 +1333,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1415,7 +1382,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1463,7 +1430,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1514,7 +1481,7 @@ mod tests {
             diff_context_lines: Some(5),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1560,7 +1527,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1711,7 +1678,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1752,7 +1719,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1796,7 +1763,7 @@ mod tests {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1841,7 +1808,7 @@ mod tests {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1912,7 +1879,7 @@ mod tests {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1958,7 +1925,7 @@ mod tests {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2282,7 +2249,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2324,7 +2291,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2367,7 +2334,7 @@ mod tests {
             visibility: "all".to_string(),
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2416,7 +2383,7 @@ mod tests {
         unsafe {
             std::env::set_var("CB_SILENT", "1");
         }
-        let _ = run_with_args(args1, config1.clone(), &MockPrompter::new(true, true));
+        let _ = run_with_args(args1, config1.clone(), &MockPrompter::new(true));
 
         let args2 = Args {
             input: base_path.to_string_lossy().to_string(),
@@ -2443,7 +2410,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = run_with_args(args2, config2, &MockPrompter::new(true, true));
+        let result = run_with_args(args2, config2, &MockPrompter::new(true));
         unsafe {
             std::env::remove_var("CB_SILENT");
         }
