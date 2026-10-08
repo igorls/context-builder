@@ -40,7 +40,7 @@ Verify: `context-builder --version` (expected: `0.10.0`)
 
 **Built-in protections** (always active, no configuration needed):
 - Excludes `.git/`, `node_modules/`, and 19 other heavy/sensitive directories at any depth
-- Respects `.gitignore` rules when a `.git` directory is present
+- Respects `.gitignore` rules even when no `.git` directory is present
 - Binary files are auto-detected and skipped via UTF-8 sniffing
 - Output file and cache directory are auto-excluded to prevent self-ingestion
 
@@ -193,9 +193,9 @@ These behaviors require no configuration:
 
 | Feature | Behavior |
 |---------|----------|
-| **Auto-ignore** | `node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, and 12 more heavy dirs are excluded at any depth |
-| **Self-exclusion** | Output file, cache dir, and `context-builder.toml` are auto-excluded |
-| **.gitignore** | Respected automatically when `.git` directory exists |
+| **Auto-ignore** | `node_modules`, `target`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, and 13 more heavy dirs are excluded at any depth. Directories containing a `CACHEDIR.TAG` file are skipped |
+| **Self-exclusion** | The resolved output path (not every file named `output.md`), earlier reports with this tool's header, the cache dir, and `context-builder.toml` are auto-excluded |
+| **.gitignore** | Respected automatically, including directories that are not git checkouts |
 | **Binary detection** | Binary files are skipped via UTF-8 sniffing |
 | **File ordering** | Config/docs first → source (entry points before helpers) → tests → build/CI → lockfiles |
 

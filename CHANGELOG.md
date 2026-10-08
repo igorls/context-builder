@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **File inclusion**
+  - `.gitignore` is applied even when the directory has no `.git` checkout
+  - Directories containing a `CACHEDIR.TAG` file are skipped, and `target` is now a default excluded directory (with `build` and `dist`)
+  - A previous context-builder report is not pulled back in. A file is skipped when its header is `# Directory Structure Report` followed by a `Content hash:` line; only a small prefix is read
+  - The output auto-ignore is anchored to the resolved output path relative to the project, so a nested `docs/output.md` is kept when the default output name is `output.md`
+
 ## v0.10.0 (2026-08-31) — "Honest Signatures"
 
 > Delivered per `docs/research/v0.10-plan.md` (derived from the post-v0.9.0 review): every documented flag now does what it says, divergent language maps are unified, and packaging/CI gaps are closed.

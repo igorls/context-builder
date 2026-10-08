@@ -2,7 +2,7 @@ use clap::{CommandFactory, FromArgMatches};
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 pub mod cache;
@@ -62,6 +62,96 @@ impl Prompter for DefaultPrompter {
     fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool> {
         confirm_overwrite(file_path)
     }
+}
+
+/// Ignore patterns for this run's output file, anchored to its path relative
+/// to `base_path`.
+///
+/// A bare basename such as `output.md` matches at every depth in the ignore
+/// crate, which hides a user's `docs/output.md`. Patterns here start with
+/// `/` so they match only the resolved output (and, when timestamped output
+/// is on, the sibling `stem_*.ext` family in that same directory).
+///
+/// Returns nothing when the output is stdout (`-`) or lives outside the tree.
+fn output_auto_ignores(base_path: &Path, output: &str, config: &Config) -> Vec<String> {
+    if output == "-" {
+        return Vec::new();
+    }
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            log::warn!("could not read the working directory to anchor the output ignore: {e}");
+            return Vec::new();
+        }
+    };
+    let abs_base = normalize_lexically(&join_absolute(&cwd, base_path));
+    let abs_output = normalize_lexically(&join_absolute(&cwd, Path::new(output)));
+    let Ok(rel_output) = abs_output.strip_prefix(&abs_base) else {
+        return Vec::new();
+    };
+    if rel_output.as_os_str().is_empty() {
+        return Vec::new();
+    }
+
+    let rel = rel_output.to_string_lossy().replace('\\', "/");
+    let mut patterns = vec![format!("/{rel}")];
+    if config.timestamped_output == Some(true)
+        && let Some(pattern) = timestamped_output_glob(rel_output, Path::new(output), config)
+    {
+        patterns.push(pattern);
+    }
+    patterns
+}
+
+/// Anchored glob covering timestamped siblings of the resolved output file
+/// (`/docs/context_*.md`, `/context_*.md`). The stem comes from
+/// `config.output` when set, matching the name before the timestamp suffix.
+fn timestamped_output_glob(
+    rel_output: &Path,
+    output_path: &Path,
+    config: &Config,
+) -> Option<String> {
+    let parent = rel_output.parent()?;
+    let stem = output_path.file_stem().and_then(|s| s.to_str())?;
+    let ext = output_path.extension().and_then(|s| s.to_str())?;
+    let base_stem = if let Some(ref cfg_output) = config.output {
+        Path::new(cfg_output)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(stem)
+            .to_string()
+    } else {
+        stem.to_string()
+    };
+    let parent_str = parent.to_string_lossy().replace('\\', "/");
+    if parent_str.is_empty() || parent_str == "." {
+        Some(format!("/{base_stem}_*.{ext}"))
+    } else {
+        Some(format!("/{parent_str}/{base_stem}_*.{ext}"))
+    }
+}
+
+fn join_absolute(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+/// Collapse `.` and `..` without touching the filesystem.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
@@ -147,73 +237,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         ));
     }
 
-    // Compute auto-ignore patterns to exclude the tool's own output and cache
+    // Compute auto-ignore patterns to exclude the tool's own output and cache.
+    // The output pattern is anchored to the resolved path (see `output_auto_ignores`).
     let mut auto_ignores: Vec<String> = vec![".context-builder".to_string()];
-
-    // Exclude the resolved output file (or its timestamped glob pattern)
-    let output_path = Path::new(&final_args.output);
-    if let Ok(rel_output) = output_path.strip_prefix(base_path) {
-        // Output is inside the project — exclude it
-        if config.timestamped_output == Some(true) {
-            // Timestamped outputs: create a glob like "docs/context_*.md"
-            if let (Some(parent), Some(stem), Some(ext)) = (
-                rel_output.parent(),
-                output_path.file_stem().and_then(|s| s.to_str()),
-                output_path.extension().and_then(|s| s.to_str()),
-            ) {
-                // Strip the timestamp suffix to get the base stem
-                // Timestamped names look like "context_20260214175028.md"
-                // The stem from config is the part before the timestamp
-                let base_stem = if let Some(ref cfg_output) = config.output {
-                    Path::new(cfg_output)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(stem)
-                        .to_string()
-                } else {
-                    stem.to_string()
-                };
-                let glob = if parent == Path::new("") {
-                    format!("{}_*.{}", base_stem, ext)
-                } else {
-                    format!("{}/{}_*.{}", parent.display(), base_stem, ext)
-                };
-                auto_ignores.push(glob);
-            }
-        } else {
-            // Non-timestamped: exclude the exact output file
-            auto_ignores.push(rel_output.to_string_lossy().to_string());
-        }
-    } else {
-        // Output might be a relative path not under base_path — try using it directly
-        let output_str = final_args.output.clone();
-        if config.timestamped_output == Some(true) {
-            if let (Some(stem), Some(ext)) = (
-                output_path.file_stem().and_then(|s| s.to_str()),
-                output_path.extension().and_then(|s| s.to_str()),
-            ) {
-                let base_stem = if let Some(ref cfg_output) = config.output {
-                    Path::new(cfg_output)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(stem)
-                        .to_string()
-                } else {
-                    stem.to_string()
-                };
-                if let Some(parent) = output_path.parent() {
-                    let parent_str = parent.to_string_lossy();
-                    if parent_str.is_empty() || parent_str == "." {
-                        auto_ignores.push(format!("{}_*.{}", base_stem, ext));
-                    } else {
-                        auto_ignores.push(format!("{}/{}_*.{}", parent_str, base_stem, ext));
-                    }
-                }
-            }
-        } else {
-            auto_ignores.push(output_str);
-        }
-    }
+    auto_ignores.extend(output_auto_ignores(base_path, &final_args.output, &config));
 
     // Also exclude context output files within the output_folder (not the folder itself,
     // which would silently hide all user content in that directory)
@@ -306,7 +333,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             let enc_strategy = config.encoding_strategy.as_deref();
             println!("\n# Token Count Estimation\n");
             let mut total_tokens = 0;
-            total_tokens += estimate_tokens(encoding, "# Directory Structure Report\n\n");
+            total_tokens +=
+                estimate_tokens(encoding, &format!("{}\n\n", markdown::REPORT_TITLE_LINE));
             if !final_args.filter.is_empty() {
                 total_tokens += estimate_tokens(
                     encoding,
@@ -334,7 +362,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     ),
                 );
             }
-            total_tokens += estimate_tokens(encoding, "Content hash: 0000000000000000\n\n");
+            total_tokens += estimate_tokens(
+                encoding,
+                &format!("{}0000000000000000\n\n", markdown::CONTENT_HASH_PREFIX),
+            );
             total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
@@ -699,7 +730,8 @@ fn generate_markdown_with_diff(
     let mut output = String::new();
 
     // Header
-    output.push_str("# Directory Structure Report\n\n");
+    output.push_str(markdown::REPORT_TITLE_LINE);
+    output.push_str("\n\n");
 
     // Basic project info
     output.push_str(&format!(

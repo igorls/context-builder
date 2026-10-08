@@ -50,7 +50,7 @@ It's a command-line utility that recursively processes directories and creates c
   Processes thousands of files in seconds by leveraging all available CPU cores.
 
 - 🧠 **Smart & Efficient File Discovery:**
-  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) even without a `.git` directory.
+  Respects `.gitignore` and custom ignore patterns out-of-the-box, including directories that are not git checkouts. Automatically excludes common heavy directories (`node_modules`, `target`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) even without a `.git` directory, and skips any directory that contains a `CACHEDIR.TAG` file (such as Cargo's `target/`).
 
 - 📊 **Relevance-Based File Ordering:**
   Files appear in LLM-optimized order: config & project docs first, then source code (entry points before helpers), tests, documentation, build/CI files, and lockfiles last. This helps LLMs build a mental model faster.

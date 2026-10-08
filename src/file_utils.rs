@@ -1,7 +1,18 @@
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
-use std::fs;
-use std::io::{self, Write};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+
+use crate::markdown::{CONTENT_HASH_PREFIX, REPORT_TITLE_LINE};
+
+/// Bytes of each file examined when looking for a previous context-builder
+/// report. The signature is the header (`REPORT_TITLE_LINE` plus a
+/// `CONTENT_HASH_PREFIX` line), which is written before the file tree.
+const CONTEXT_OUTPUT_PREFIX_LEN: usize = 8 * 1024;
+
+/// Cargo and other tools drop this file in cache directories (see
+/// <https://bford.info/cachedir/>). `target/` contains one.
+const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
 
 /// Returns a numeric category for file relevance ordering.
 /// Lower numbers appear first in output. Categories:
@@ -162,15 +173,21 @@ pub fn collect_files(
     auto_ignores: &[String],
 ) -> io::Result<Vec<DirEntry>> {
     let mut walker = WalkBuilder::new(base_path);
-    // By default, the "ignore" crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
+    // Honor `.gitignore` even when the directory is not a git checkout.
+    // The crate defaults to `require_git(true)`, which parses `.gitignore`
+    // but does not apply it unless a `.git` directory is present.
+    walker.require_git(false);
+    // Skip cache directories (Cargo's `target/` ships a CACHEDIR.TAG) without
+    // descending into them. The root itself is never filtered out by the walker.
+    walker.filter_entry(|entry| !directory_has_cachedir_tag(entry));
 
     // Build overrides for custom ignore patterns
     let mut override_builder = OverrideBuilder::new(base_path);
 
-    // Hardcoded auto-ignores for common heavy directories that should NEVER be
-    // included, even when there's no .git directory (so .gitignore isn't read).
-    // Without these, projects missing .git can produce million-line outputs
-    // from dependency trees.
+    // Hardcoded auto-ignores for common heavy directories. `.gitignore` is
+    // applied even without a `.git` directory, but many trees never list
+    // these names. Without the defaults, dependency folders can dominate
+    // the output.
     //
     // IMPORTANT: These are added FIRST so that user ignores can override them.
     // The ignore crate uses "last-match-wins" semantics, so a user can whitelist
@@ -197,6 +214,7 @@ pub fn collect_files(
         ".angular",    // Angular cache
         "dist",        // Common build output
         "build",       // Common build output
+        "target",      // Cargo build output
         ".gradle",     // Gradle cache
         ".cargo",      // Cargo registry cache
     ];
@@ -260,6 +278,7 @@ pub fn collect_files(
         .build()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+        .filter(|e| !is_prior_context_output(e.path()))
         .collect();
 
     // Sort files by relevance category, then entry-point priority, then alphabetically.
@@ -278,6 +297,53 @@ pub fn collect_files(
     });
 
     Ok(files)
+}
+
+/// True when `entry` is a directory that contains a `CACHEDIR.TAG` file.
+fn directory_has_cachedir_tag(entry: &DirEntry) -> bool {
+    entry.file_type().is_some_and(|ft| ft.is_dir()) && entry.path().join(CACHEDIR_TAG).is_file()
+}
+
+/// True when `path` is a previous context-builder report.
+///
+/// The tool writes [`REPORT_TITLE_LINE`] as the first line and a
+/// `Content hash:` line of 16 lowercase hex digits in the header
+/// (see `markdown.rs`). Only [`CONTEXT_OUTPUT_PREFIX_LEN`] bytes are read.
+fn is_prior_context_output(path: &Path) -> bool {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let mut buf = [0u8; CONTEXT_OUTPUT_PREFIX_LEN];
+    let n = match file.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    if !header_is_context_builder_output(&buf[..n]) {
+        return false;
+    }
+    log::debug!(
+        "skipping previous context-builder output: {}",
+        path.display()
+    );
+    true
+}
+
+fn header_is_context_builder_output(prefix: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(prefix);
+    let mut lines = text.lines();
+    if lines.next() != Some(REPORT_TITLE_LINE) {
+        return false;
+    }
+    lines.any(is_content_hash_line)
+}
+
+/// The header line `markdown.rs` writes: `Content hash: ` plus 16 lowercase hex digits.
+fn is_content_hash_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix(CONTENT_HASH_PREFIX) else {
+        return false;
+    };
+    rest.len() == 16 && rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Asks for user confirmation if the number of files is large.
@@ -837,5 +903,100 @@ mod tests {
 
         let files = collect_files(base, &[], &[], &[]).unwrap();
         assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn no_git_honors_gitignore_cachedir_tag_and_target() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("keep.txt"), "keep").unwrap();
+        fs::write(base.join(".gitignore"), "secret.log\ngenerated/\n").unwrap();
+        fs::write(base.join("secret.log"), "hidden").unwrap();
+        fs::create_dir_all(base.join("generated")).unwrap();
+        fs::write(base.join("generated/junk.txt"), "junk").unwrap();
+
+        // Cargo-style build dir: name `target` plus CACHEDIR.TAG.
+        fs::create_dir_all(base.join("target/debug")).unwrap();
+        fs::write(
+            base.join("target/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(base.join("target/debug/x.d"), "dep").unwrap();
+
+        // Cache dir that is not named `target` — only the tag should exclude it.
+        fs::create_dir_all(base.join("my-cache")).unwrap();
+        fs::write(
+            base.join("my-cache/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(base.join("my-cache/blob.txt"), "blob").unwrap();
+
+        // Name-based default, no tag.
+        fs::create_dir_all(base.join("pkg/target")).unwrap();
+        fs::write(base.join("pkg/target/out.txt"), "artifact").unwrap();
+
+        let rel = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(rel.contains(&"src/main.rs".to_string()));
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(!rel.iter().any(|p| p.contains("secret.log")));
+        assert!(!rel.iter().any(|p| p.contains("generated/")));
+        assert!(!rel.iter().any(|p| p.contains("target/")));
+        assert!(!rel.iter().any(|p| p.contains("my-cache/")));
+    }
+
+    #[test]
+    fn skips_prior_report_header_but_not_near_misses() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("keep.txt"), "hello").unwrap();
+        fs::write(
+            base.join("old.md"),
+            "# Directory Structure Report\n\nThis document contains all files from the `proj` directory, optimized for LLM consumption.\nContent hash: 0123456789abcdef\n\n## File Tree Structure\n",
+        )
+        .unwrap();
+        // Title without the hash line the tool writes.
+        fs::write(
+            base.join("notes.md"),
+            "# Directory Structure Report\n\nJust a heading.\n",
+        )
+        .unwrap();
+        // Hash line, but not the report title.
+        fs::write(base.join("other.md"), "Content hash: 0123456789abcdef\n").unwrap();
+        // Title plus a hash line that is not 16 lowercase hex digits.
+        fs::write(
+            base.join("almost.md"),
+            "# Directory Structure Report\n\nContent hash: not-a-real-hash\n",
+        )
+        .unwrap();
+
+        let rel = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(rel.contains(&"notes.md".to_string()));
+        assert!(rel.contains(&"other.md".to_string()));
+        assert!(rel.contains(&"almost.md".to_string()));
+        assert!(!rel.contains(&"old.md".to_string()));
+    }
+
+    #[test]
+    fn anchored_auto_ignore_keeps_nested_same_basename() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("docs")).unwrap();
+        fs::write(base.join("output.md"), "# user notes at the root\n").unwrap();
+        fs::write(base.join("docs/output.md"), "real doc\n").unwrap();
+        fs::write(base.join("keep.txt"), "k").unwrap();
+
+        let rel = to_rel_paths(
+            collect_files(base, &[], &[], &["/output.md".to_string()]).unwrap(),
+            base,
+        );
+        assert!(!rel.contains(&"output.md".to_string()));
+        assert!(rel.contains(&"docs/output.md".to_string()));
+        assert!(rel.contains(&"keep.txt".to_string()));
     }
 }
