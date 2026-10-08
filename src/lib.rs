@@ -598,7 +598,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
             // Warn about context window overflow
             let output_bytes = final_doc.len();
-            print_context_window_warning(output_bytes, final_args.max_tokens);
+            print_context_window_warning(output_bytes, final_args.max_tokens, &files);
         }
         return Ok(());
     }
@@ -646,7 +646,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         let output_bytes = fs::metadata(&final_args.output)
             .map(|m| m.len() as usize)
             .unwrap_or(0);
-        print_context_window_warning(output_bytes, final_args.max_tokens);
+        print_context_window_warning(output_bytes, final_args.max_tokens, &files);
     }
 
     Ok(())
@@ -656,7 +656,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
 /// exceeds 128K tokens — beyond this size, context quality degrades
 /// significantly for most LLM use cases.
-fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) {
+///
+/// Filter advice uses the extensions present in `files`.
+fn print_context_window_warning(
+    output_bytes: usize,
+    max_tokens: Option<usize>,
+    files: &[ignore::DirEntry],
+) {
     let estimated_tokens = output_bytes / 4;
 
     println!("Estimated tokens: ~{}K", estimated_tokens / 1000);
@@ -672,6 +678,8 @@ fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) 
         return;
     }
 
+    let paths: Vec<&Path> = files.iter().map(|entry| entry.path()).collect();
+
     eprintln!();
     eprintln!(
         "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
@@ -679,11 +687,82 @@ fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) 
     );
     eprintln!("   Large contexts degrade response quality. Consider narrowing the scope:");
     eprintln!();
-    eprintln!("   • --max-tokens 100000    Cap output to a token budget");
-    eprintln!("   • --filter rs,toml       Include only specific file types");
-    eprintln!("   • --ignore docs,assets   Exclude directories by name");
-    eprintln!("   • --token-count          Preview size without generating");
+    for line in context_window_suggestions(&paths) {
+        eprintln!("   • {line}");
+    }
     eprintln!();
+}
+
+/// `--filter` extensions to suggest for this run: the most common extensions
+/// among `paths` (at most two), in a form `--filter` accepts.
+///
+/// Only extensions that are valid `ignore` file-type names are included, so
+/// the printed command does not panic on an unrecognized type. Ties break
+/// alphabetically so the suggestion is stable.
+fn suggested_filter_exts(paths: &[&Path]) -> Option<String> {
+    use std::collections::HashMap;
+
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for path in paths {
+        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+            continue;
+        };
+        if !is_suggestable_filter_ext(ext) {
+            continue;
+        }
+        *counts.entry(ext).or_insert(0) += 1;
+    }
+    if counts.is_empty() {
+        return None;
+    }
+
+    let mut ranked: Vec<(&str, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let joined = ranked
+        .into_iter()
+        .take(2)
+        .map(|(ext, _)| ext)
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(joined)
+}
+
+/// File-type names `TypesBuilder::add` accepts: non-empty ASCII alphanumeric,
+/// and not the reserved name `all` (which selects every type).
+fn is_suggestable_filter_ext(ext: &str) -> bool {
+    ext != "all" && !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Copy-pasteable commands for the >128K warning. Every flag here is one the
+/// CLI actually honors (`--ignore docs,assets` included).
+fn context_window_suggestions(paths: &[&Path]) -> Vec<String> {
+    let mut lines = vec![advice_line(
+        "--max-tokens 100000",
+        "Cap output to a token budget",
+    )];
+    if let Some(exts) = suggested_filter_exts(paths) {
+        lines.push(advice_line(
+            &format!("--filter {exts}"),
+            "Include only these file types",
+        ));
+    }
+    lines.push(advice_line(
+        "--ignore docs,assets",
+        "Exclude directories by name",
+    ));
+    lines.push(advice_line(
+        "--token-count",
+        "Preview size without generating",
+    ));
+    lines
+}
+
+fn advice_line(flag: &str, description: &str) -> String {
+    if flag.len() >= 24 {
+        format!("{flag}  {description}")
+    } else {
+        format!("{flag:<24}{description}")
+    }
 }
 
 /// Generate markdown document with diff annotations
@@ -1012,7 +1091,7 @@ diff_only = false
 # File extensions to include (no leading dot, e.g. "rs", "toml")
 filter = {}
 
-# File / directory names to ignore (exact name matches)
+# Paths or gitignore-style globs to ignore (names, paths like "crates/core", globs like "*.lock")
 ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
@@ -1641,6 +1720,81 @@ mod tests {
     }
 
     #[test]
+    fn test_context_window_suggestions_follow_detected_extensions() {
+        let go = [
+            Path::new("cmd/root.go"),
+            Path::new("cmd/main.go"),
+            Path::new("README.md"),
+        ];
+        let lines = context_window_suggestions(&go);
+        let text = lines.join("\n");
+        assert!(
+            text.contains("--filter go,md"),
+            "a Go repo should be told to filter its own types, got:\n{text}"
+        );
+        assert!(text.contains("--ignore docs,assets"), "{text}");
+        assert!(text.contains("--max-tokens 100000"), "{text}");
+        assert!(text.contains("--token-count"), "{text}");
+        assert!(
+            !text.contains("rs,toml"),
+            "advice must not hardcode a Rust filter: {text}"
+        );
+        assert!(
+            !text.contains("--ignore lock"),
+            "advice must not suggest a no-op ignore: {text}"
+        );
+
+        let python = [
+            Path::new("src/app.py"),
+            Path::new("src/util.py"),
+            Path::new("tests/test_app.py"),
+        ];
+        let py_lines = context_window_suggestions(&python);
+        assert!(
+            py_lines.iter().any(|line| line.contains("--filter py")),
+            "{py_lines:?}"
+        );
+        assert!(
+            !py_lines.iter().any(|line| line.contains("rs,toml")),
+            "{py_lines:?}"
+        );
+
+        // Equal counts break ties alphabetically, so the suggestion is stable.
+        let tied = [Path::new("a.py"), Path::new("b.rs")];
+        assert_eq!(suggested_filter_exts(&tied).as_deref(), Some("py,rs"));
+
+        // Underscores and the reserved name `all` are not valid --filter type names.
+        let skipped = [
+            Path::new("vendor/lib.a_b"),
+            Path::new("secret.all"),
+            Path::new("c.go"),
+            Path::new("d.go"),
+        ];
+        assert_eq!(suggested_filter_exts(&skipped).as_deref(), Some("go"));
+    }
+
+    #[test]
+    fn test_context_window_suggestions_omit_filter_without_extensions() {
+        let paths = [Path::new("Makefile"), Path::new("LICENSE")];
+        let lines = context_window_suggestions(&paths);
+        assert!(
+            !lines.iter().any(|line| line.contains("--filter")),
+            "no extensions means no --filter command to suggest: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("--ignore docs,assets"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("--max-tokens 100000"))
+        );
+        assert!(lines.iter().any(|line| line.contains("--token-count")));
+    }
+
+    #[test]
     fn test_context_window_warning_under_limit() {
         let original = std::env::var("CB_SILENT");
         unsafe {
@@ -1648,7 +1802,7 @@ mod tests {
         }
 
         let output_bytes = 100_000;
-        print_context_window_warning(output_bytes * 4, None);
+        print_context_window_warning(output_bytes * 4, None, &[]);
 
         unsafe {
             std::env::remove_var("CB_SILENT");
@@ -1663,21 +1817,21 @@ mod tests {
     #[test]
     fn test_context_window_warning_over_limit() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, None);
+        print_context_window_warning(output_bytes * 4, None, &[]);
     }
 
     #[test]
     fn test_context_window_warning_with_max_tokens() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, Some(100_000));
+        print_context_window_warning(output_bytes * 4, Some(100_000), &[]);
     }
 
     #[test]
     fn test_print_context_window_warning_various_sizes() {
-        print_context_window_warning(50_000, None);
-        print_context_window_warning(200_000, None);
-        print_context_window_warning(500_000, None);
-        print_context_window_warning(1_000_000, None);
+        print_context_window_warning(50_000, None, &[]);
+        print_context_window_warning(200_000, None, &[]);
+        print_context_window_warning(500_000, None, &[]);
+        print_context_window_warning(1_000_000, None, &[]);
     }
 
     #[test]
@@ -2248,7 +2402,7 @@ mod tests {
     #[test]
     fn test_print_context_window_warning_exact_limit() {
         let output_bytes = 128_000 * 4;
-        print_context_window_warning(output_bytes, None);
+        print_context_window_warning(output_bytes, None, &[]);
     }
 
     #[test]

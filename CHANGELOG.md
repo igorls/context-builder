@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **`--ignore` accepts comma-separated values (B12)**
+  - `-i docs,assets` ignores both names, matching `--filter`. Repeated `-i` flags still append.
+  - `--help` and the README document that `--ignore` takes gitignore-style globs and paths (`*.lock`, `crates/core`). The help example no longer suggests `--ignore lock`, which matched nothing useful.
+  - The >128K-token warning suggests `--filter` extensions detected in that run instead of a hardcoded `--filter rs,toml`, and its `--ignore docs,assets` example is a command the flag actually honors.
+
 ## v0.10.0 (2026-08-31) — "Honest Signatures"
 
 > Delivered per `docs/research/v0.10-plan.md` (derived from the post-v0.9.0 review): every documented flag now does what it says, divergent language maps are unified, and packaging/CI gaps are closed.

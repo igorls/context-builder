@@ -19,7 +19,7 @@ diff_only = false
 # File extensions to include (no leading dot, e.g. "rs", "toml")
 filter = ["rs", "toml"]
 
-# File / directory names to ignore (exact name matches)
+# Paths or gitignore-style globs to ignore (names, paths like "crates/core", globs like "*.lock")
 ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
