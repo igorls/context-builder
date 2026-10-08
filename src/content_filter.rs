@@ -19,7 +19,8 @@
 //!   other names in [`PRIVATE_KEY_BASENAMES`]), `*.pem`, `*.key`, `*.p12`,
 //!   `*.pfx`, `*.ppk`, `credentials*.json`, `.env` and `.env.*` (except
 //!   `.env.example` and `.env.sample`), and `.npmrc` / `.pypirc` when they
-//!   contain a token.
+//!   contain a token. A value that is wholly an environment reference
+//!   (`${VAR}`, `$VAR`, `%VAR%`) is a placeholder, not a token.
 //!
 //! # Escape hatches
 //!
@@ -608,7 +609,8 @@ fn is_private_key_name(name: &str, ext: &str) -> bool {
 }
 
 /// True when a non-placeholder credential is assigned. The scanned text is
-/// never returned to the caller.
+/// never returned to the caller. [`is_placeholder`] treats a value that is
+/// wholly an environment reference (`${VAR}`, `$VAR`, `%VAR%`) as a placeholder.
 fn credential_file_has_secret(path: &Path, keys: &[&str]) -> io::Result<bool> {
     let mut file = File::open(path)?;
     let mut buf = vec![0u8; CREDENTIAL_SCAN_BYTES];
@@ -617,6 +619,9 @@ fn credential_file_has_secret(path: &Path, keys: &[&str]) -> io::Result<bool> {
     Ok(text_has_credential(&text, keys))
 }
 
+/// True when any assignment of `keys` has a non-empty value that
+/// [`is_placeholder`] does not accept. A value that is wholly `${VAR}`,
+/// `$VAR`, or `%VAR%` is a placeholder.
 fn text_has_credential(text: &str, keys: &[&str]) -> bool {
     for line in text.lines() {
         let trimmed = line.trim();
@@ -626,9 +631,15 @@ fn text_has_credential(text: &str, keys: &[&str]) -> bool {
         let lower = trimmed.to_ascii_lowercase();
         for key in keys {
             let key = key.trim();
-            if let Some(idx) = find_key(&lower, key) {
-                let after = &trimmed[idx + key.len()..];
-                let value = credential_value(after);
+            let mut from = 0;
+            while let Some(idx) = find_key_from(&lower, key, from) {
+                let end = idx + key.len();
+                from = end;
+                // `token` inside `${PYPI_TOKEN}` is the reference, not an assignment.
+                if key_inside_env_reference(trimmed, idx, end) {
+                    continue;
+                }
+                let value = credential_value(&trimmed[end..]);
                 if !value.is_empty() && !is_placeholder(value) {
                     return true;
                 }
@@ -638,8 +649,7 @@ fn text_has_credential(text: &str, keys: &[&str]) -> bool {
     false
 }
 
-fn find_key(haystack: &str, key: &str) -> Option<usize> {
-    let mut start = 0;
+fn find_key_from(haystack: &str, key: &str, mut start: usize) -> Option<usize> {
     while let Some(rel) = haystack[start..].find(key) {
         let idx = start + rel;
         let before_ok = idx == 0 || !haystack.as_bytes()[idx - 1].is_ascii_alphanumeric();
@@ -661,6 +671,9 @@ fn credential_value(after_key: &str) -> &str {
 }
 
 fn is_placeholder(value: &str) -> bool {
+    if is_env_reference(value) {
+        return true;
+    }
     matches!(
         value.to_ascii_lowercase().as_str(),
         "" | "changeme"
@@ -688,6 +701,101 @@ fn is_placeholder(value: &str) -> bool {
             | "example"
             | "sample"
     )
+}
+
+/// True when `value` is entirely `${VAR}`, `$VAR`, or `%VAR%`.
+///
+/// `VAR` is an ASCII identifier (letter or `_`, then letters, digits, or `_`).
+/// A value that only contains a reference (`prefix${VAR}`, `${VAR}suffix`) is
+/// not a placeholder.
+fn is_env_reference(value: &str) -> bool {
+    if let Some(name) = value
+        .strip_prefix("${")
+        .and_then(|rest| rest.strip_suffix('}'))
+    {
+        return is_env_name(name);
+    }
+    if let Some(name) = value.strip_prefix('$') {
+        return is_env_name(name);
+    }
+    if let Some(name) = value
+        .strip_prefix('%')
+        .and_then(|rest| rest.strip_suffix('%'))
+    {
+        return is_env_name(name);
+    }
+    false
+}
+
+fn is_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// True when the key span `[start, end)` lies inside `${VAR}`, `$VAR`, or `%VAR%`.
+fn key_inside_env_reference(line: &str, start: usize, end: usize) -> bool {
+    let mut rest = line;
+    let mut offset = 0;
+    while !rest.is_empty() {
+        if let Some(len) = env_reference_len(rest) {
+            if start >= offset && end <= offset + len {
+                return true;
+            }
+            offset += len;
+            rest = &rest[len..];
+        } else {
+            let len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            offset += len;
+            rest = &rest[len..];
+        }
+    }
+    false
+}
+
+/// Byte length of an env reference at the start of `s`, if one is there.
+fn env_reference_len(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    if bytes.first() == Some(&b'$') && bytes.get(1) == Some(&b'{') {
+        let close = s[2..].find('}')?;
+        if is_env_name(&s[2..2 + close]) {
+            return Some(2 + close + 1);
+        }
+        return None;
+    }
+    if bytes.first() == Some(&b'$') {
+        let name_len = env_name_prefix_len(&s[1..]);
+        if name_len > 0 {
+            return Some(1 + name_len);
+        }
+        return None;
+    }
+    if bytes.first() == Some(&b'%') {
+        let name_len = env_name_prefix_len(&s[1..]);
+        if name_len > 0 && bytes.get(1 + name_len) == Some(&b'%') {
+            return Some(name_len + 2);
+        }
+    }
+    None
+}
+
+fn env_name_prefix_len(s: &str) -> usize {
+    let mut len = 0;
+    for c in s.chars() {
+        let ok = if len == 0 {
+            c.is_ascii_alphabetic() || c == '_'
+        } else {
+            c.is_ascii_alphanumeric() || c == '_'
+        };
+        if !ok {
+            break;
+        }
+        len += c.len_utf8();
+    }
+    len
 }
 
 #[cfg(test)]
@@ -933,6 +1041,98 @@ mod tests {
 
     fn reason_of(path: &Path, policy: &ContentPolicy) -> Option<SkipReason> {
         classify(path, 20, policy).map(|(reason, _)| reason)
+    }
+
+    #[test]
+    fn env_references_are_not_credentials_in_npmrc_or_pypirc() {
+        assert!(is_placeholder("${NPM_TOKEN}"));
+        assert!(is_placeholder("$NPM_TOKEN"));
+        assert!(is_placeholder("%NPM_TOKEN%"));
+        assert!(is_placeholder("${_token}"));
+        assert!(!is_placeholder("npm_${NPM_TOKEN}"));
+        assert!(!is_placeholder("${NPM_TOKEN}x"));
+        assert!(!is_placeholder("prefix$NPM_TOKEN"));
+        assert!(!is_placeholder("$"));
+        assert!(!is_placeholder("${}"));
+        assert!(!is_placeholder("%NPM_TOKEN"));
+        assert!(!is_placeholder("npm_SUPER_SECRET_TOKEN"));
+
+        let npm_keys = &["_authtoken", "_password", "_auth"][..];
+        assert!(!text_has_credential(
+            "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n",
+            npm_keys,
+        ));
+        assert!(!text_has_credential(
+            "//registry.npmjs.org/:_authToken=$NPM_TOKEN\n//other/:_authToken=%NPM_TOKEN%\n",
+            npm_keys,
+        ));
+        assert!(!text_has_credential(
+            "//registry.npmjs.org/:_authToken=\"${NPM_TOKEN}\"\n",
+            npm_keys,
+        ));
+        assert!(text_has_credential(
+            "//registry.npmjs.org/:_authToken=npm_SUPER_SECRET_TOKEN\n",
+            npm_keys,
+        ));
+        assert!(text_has_credential(
+            "//registry.npmjs.org/:_authToken=prefix${NPM_TOKEN}\n",
+            npm_keys,
+        ));
+
+        let pypi_keys = &["password", "token"][..];
+        assert!(!text_has_credential(
+            "[pypi]\nusername = user\npassword = ${PYPI_TOKEN}\n",
+            pypi_keys,
+        ));
+        assert!(!text_has_credential(
+            "password = $PYPI_TOKEN\ntoken = %PYPI_TOKEN%\n",
+            pypi_keys,
+        ));
+        assert!(text_has_credential(
+            "[pypi]\nusername = user\npassword = pypi-secret-password\n",
+            pypi_keys,
+        ));
+        assert!(text_has_credential(
+            "password = secret${PYPI_TOKEN}\n",
+            pypi_keys,
+        ));
+
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("env-npm")).unwrap();
+        fs::write(
+            root.join("env-npm/.npmrc"),
+            "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("env-pypi")).unwrap();
+        fs::write(
+            root.join("env-pypi/.pypirc"),
+            "[distutils]\nindex-servers = pypi\n[pypi]\nusername = user\npassword = ${PYPI_TOKEN}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".npmrc"),
+            "//registry.npmjs.org/:_authToken=npm_SUPER_SECRET_TOKEN\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".pypirc"),
+            "[pypi]\npassword = pypi-secret-password\n",
+        )
+        .unwrap();
+
+        let bare = policy(&[], Some(DEFAULT_MAX_FILE_SIZE_BYTES), false);
+        assert_eq!(reason_of(&root.join("env-npm/.npmrc"), &bare), None);
+        assert_eq!(reason_of(&root.join("env-pypi/.pypirc"), &bare), None);
+        assert_eq!(
+            reason_of(&root.join(".npmrc"), &bare),
+            Some(SkipReason::Secret)
+        );
+        assert_eq!(
+            reason_of(&root.join(".pypirc"), &bare),
+            Some(SkipReason::Secret)
+        );
     }
 
     #[test]

@@ -228,6 +228,18 @@ fn each_secret_pattern_is_skipped_with_a_warning_and_templates_are_kept() {
         "[pypi]\nusername = user\npassword = changeme\n",
     )
     .unwrap();
+    fs::create_dir(root.join("env-npm")).unwrap();
+    fs::write(
+        root.join("env-npm/.npmrc"),
+        "registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n",
+    )
+    .unwrap();
+    fs::create_dir(root.join("env-pypi")).unwrap();
+    fs::write(
+        root.join("env-pypi/.pypirc"),
+        "[pypi]\nusername = user\npassword = ${PYPI_TOKEN}\ntoken = $PYPI_TOKEN\n",
+    )
+    .unwrap();
 
     let mut with_hidden = args(root, &outs.join("out.md"));
     with_hidden.hidden = true;
@@ -251,6 +263,11 @@ fn each_secret_pattern_is_skipped_with_a_warning_and_templates_are_kept() {
     assert!(doc.contains("ssh-ed25519 AAAA public"));
     assert!(doc.contains("registry=https://registry.npmjs.org/"));
     assert!(doc.contains("password = changeme"));
+    assert!(doc.contains("//registry.npmjs.org/:_authToken=${NPM_TOKEN}"));
+    assert!(doc.contains("password = ${PYPI_TOKEN}"));
+    assert!(doc.contains("token = $PYPI_TOKEN"));
+    assert!(!doc.contains("- `env-npm/.npmrc` — secret"));
+    assert!(!doc.contains("- `env-pypi/.pypirc` — secret"));
     assert!(doc.contains("fn kept()"));
     assert!(!doc.contains(payload));
     assert!(!doc.contains("npm_SUPER_SECRET_TOKEN"));
@@ -269,6 +286,8 @@ fn each_secret_pattern_is_skipped_with_a_warning_and_templates_are_kept() {
     }
     assert!(joined.contains("Skipping likely secret `.npmrc` (npm credentials)."));
     assert!(joined.contains("Skipping likely secret `.pypirc` (PyPI credentials)."));
+    assert!(!joined.contains("env-npm/.npmrc"));
+    assert!(!joined.contains("env-pypi/.pypirc"));
     assert!(joined.contains("Skipping likely secret `.env` (environment file)."));
     assert!(!joined.contains(payload));
     assert!(!joined.contains("npm_SUPER_SECRET_TOKEN"));

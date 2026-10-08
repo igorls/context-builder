@@ -188,7 +188,7 @@ On a full-tree run the tool leaves out three kinds of files and lists each one u
 
 **Size.** Files strictly larger than **256 KiB** are skipped. `--max-file-size` accepts `256K`, `1M`, `1MB`, `262144` (bytes), and the `KiB` / `MiB` spellings (`K`/`M`/`G` are powers of 1024). **`--max-file-size 0`** disables the limit.
 
-**Secrets.** `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (and the `*_sk` names), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`, `credentials*.json`, `.env` and `.env.*` **except** `.env.example` and `.env.sample`, and `.npmrc` / `.pypirc` when they assign a token. `id_rsa.pub` is kept. A placeholder value such as `changeme` does not count as a token.
+**Secrets.** `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (and the `*_sk` names), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`, `credentials*.json`, `.env` and `.env.*` **except** `.env.example` and `.env.sample`, and `.npmrc` / `.pypirc` when they assign a token. `id_rsa.pub` is kept. A placeholder value such as `changeme`, or a value that is wholly an environment reference (`${VAR}`, `$VAR`, `%VAR%`), does not count as a token.
 
 **Escape hatches**
 
