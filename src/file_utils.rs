@@ -1,6 +1,6 @@
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 /// Returns a numeric category for file relevance ordering.
@@ -280,35 +280,52 @@ pub fn collect_files(
     Ok(files)
 }
 
+/// True when a person can answer a `[y/N]` prompt on stdin.
+///
+/// Pipes, redirects, and `/dev/null` are not terminals (`std::io::IsTerminal`).
+/// Non-interactive callers proceed without prompting, the same way `--yes` and
+/// `-o -` already do. The check lives here — not in `run_with_args` — so tests
+/// that inject their own `Prompter` still control confirmations.
+fn stdin_is_terminal() -> bool {
+    io::stdin().is_terminal()
+}
+
+/// Writes `prompt` to stderr and returns whether the answer was `y`/`Y`.
+///
+/// Prompts must not go to stdout: `-o -` and any caller capturing stdout would
+/// otherwise treat the question as document content.
+fn prompt_yes(prompt: &str) -> io::Result<bool> {
+    eprint!("{prompt}");
+    io::stderr().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim().eq_ignore_ascii_case("y"))
+}
+
 /// Asks for user confirmation if the number of files is large.
+///
+/// The `> 100` question is unchanged on an interactive terminal. When stdin is
+/// not a terminal the prompt is skipped and processing proceeds.
 pub fn confirm_processing(file_count: usize) -> io::Result<bool> {
-    if file_count > 100 {
-        print!(
-            "Warning: You're about to process {} files. This might take a while. Continue? [y/N] ",
-            file_count
-        );
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            return Ok(false);
-        }
+    if file_count > 100 && stdin_is_terminal() {
+        prompt_yes(&format!(
+            "Warning: You're about to process {file_count} files. This might take a while. Continue? [y/N] "
+        ))
+    } else {
+        Ok(true)
     }
-    Ok(true)
 }
 
 /// Asks for user confirmation to overwrite an existing file.
+///
+/// When stdin is not a terminal the prompt is skipped and the file is overwritten.
 pub fn confirm_overwrite(file_path: &str) -> io::Result<bool> {
-    print!("The file '{}' already exists. Overwrite? [y/N] ", file_path);
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    if input.trim().eq_ignore_ascii_case("y") {
-        Ok(true)
-    } else {
-        Ok(false)
+    if !stdin_is_terminal() {
+        return Ok(true);
     }
+    prompt_yes(&format!(
+        "The file '{file_path}' already exists. Overwrite? [y/N] "
+    ))
 }
 
 pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
