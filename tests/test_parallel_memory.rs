@@ -67,6 +67,7 @@ fn test_streaming_parallel_processing() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = Config::default();
@@ -190,6 +191,7 @@ fn test_parallel_error_handling() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = Config::default();
@@ -257,6 +259,7 @@ fn test_memory_efficiency_with_large_files() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = Config::default();

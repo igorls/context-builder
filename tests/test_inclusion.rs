@@ -60,6 +60,7 @@ fn args(input: impl Into<String>, output: impl Into<String>) -> Args {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        include_lockfiles: false,
     }
 }
 

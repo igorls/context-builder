@@ -67,7 +67,7 @@ pub const ROOT_MANIFESTS: &[&str] = &[
     "Pipfile",
 ];
 
-/// Tool config and key project docs that stay category 0, but are not manifests.
+/// Tool config and key project docs. Category 0 only when the file is at the repository root.
 const PRIORITY_CONFIG_AND_DOCS: &[&str] = &[
     "context-builder.toml",
     ".gitignore",
@@ -80,8 +80,23 @@ const PRIORITY_CONFIG_AND_DOCS: &[&str] = &[
     "GEMINI.md",
     "COPILOT.md",
     "CONTRIBUTING.md",
-    "CHANGELOG.md",
 ];
+
+/// Changelog and release-history basenames. Category 3 (docs) at any depth,
+/// including the repository root.
+const HISTORY_DOC_NAMES: &[&str] = &[
+    "CHANGELOG.md",
+    "CHANGELOG",
+    "HISTORY.md",
+    "HISTORY",
+    "CHANGES.md",
+    "NEWS.md",
+];
+
+/// README basenames. At the repository root these are category 0 and sort
+/// ahead of other root files. Nested READMEs sort with manifests, ahead of
+/// the other files in that directory.
+const README_NAMES: &[&str] = &["README.md", "README", "README.txt", "README.rst"];
 
 /// Directory names that mark tests or benchmarks, at any depth.
 const TEST_DIR_NAMES: &[&str] = &[
@@ -134,10 +149,10 @@ const TEST_FILE_SUFFIXES: &[&str] = &[
 
 /// Returns a numeric category for file relevance ordering.
 /// Lower numbers appear first in output. Categories:
-/// 0 = Project config + key docs (Cargo.toml, README.md, AGENTS.md, etc.)
-/// 1 = Source code (src/, lib/) — entry points sorted first within category
+/// 0 = Root-level project config and key docs (root Cargo.toml, root README, …)
+/// 1 = Source code (src/, lib/) — manifests and READMEs, then entry points, within each directory
 /// 2 = Tests and benchmarks (tests/, benches/, test/, spec/, testdata/, fixtures/)
-/// 3 = Documentation, scripts, and everything else
+/// 3 = Documentation, changelogs, scripts, and everything else
 /// 4 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
 /// 5 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
 fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
@@ -154,7 +169,15 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
     if LOCKFILES.contains(&name) {
         return 5;
     }
-    if ROOT_MANIFESTS.contains(&name) || PRIORITY_CONFIG_AND_DOCS.contains(&name) {
+    // Changelogs are docs at every depth, including the repository root.
+    if HISTORY_DOC_NAMES.contains(&name) {
+        return 3;
+    }
+    // Category 0 is only the repository root: manifests, README, and the other
+    // priority config/docs. Nested copies rank with their directory.
+    if parents.is_empty()
+        && (ROOT_MANIFESTS.contains(&name) || PRIORITY_CONFIG_AND_DOCS.contains(&name))
+    {
         return 0;
     }
     // Test markers win over source-root classification (`src/foo_test.go` is a
@@ -317,6 +340,13 @@ fn configure_file_type_filters(walker: &mut WalkBuilder, filters: &[String]) -> 
     Ok(())
 }
 
+/// Files selected for one run, after the lockfile default is applied.
+pub struct FileCollection {
+    pub files: Vec<DirEntry>,
+    /// How many [`LOCKFILES`] basenames were dropped. Zero when `include_lockfiles` is set.
+    pub skipped_lockfiles: usize,
+}
+
 /// Collects all files to be processed using `ignore` crate for efficient traversal.
 ///
 /// `filters` are ripgrep file types or extensions. A leading `.` or `*.` is
@@ -329,6 +359,8 @@ fn configure_file_type_filters(walker: &mut WalkBuilder, filters: &[String]) -> 
 ///
 /// Hidden files and directories are skipped. Use [`collect_files_ext`] with
 /// `include_hidden` to opt in (that still prunes VCS metadata directories).
+/// Lockfiles ([`LOCKFILES`]) are skipped. Pass [`collect_files_reporting`] with
+/// `include_lockfiles` when they should be kept.
 pub fn collect_files(
     base_path: &Path,
     filters: &[String],
@@ -353,6 +385,29 @@ pub fn collect_files_ext(
     auto_ignores: &[String],
     include_hidden: bool,
 ) -> io::Result<Vec<DirEntry>> {
+    Ok(collect_files_reporting(
+        base_path,
+        filters,
+        ignores,
+        auto_ignores,
+        include_hidden,
+        false,
+    )?
+    .files)
+}
+
+/// Same selection as [`collect_files_ext`], plus the lockfile skip count.
+///
+/// `include_lockfiles` keeps basenames listed in [`LOCKFILES`]. A type filter
+/// such as `toml` or `lock` does not include those files on its own.
+pub fn collect_files_reporting(
+    base_path: &Path,
+    filters: &[String],
+    ignores: &[String],
+    auto_ignores: &[String],
+    include_hidden: bool,
+    include_lockfiles: bool,
+) -> io::Result<FileCollection> {
     let mut walker = WalkBuilder::new(base_path);
     if include_hidden {
         // `hidden(false)` means "do not ignore hidden files".
@@ -476,22 +531,77 @@ pub fn collect_files_ext(
         .filter(|e| !is_prior_context_output(e.path()))
         .collect();
 
-    // Sort files by relevance category, then entry-point priority, then alphabetically.
-    // This puts config + docs first, then source code (entry points before helpers),
-    // then tests, then docs/other, then build/CI, then lockfiles.
-    // LLMs comprehend codebases better when core source appears before test scaffolding.
+    let skipped_lockfiles = if include_lockfiles {
+        0
+    } else {
+        let before = files.len();
+        files.retain(|entry| !is_lockfile_path(entry.path()));
+        before - files.len()
+    };
+
+    // Category, then directory, then README/manifests within that directory,
+    // then entry points, then path. Separators are normalized so the order
+    // does not depend on the OS.
     files.sort_by(|a, b| {
-        let cat_a = file_relevance_category(a.path(), base_path);
-        let cat_b = file_relevance_category(b.path(), base_path);
-        cat_a
-            .cmp(&cat_b)
-            .then_with(|| {
-                file_entry_point_priority(a.path()).cmp(&file_entry_point_priority(b.path()))
-            })
-            .then_with(|| a.path().cmp(b.path()))
+        relevance_sort_key(a.path(), base_path).cmp(&relevance_sort_key(b.path(), base_path))
     });
 
-    Ok(files)
+    Ok(FileCollection {
+        files,
+        skipped_lockfiles,
+    })
+}
+
+fn is_lockfile_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| LOCKFILES.contains(&name))
+}
+
+fn is_readme_name(name: &str) -> bool {
+    README_NAMES.contains(&name)
+}
+
+/// Lead rank inside one directory. Lower comes first.
+/// Root README is ahead of root manifests; nested READMEs share the manifest bucket.
+fn directory_lead_rank(name: &str, at_root: bool) -> u8 {
+    if at_root && is_readme_name(name) {
+        0
+    } else if is_readme_name(name) || ROOT_MANIFESTS.contains(&name) {
+        1
+    } else {
+        2
+    }
+}
+
+fn relevance_sort_key(path: &Path, base_path: &Path) -> (u8, String, u8, u8, String) {
+    let rel = normalized_relative(path, base_path);
+    let parts: Vec<&str> = rel.split('/').filter(|part| !part.is_empty()).collect();
+    let name = parts.last().copied().unwrap_or("");
+    let directory = if parts.len() > 1 {
+        parts[..parts.len() - 1].join("/")
+    } else {
+        String::new()
+    };
+    let at_root = directory.is_empty();
+    (
+        file_relevance_category(path, base_path),
+        directory,
+        directory_lead_rank(name, at_root),
+        file_entry_point_priority(path),
+        rel,
+    )
+}
+
+/// Stderr notice when lockfiles were left out. `None` when nothing was skipped.
+pub fn lockfile_skip_notice(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some("Skipped 1 lockfile (use --include-lockfiles to include)".to_string()),
+        n => Some(format!(
+            "Skipped {n} lockfiles (use --include-lockfiles to include)"
+        )),
+    }
 }
 
 /// `.git` / `.hg` / `.svn` / `.bzr` stay out of the walk even with `--hidden`.
@@ -1092,17 +1202,18 @@ mod tests {
             fs::write(base.join(lockfile), "lock content").unwrap();
         }
 
-        let files = collect_files(base, &[], &[], &[]).unwrap();
-        let paths: Vec<_> = files
-            .iter()
-            .map(|e| e.path().file_name().unwrap().to_str().unwrap())
-            .collect();
+        let skipped = collect_files(base, &[], &[], &[]).unwrap();
+        assert!(
+            skipped.is_empty(),
+            "lockfiles are excluded unless include_lockfiles is set"
+        );
 
+        let (kept, n_skipped) = collected_rels(base, &[], true);
+        assert_eq!(n_skipped, 0);
         for lockfile in &lockfiles {
             assert!(
-                paths.contains(lockfile),
-                "Expected {} to be collected",
-                lockfile
+                kept.iter().any(|path| path == lockfile),
+                "Expected {lockfile} to be collected when include_lockfiles is set"
             );
         }
     }
@@ -1698,11 +1809,215 @@ mod tests {
         assert_eq!(category_of("App.swift"), 1);
         assert_eq!(category_of("app.exs"), 1);
         assert_eq!(category_of("other.xml"), 1);
-        // Basename matching at any depth is unchanged (not root-only).
-        assert_eq!(category_of("examples/demo/pyproject.toml"), 0);
-        assert_eq!(category_of("packages/web/package.json"), 0);
-        assert_eq!(category_of("docs/README.md"), 0);
-        assert_eq!(category_of("CHANGELOG.md"), 0);
+        // Nested manifests and READMEs are not category 0.
+        assert_eq!(category_of("examples/demo/pyproject.toml"), 3);
+        assert_eq!(category_of("packages/web/package.json"), 1);
+        assert_eq!(category_of("docs/README.md"), 3);
+        assert_eq!(category_of("README.md"), 0);
+    }
+
+    fn collected_rels(
+        base: &Path,
+        filters: &[String],
+        include_lockfiles: bool,
+    ) -> (Vec<String>, usize) {
+        let collected =
+            collect_files_reporting(base, filters, &[], &[], false, include_lockfiles).unwrap();
+        let rels = collected
+            .files
+            .iter()
+            .map(|entry| {
+                entry
+                    .path()
+                    .strip_prefix(base)
+                    .unwrap_or(entry.path())
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        (rels, collected.skipped_lockfiles)
+    }
+
+    #[test]
+    fn lockfiles_are_skipped_unless_opted_in() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("Cargo.toml"), "[package]\nname = \"t\"\n").unwrap();
+        fs::write(base.join("Cargo.lock"), "# lock\n").unwrap();
+        fs::write(base.join("uv.lock"), "# lock\n").unwrap();
+        fs::write(base.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+
+        let (skipped, n) = collected_rels(base, &[], false);
+        assert_eq!(n, 2);
+        assert_eq!(
+            lockfile_skip_notice(n).as_deref(),
+            Some("Skipped 2 lockfiles (use --include-lockfiles to include)")
+        );
+        assert_eq!(
+            lockfile_skip_notice(1).as_deref(),
+            Some("Skipped 1 lockfile (use --include-lockfiles to include)")
+        );
+        assert!(lockfile_skip_notice(0).is_none());
+        assert!(!skipped.iter().any(|path| path.ends_with(".lock")));
+        assert!(skipped.iter().any(|path| path == "Cargo.toml"));
+
+        let (kept, n_kept) = collected_rels(base, &[], true);
+        assert_eq!(n_kept, 0);
+        assert!(kept.iter().any(|path| path == "Cargo.lock"));
+        assert!(kept.iter().any(|path| path == "uv.lock"));
+        // Included lockfiles stay after source.
+        let lock_at = kept.iter().position(|path| path == "Cargo.lock").unwrap();
+        let src_at = kept.iter().position(|path| path == "src/lib.rs").unwrap();
+        assert!(src_at < lock_at);
+    }
+
+    #[test]
+    fn type_filter_does_not_include_lockfiles() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("Cargo.toml"), "[package]\nname = \"t\"\n").unwrap();
+        fs::write(base.join("Cargo.lock"), "# lock\n").unwrap();
+        fs::write(base.join("other.lock"), "# not a known lockfile\n").unwrap();
+
+        let toml = vec!["toml".to_string()];
+        let (without, skipped) = collected_rels(base, &toml, false);
+        assert!(without.iter().any(|path| path == "Cargo.toml"));
+        assert!(!without.iter().any(|path| path == "Cargo.lock"));
+        assert_eq!(skipped, 1);
+
+        let (with_flag, skipped_flag) = collected_rels(base, &toml, true);
+        assert!(with_flag.iter().any(|path| path == "Cargo.lock"));
+        assert_eq!(skipped_flag, 0);
+
+        let lock_filter = vec!["lock".to_string()];
+        let (lock_only, lock_skipped) = collected_rels(base, &lock_filter, false);
+        assert!(!lock_only.iter().any(|path| path == "Cargo.lock"));
+        assert!(lock_only.iter().any(|path| path == "other.lock"));
+        assert_eq!(lock_skipped, 1);
+
+        let (lock_included, _) = collected_rels(base, &lock_filter, true);
+        assert!(lock_included.iter().any(|path| path == "Cargo.lock"));
+        assert!(lock_included.iter().any(|path| path == "other.lock"));
+    }
+
+    #[test]
+    fn root_readme_precedes_changelog_and_changelog_is_docs() {
+        for name in [
+            "CHANGELOG.md",
+            "CHANGELOG",
+            "HISTORY.md",
+            "HISTORY",
+            "CHANGES.md",
+            "NEWS.md",
+        ] {
+            assert_eq!(category_of(name), 3, "{name}");
+            assert!(
+                HISTORY_DOC_NAMES.contains(&name),
+                "{name} should stay a history doc, not a manifest"
+            );
+        }
+        assert_eq!(category_of("README.md"), 0);
+        assert_eq!(category_of("packages/web/CHANGELOG.md"), 3);
+
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("README.md"), "# Hi\n").unwrap();
+        fs::write(base.join("CHANGELOG.md"), "# Changes\n").unwrap();
+        fs::write(base.join("Cargo.toml"), "[package]\nname = \"t\"\n").unwrap();
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+
+        let (order, _) = collected_rels(base, &[], false);
+        assert_eq!(
+            order,
+            vec![
+                "README.md".to_string(),
+                "Cargo.toml".to_string(),
+                "src/lib.rs".to_string(),
+                "CHANGELOG.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_package_json_is_grouped_with_its_directory() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("packages/foo")).unwrap();
+        fs::create_dir_all(base.join("packages/foo/src")).unwrap();
+        fs::write(base.join("packages/foo/package.json"), "{}\n").unwrap();
+        fs::write(base.join("packages/foo/index.ts"), "export {}\n").unwrap();
+        fs::write(base.join("packages/foo/src/lib.ts"), "export {}\n").unwrap();
+        fs::write(base.join("README.md"), "# Hi\n").unwrap();
+
+        assert_eq!(category_of("packages/foo/package.json"), 1);
+        assert_ne!(category_of("packages/foo/package.json"), 0);
+
+        let (order, _) = collected_rels(base, &[], false);
+        let pkg = order
+            .iter()
+            .position(|p| p == "packages/foo/package.json")
+            .unwrap();
+        let index = order
+            .iter()
+            .position(|p| p == "packages/foo/index.ts")
+            .unwrap();
+        let nested = order
+            .iter()
+            .position(|p| p == "packages/foo/src/lib.ts")
+            .unwrap();
+        assert!(pkg < index, "manifest sorts ahead of sibling files");
+        assert!(
+            index < nested,
+            "a directory's files stay ahead of its subdirectories"
+        );
+        assert_eq!(order[0], "README.md");
+    }
+
+    #[test]
+    fn pnpm_monorepo_leads_with_root_readme_and_manifest() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("app")).unwrap();
+        fs::create_dir_all(base.join("packages/web/src")).unwrap();
+        fs::create_dir_all(base.join("packages/api")).unwrap();
+        fs::write(base.join("README.md"), "# App\n").unwrap();
+        fs::write(base.join("package.json"), "{}\n").unwrap();
+        fs::write(base.join("Cargo.toml"), "[package]\nname = \"t\"\n").unwrap();
+        fs::write(base.join("CHANGELOG.md"), "# Log\n").unwrap();
+        fs::write(base.join("pnpm-lock.yaml"), "lock\n").unwrap();
+        fs::write(base.join("app/main.ts"), "export {}\n").unwrap();
+        fs::write(base.join("packages/web/package.json"), "{}\n").unwrap();
+        fs::write(base.join("packages/web/CHANGELOG.md"), "# Web\n").unwrap();
+        fs::write(base.join("packages/web/src/index.ts"), "export {}\n").unwrap();
+        fs::write(base.join("packages/api/package.json"), "{}\n").unwrap();
+        fs::write(base.join("packages/api/README.md"), "# API\n").unwrap();
+
+        let expected = vec![
+            "README.md",
+            "Cargo.toml",
+            "package.json",
+            "app/main.ts",
+            "packages/api/README.md",
+            "packages/api/package.json",
+            "packages/web/package.json",
+            "packages/web/src/index.ts",
+            "CHANGELOG.md",
+            "packages/web/CHANGELOG.md",
+        ];
+
+        let (first, skipped) = collected_rels(base, &[], false);
+        let (second, _) = collected_rels(base, &[], false);
+        assert_eq!(first, second, "ranking is deterministic");
+        assert_eq!(skipped, 1);
+        assert_eq!(
+            first,
+            expected.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        );
+        assert!(!first.iter().any(|path| path == "pnpm-lock.yaml"));
+        assert_eq!(category_of("packages/web/package.json"), 1);
+        assert_eq!(category_of("CHANGELOG.md"), 3);
     }
 
     #[test]

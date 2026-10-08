@@ -81,6 +81,7 @@ fn run_with_resolved_config_explicit(
         max_file_size: resolution.config.max_file_size,
         hidden: resolution.config.hidden,
         include_secrets: resolution.config.include_secrets,
+        include_lockfiles: resolution.config.include_lockfiles,
     };
 
     // Create final Config with resolved values
@@ -146,6 +147,7 @@ output = "from_config.md"
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -233,6 +235,7 @@ ignore = ["target"]
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -324,6 +327,7 @@ timestamped_output = true
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -410,6 +414,7 @@ yes = true
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -491,6 +496,7 @@ timestamped_output = false
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -539,6 +545,7 @@ fn args_for(input: &str, output: &str) -> Args {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        include_lockfiles: false,
     }
 }
 

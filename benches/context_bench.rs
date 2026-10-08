@@ -217,6 +217,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let prompter = NoPrompt;
@@ -270,6 +271,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     max_file_size: "256K".to_string(),
                     hidden: false,
                     include_secrets: false,
+                    include_lockfiles: false,
                 },
                 Config::default(),
                 &prompter,

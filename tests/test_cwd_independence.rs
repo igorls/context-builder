@@ -97,6 +97,7 @@ filter = ["txt"]
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     // Apply config settings to args (mimicking the run() function logic)
@@ -194,6 +195,7 @@ timestamped_output = true
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     // Apply timestamping manually since we're bypassing run()

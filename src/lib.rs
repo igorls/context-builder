@@ -29,7 +29,7 @@ use content_filter::{ContentPolicy, SkippedFile};
 use diff::render_per_file_diffs;
 #[cfg(test)]
 use file_utils::collect_files;
-use file_utils::{collect_files_ext, confirm_overwrite};
+use file_utils::confirm_overwrite;
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
 use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
@@ -249,13 +249,20 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         auto_ignores.push(format!("{}/*.md", output_folder));
     }
 
-    let files = collect_files_ext(
+    let collected = crate::file_utils::collect_files_reporting(
         base_path,
         &final_args.filter,
         &final_args.ignore,
         &auto_ignores,
         final_args.hidden,
+        final_args.include_lockfiles,
     )?;
+    if !silent
+        && let Some(notice) = crate::file_utils::lockfile_skip_notice(collected.skipped_lockfiles)
+    {
+        eprintln!("{notice}");
+    }
+    let files = collected.files;
     let policy = ContentPolicy::new(
         &final_args.max_file_size,
         &final_args.filter,
@@ -439,8 +446,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         // Build an effective config that mirrors the *actual* file selection coming
         // from resolved CLI args, so the cache/diff fingerprint reflects real
         // behavior even when selection originates from the CLI, not the config
-        // file. `filter`, `ignore`, `max_file_size`, `hidden`, and
-        // `include_secrets` decide which files form the diff baseline. Rendering
+        // file. `filter`, `ignore`, `include_lockfiles`, `max_file_size`, `hidden`,
+        // and `include_secrets` decide which files form the diff baseline. Rendering
         // options (signatures/structure/truncate/visibility/max_tokens/
         // line_numbers/file_metadata/encoding) deliberately do NOT feed the fingerprint — they
         // don't change the captured raw content — so propagating them here would
@@ -458,6 +465,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         effective_config.max_file_size = Some(final_args.max_file_size.clone());
         effective_config.hidden = Some(final_args.hidden);
         effective_config.include_secrets = Some(final_args.include_secrets);
+        if final_args.include_lockfiles {
+            effective_config.include_lockfiles = Some(true);
+        }
 
         // 1. Create current project state
         let current_state = ProjectState::from_files(
@@ -1082,6 +1092,7 @@ pub fn run() -> io::Result<()> {
         max_file_size: resolution.config.max_file_size,
         hidden: resolution.config.hidden,
         include_secrets: resolution.config.include_secrets,
+        include_lockfiles: resolution.config.include_lockfiles,
     };
 
     // Create final Config with resolved values
@@ -1175,6 +1186,10 @@ filter = {}
 
 # Paths or gitignore-style globs to ignore (names, paths like "crates/core", globs like "*.lock")
 ignore = ["docs", "target", ".git", "node_modules"]
+
+# Dependency lockfiles are skipped by default, including when `filter` matches
+# their type (for example toml or lock). Set true or pass --include-lockfiles.
+include_lockfiles = false
 
 # Add line numbers to code blocks
 line_numbers = false
@@ -1316,6 +1331,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1357,6 +1373,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1415,6 +1432,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1459,6 +1477,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1506,6 +1525,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false); // Deny overwrite
@@ -1556,6 +1576,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1603,6 +1624,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1656,6 +1678,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1708,6 +1731,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1759,6 +1783,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1813,6 +1838,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1864,6 +1890,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let diff_config = DiffConfig::default();
@@ -2061,6 +2088,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2106,6 +2134,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2151,6 +2180,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2200,6 +2230,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2237,6 +2268,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2279,6 +2311,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2329,6 +2362,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2365,6 +2399,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2415,6 +2450,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let diff_config = DiffConfig {
@@ -2500,6 +2536,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let diff_config = DiffConfig {
@@ -2676,6 +2713,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2722,6 +2760,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2769,6 +2808,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2814,6 +2854,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config1 = Config {
             auto_diff: Some(true),
@@ -2848,6 +2889,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config2 = Config {
             auto_diff: Some(true),
@@ -2901,6 +2943,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let diff_config = DiffConfig {
@@ -2981,6 +3024,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let diff_config = DiffConfig {
@@ -3088,6 +3132,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            include_lockfiles: false,
         };
         let diff_config = DiffConfig::default();
         let sorted_paths: Vec<PathBuf> = files
@@ -3176,6 +3221,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            include_lockfiles: false,
         };
 
         let doc = generate_markdown_with_diff(
