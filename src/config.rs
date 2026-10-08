@@ -2,6 +2,8 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
+use crate::content_filter::{self, DEFAULT_MAX_FILE_SIZE_BYTES};
+
 /// Global configuration loaded from `context-builder.toml`.
 ///
 /// Any field left as `None` means "use the CLI default / do not override".
@@ -18,6 +20,9 @@ use std::path::Path;
 /// ignore = ["target", ".git"]
 /// line_numbers = false
 /// diff_context_lines = 5
+/// # max_file_size = "256K"   # "0" disables; also accepts an integer byte count
+/// # hidden = false           # include dotfiles (not .git); secrets stay skipped
+/// # include_secrets = false  # opt in to id_rsa, *.pem, .env, credentials*.json, …
 /// ```
 ///
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -89,6 +94,39 @@ pub struct Config {
     /// - "o200k_base": GPT-4o / o-series (default)
     /// - "cl100k_base": GPT-4 / GPT-3.5
     pub encoding: Option<String>,
+
+    /// Maximum file size to include. A string (`"256K"`, `"1M"`, `"0"`) or an
+    /// integer byte count. `"0"` disables the limit. Unset means 256 KiB.
+    /// Command-line `--max-file-size` wins, including when passed explicitly
+    /// as the default `256K`.
+    #[serde(default, deserialize_with = "deserialize_optional_size")]
+    pub max_file_size: Option<String>,
+
+    /// When true, include hidden dotfiles and dot-directories (except `.git`,
+    /// `.hg`, `.svn`, and `.bzr`). Does not include likely-secret files.
+    pub hidden: Option<bool>,
+
+    /// When true, include likely-secret files the walk collected. Dotfile
+    /// secrets such as `.env` still need `hidden = true`.
+    pub include_secrets: Option<bool>,
+}
+
+/// Accept `max_file_size` as either a string (`"256K"`) or an integer byte count.
+fn deserialize_optional_size<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    match value {
+        toml::Value::String(s) => Ok(Some(s)),
+        toml::Value::Integer(i) if i >= 0 => Ok(Some(i.to_string())),
+        toml::Value::Integer(_) => Err(serde::de::Error::custom(
+            "max_file_size must be >= 0 (0 disables the limit)",
+        )),
+        other => Err(serde::de::Error::custom(format!(
+            "max_file_size must be a string (\"256K\") or an integer byte count, got {other}"
+        ))),
+    }
 }
 
 /// Stable fingerprint of the configuration that determines the auto-diff
@@ -98,15 +136,16 @@ pub struct Config {
 ///
 /// The baseline is the **raw content** of the selected files (`ProjectState`
 /// stores each file's bytes via `read_to_string`; the diff compares those). The
-/// only inputs that change that baseline are the file-selection options:
-/// `filter` and `ignore`. Everything else is pure *rendering* — `line_numbers`,
-/// `signatures`, `structure`, `truncate`, `visibility`, `max_tokens`,
-/// `encoding`/`encoding_strategy`, `diff_context_lines`, `diff_only`,
-/// `timestamped_output`, `output_folder` — and does **not** affect the captured
-/// content. Such options are deliberately EXCLUDED: including them would reset
-/// the diff baseline whenever a user toggles one (e.g. adding `--signatures`),
-/// silently hiding real content changes on that run. (The project *path* is
-/// keyed separately in `cache.rs`, so it isn't part of this fingerprint.)
+/// inputs that change that baseline are the file-selection options: `filter`,
+/// `ignore`, `max_file_size`, `hidden`, and `include_secrets`. Everything else
+/// is pure *rendering* — `line_numbers`, `signatures`, `structure`, `truncate`,
+/// `visibility`, `max_tokens`, `encoding`/`encoding_strategy`,
+/// `diff_context_lines`, `diff_only`, `timestamped_output`, `output_folder` —
+/// and does **not** affect the captured content. Such options are deliberately
+/// EXCLUDED: including them would reset the diff baseline whenever a user
+/// toggles one (e.g. adding `--signatures`), silently hiding real content
+/// changes on that run. (The project *path* is keyed separately in `cache.rs`,
+/// so it isn't part of this fingerprint.)
 pub(crate) fn config_fingerprint(config: &Config) -> String {
     let mut s = String::new();
     if let Some(ref filters) = config.filter {
@@ -116,8 +155,35 @@ pub(crate) fn config_fingerprint(config: &Config) -> String {
     if let Some(ref ignores) = config.ignore {
         s.push_str(&ignores.join(","));
     }
+    s.push('|');
+    // Normalize so unset and an explicit "256K" hash the same, and so "1M"
+    // and "1024K" hash the same. Invalid specs stay distinct from the default.
+    s.push_str(&size_fingerprint(config.max_file_size.as_deref()));
+    s.push('|');
+    s.push(if config.hidden == Some(true) {
+        '1'
+    } else {
+        '0'
+    });
+    s.push('|');
+    s.push(if config.include_secrets == Some(true) {
+        '1'
+    } else {
+        '0'
+    });
     let hash = xxhash_rust::xxh3::xxh3_64(s.as_bytes());
     format!("{:x}", hash)
+}
+
+fn size_fingerprint(spec: Option<&str>) -> String {
+    match spec {
+        None => DEFAULT_MAX_FILE_SIZE_BYTES.to_string(),
+        Some(spec) => match content_filter::parse_file_size(spec) {
+            Ok(None) => "unlimited".to_string(),
+            Ok(Some(bytes)) => bytes.to_string(),
+            Err(_) => format!("invalid:{spec}"),
+        },
+    }
 }
 
 /// Load configuration from `context-builder.toml` in the current working directory.
@@ -233,6 +299,25 @@ encoding_strategy = "detect"
     }
 
     #[test]
+    fn load_config_accepts_size_string_or_integer() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("context-builder.toml");
+        fs::write(
+            &config_path,
+            "max_file_size = \"1M\"\nhidden = true\ninclude_secrets = false\n",
+        )
+        .unwrap();
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert_eq!(config.max_file_size.as_deref(), Some("1M"));
+        assert_eq!(config.hidden, Some(true));
+        assert_eq!(config.include_secrets, Some(false));
+
+        fs::write(&config_path, "max_file_size = 262144\n").unwrap();
+        let config = load_config_from_path(dir.path()).unwrap();
+        assert_eq!(config.max_file_size.as_deref(), Some("262144"));
+    }
+
+    #[test]
     fn load_config_from_path_partial_config() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("context-builder.toml");
@@ -304,14 +389,18 @@ invalid_toml [
         assert!(config.truncate.is_none());
         assert!(config.visibility.is_none());
         assert!(config.encoding.is_none());
+        assert!(config.max_file_size.is_none());
+        assert!(config.hidden.is_none());
+        assert!(config.include_secrets.is_none());
     }
 
     #[test]
     fn config_fingerprint_sensitivity() {
         // The cache/diff fingerprint must change ONLY for the file-selection
-        // options (filter, ignore) that determine which files form the comparable
-        // baseline. Every pure output-rendering option must leave it untouched, so
-        // toggling one against an existing baseline never discards the diff.
+        // options (filter, ignore, max_file_size, hidden, include_secrets) that
+        // determine which files form the comparable baseline. Every pure
+        // output-rendering option must leave it untouched, so toggling one
+        // against an existing baseline never discards the diff.
         let base = Config::default();
         let base_h = config_fingerprint(&base);
 
@@ -330,6 +419,37 @@ invalid_toml [
             config_fingerprint(&c),
             base_h,
             "ignore changes which files are captured, so it must change the fingerprint"
+        );
+
+        let mut c = base.clone();
+        c.max_file_size = Some("1M".to_string());
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "max_file_size changes which files are captured"
+        );
+        // Unset and the default spelling are the same selection.
+        c.max_file_size = Some("256K".to_string());
+        assert_eq!(config_fingerprint(&c), base_h);
+        c.max_file_size = Some("0".to_string());
+        assert_ne!(config_fingerprint(&c), base_h);
+
+        let mut c = base.clone();
+        c.hidden = Some(true);
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "hidden changes which files are captured"
+        );
+        c.hidden = Some(false);
+        assert_eq!(config_fingerprint(&c), base_h);
+
+        let mut c = base.clone();
+        c.include_secrets = Some(true);
+        assert_ne!(
+            config_fingerprint(&c),
+            base_h,
+            "include_secrets changes which files are captured"
         );
 
         // --- Rendering options: MUST NOT change the fingerprint ---

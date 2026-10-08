@@ -24,3 +24,12 @@ ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
 line_numbers = false
+
+# Skip files larger than this ("256K", "1M", "262144"; "0" disables). Default: 256K
+# max_file_size = "256K"
+
+# Include hidden dotfiles and directories, except .git/.hg/.svn/.bzr. Default: false
+# hidden = false
+
+# Include likely-secret files. Dotfile secrets also need hidden = true. Default: false
+# include_secrets = false

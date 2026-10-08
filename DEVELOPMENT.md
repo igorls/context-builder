@@ -45,6 +45,7 @@ cd context-builder
   - lib.rs — core orchestration and run() implementation
   - cli.rs — clap parser and CLI arguments
   - file_utils.rs — directory traversal, filter/ignore collection, prompts
+  - content_filter.rs — default skips for assets, oversized files, and likely secrets
   - markdown.rs — core rendering logic, streaming, line numbering, binary/text sniffing
   - tree.rs — file tree structure building and printing
 - samples/ — optional persistent datasets (ignored in VCS) for benchmarking

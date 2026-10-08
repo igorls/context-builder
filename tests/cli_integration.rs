@@ -72,6 +72,9 @@ fn preview_mode_does_not_create_output_file() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -118,6 +121,9 @@ fn preview_mode_skips_overwrite_confirmation() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -169,6 +175,9 @@ fn token_count_mode_skips_overwrite_confirmation() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -217,6 +226,9 @@ fn both_preview_and_token_count_modes_work_together() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
@@ -278,6 +290,9 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     // Always proceed without interactive prompts
@@ -371,6 +386,9 @@ fn overwrite_prompt_is_respected() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     // Deny overwrite
@@ -416,6 +434,9 @@ fn confirm_processing_receives_large_count() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -463,6 +484,9 @@ fn pipe_mode_skips_processing_confirmation() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     // processing_response = false → would cancel if the prompt were consulted.
@@ -507,6 +531,9 @@ fn token_count_mode_does_not_create_output_file() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let prompter = TestPrompter::new(true, true);

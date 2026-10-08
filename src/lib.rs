@@ -9,6 +9,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod config_resolver;
+pub mod content_filter;
 pub mod diff;
 pub mod file_utils;
 pub mod languages;
@@ -23,8 +24,11 @@ use std::fs::File;
 use cache::CacheManager;
 use cli::Args;
 use config::{Config, load_config_from_path};
+use content_filter::{ContentPolicy, SkippedFile};
 use diff::render_per_file_diffs;
-use file_utils::{collect_files, confirm_overwrite, confirm_processing};
+#[cfg(test)]
+use file_utils::collect_files;
+use file_utils::{collect_files_ext, confirm_overwrite, confirm_processing};
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
 use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
@@ -221,12 +225,20 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         auto_ignores.push(format!("{}/*.md", output_folder));
     }
 
-    let files = collect_files(
+    let files = collect_files_ext(
         base_path,
         &final_args.filter,
         &final_args.ignore,
         &auto_ignores,
+        final_args.hidden,
     )?;
+    let policy = ContentPolicy::new(
+        &final_args.max_file_size,
+        &final_args.filter,
+        final_args.include_secrets,
+    );
+    let (files, skipped) = content_filter::partition(files, base_path, &policy);
+    content_filter::report_skips(&skipped, silent);
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
         eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
@@ -389,12 +401,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if config.auto_diff.unwrap_or(false) {
         // Build an effective config that mirrors the *actual* file selection coming
         // from resolved CLI args, so the cache/diff fingerprint reflects real
-        // behavior even when filter/ignore originate from the CLI, not the config
-        // file. Only `filter`/`ignore` matter: they decide which files form the
-        // diff baseline. Rendering options (signatures/structure/truncate/
-        // visibility/max_tokens/line_numbers/encoding) deliberately do NOT feed the
-        // fingerprint — they don't change the captured raw content — so propagating
-        // them here would only risk spurious baseline resets (see `config_fingerprint`).
+        // behavior even when selection originates from the CLI, not the config
+        // file. `filter`, `ignore`, `max_file_size`, `hidden`, and
+        // `include_secrets` decide which files form the diff baseline. Rendering
+        // options (signatures/structure/truncate/visibility/max_tokens/
+        // line_numbers/encoding) deliberately do NOT feed the fingerprint — they
+        // don't change the captured raw content — so propagating them here would
+        // only risk spurious baseline resets (see `config_fingerprint`).
         let mut effective_config = config.clone();
         if !final_args.filter.is_empty() {
             effective_config.filter = Some(final_args.filter.clone());
@@ -402,6 +415,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if !final_args.ignore.is_empty() {
             effective_config.ignore = Some(final_args.ignore.clone());
         }
+        // Size, hidden, and secret policy decide which bytes form the baseline.
+        effective_config.max_file_size = Some(final_args.max_file_size.clone());
+        effective_config.hidden = Some(final_args.hidden);
+        effective_config.include_secrets = Some(final_args.include_secrets);
 
         // 1. Create current project state
         let current_state = ProjectState::from_files(
@@ -518,6 +535,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             diff_cfg,
             &sorted_paths,
             &ts_config,
+            &skipped,
         )?;
 
         // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
@@ -635,6 +653,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         final_args.max_tokens,
         final_args.encoding.parse::<Encoding>().unwrap_or_default(),
         &ts_config,
+        &skipped,
     )?;
 
     let duration = start_time.elapsed();
@@ -687,6 +706,7 @@ fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) 
 }
 
 /// Generate markdown document with diff annotations
+#[allow(clippy::too_many_arguments)]
 fn generate_markdown_with_diff(
     current_state: &ProjectState,
     comparison: Option<&StateComparison>,
@@ -695,6 +715,7 @@ fn generate_markdown_with_diff(
     diff_config: &DiffConfig,
     sorted_paths: &[PathBuf],
     ts_config: &markdown::TreeSitterConfig,
+    skipped: &[SkippedFile],
 ) -> io::Result<String> {
     let mut output = String::new();
 
@@ -785,6 +806,9 @@ fn generate_markdown_with_diff(
     tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
     output.push_str(&String::from_utf8_lossy(&tree_output));
     output.push('\n');
+    let mut skipped_buf = Vec::new();
+    content_filter::write_skipped_section(&mut skipped_buf, skipped)?;
+    output.push_str(&String::from_utf8_lossy(&skipped_buf));
 
     // File contents (unless diff_only mode)
     if !diff_config.diff_only {
@@ -856,6 +880,8 @@ pub fn run() -> io::Result<()> {
         visibility: matches.value_source("visibility")
             == Some(clap::parser::ValueSource::CommandLine),
         encoding: matches.value_source("encoding") == Some(clap::parser::ValueSource::CommandLine),
+        max_file_size: matches.value_source("max_file_size")
+            == Some(clap::parser::ValueSource::CommandLine),
     };
     let args = Args::from_arg_matches(&matches)
         .expect("arguments were already validated by get_matches()");
@@ -921,6 +947,9 @@ pub fn run() -> io::Result<()> {
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
         encoding: resolution.config.encoding,
+        max_file_size: resolution.config.max_file_size,
+        hidden: resolution.config.hidden,
+        include_secrets: resolution.config.include_secrets,
     };
 
     // Create final Config with resolved values
@@ -1017,6 +1046,16 @@ ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
 line_numbers = false
+
+# Skip files larger than this ("256K", "1M", "262144"; "0" disables). Default: 256K
+# max_file_size = "256K"
+
+# Include hidden dotfiles and directories, except .git/.hg/.svn/.bzr. Default: false
+# hidden = false
+
+# Include likely-secret files (id_rsa, *.pem, .env, credentials*.json, …). Default: false
+# Dotfile secrets also need hidden = true.
+# include_secrets = false
 "#,
         filter_string
     );
@@ -1113,6 +1152,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1150,6 +1192,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1192,6 +1237,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1232,6 +1280,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1275,6 +1326,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, false); // Deny overwrite
@@ -1319,6 +1373,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false, true); // Deny processing
@@ -1362,6 +1419,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1411,6 +1471,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1459,6 +1522,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1506,6 +1572,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1556,6 +1625,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1603,6 +1675,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let diff_config = DiffConfig::default();
@@ -1632,6 +1707,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -1707,6 +1783,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1748,6 +1827,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -1789,6 +1871,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1834,6 +1919,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1867,6 +1955,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -1905,6 +1996,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1951,6 +2045,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1983,6 +2080,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2029,6 +2129,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let diff_config = DiffConfig {
@@ -2065,6 +2168,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -2108,6 +2212,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let diff_config = DiffConfig {
@@ -2143,6 +2250,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -2278,6 +2386,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -2320,6 +2431,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -2363,6 +2477,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true, true);
@@ -2404,6 +2521,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config1 = Config {
             auto_diff: Some(true),
@@ -2434,6 +2554,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let config2 = Config {
             auto_diff: Some(true),
@@ -2483,6 +2606,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let diff_config = DiffConfig {
@@ -2516,6 +2642,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -2557,6 +2684,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let diff_config = DiffConfig {
@@ -2590,6 +2720,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 

@@ -71,6 +71,9 @@ fn test_streaming_parallel_processing() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = Config::default();
@@ -190,6 +193,9 @@ fn test_parallel_error_handling() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = Config::default();
@@ -253,6 +259,9 @@ fn test_memory_efficiency_with_large_files() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = Config::default();

@@ -155,14 +155,39 @@ fn file_entry_point_priority(path: &Path) -> u8 {
 /// `auto_ignores` are runtime-computed exclusion patterns (e.g., the tool's own
 /// output file or cache directory). They are processed identically to user ignores
 /// but kept separate to avoid polluting user-facing configuration.
+///
+/// Hidden files and directories are skipped. Use [`collect_files_ext`] with
+/// `include_hidden` to opt in (that still prunes VCS metadata directories).
 pub fn collect_files(
     base_path: &Path,
     filters: &[String],
     ignores: &[String],
     auto_ignores: &[String],
 ) -> io::Result<Vec<DirEntry>> {
+    collect_files_ext(base_path, filters, ignores, auto_ignores, false)
+}
+
+/// Like [`collect_files`], with an explicit hidden-file switch.
+///
+/// When `include_hidden` is true, dotfiles and dot-directories are visited
+/// (for example `.github/workflows/ci.yml` and `.gitignore`). Version-control
+/// metadata directories (`.git`, `.hg`, `.svn`, `.bzr`) are still pruned so
+/// object stores are never pulled in. Symlinks, `.gitignore`, and the default
+/// heavy-directory ignores are unchanged. Likely-secret files are not decided
+/// here; see `content_filter`.
+pub fn collect_files_ext(
+    base_path: &Path,
+    filters: &[String],
+    ignores: &[String],
+    auto_ignores: &[String],
+    include_hidden: bool,
+) -> io::Result<Vec<DirEntry>> {
     let mut walker = WalkBuilder::new(base_path);
-    // By default, the "ignore" crate respects .gitignore and hidden files, so we don't need walker.hidden(false)
+    if include_hidden {
+        // `hidden(false)` means "do not ignore hidden files".
+        walker.hidden(false);
+        walker.filter_entry(|entry| !is_vcs_metadata_dir(entry));
+    }
 
     // Build overrides for custom ignore patterns
     let mut override_builder = OverrideBuilder::new(base_path);
@@ -278,6 +303,21 @@ pub fn collect_files(
     });
 
     Ok(files)
+}
+
+/// `.git` / `.hg` / `.svn` / `.bzr` stay out of the walk even with `--hidden`.
+fn is_vcs_metadata_dir(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 {
+        return false;
+    }
+    let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+    if !is_dir {
+        return false;
+    }
+    matches!(
+        entry.file_name().to_str(),
+        Some(".git" | ".hg" | ".svn" | ".bzr")
+    )
 }
 
 /// Asks for user confirmation if the number of files is large.
@@ -837,5 +877,35 @@ mod tests {
 
         let files = collect_files(base, &[], &[], &[]).unwrap();
         assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn hidden_files_stay_out_unless_requested_and_git_metadata_stays_out() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join(".github/workflows")).unwrap();
+        fs::create_dir_all(base.join(".git/objects")).unwrap();
+        fs::write(base.join("README.md"), "# hi").unwrap();
+        fs::write(base.join(".gitignore"), "target/\n").unwrap();
+        fs::write(base.join(".github/workflows/ci.yml"), "name: ci\n").unwrap();
+        fs::write(base.join(".git/config"), "[core]\n").unwrap();
+        fs::write(base.join(".git/objects/pack"), "blob").unwrap();
+
+        let visible = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(visible.contains(&"README.md".to_string()));
+        assert!(
+            !visible
+                .iter()
+                .any(|p| p.starts_with('.') || p.contains("/."))
+        );
+
+        let hidden = to_rel_paths(collect_files_ext(base, &[], &[], &[], true).unwrap(), base);
+        assert!(hidden.contains(&"README.md".to_string()));
+        assert!(hidden.contains(&".gitignore".to_string()));
+        assert!(hidden.contains(&".github/workflows/ci.yml".to_string()));
+        assert!(
+            !hidden.iter().any(|p| p == ".git" || p.starts_with(".git/")),
+            "VCS metadata must stay out with --hidden: {hidden:?}"
+        );
     }
 }

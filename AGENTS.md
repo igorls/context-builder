@@ -54,6 +54,7 @@ context-builder/
 │   ├── config.rs            # Config struct, TOML deserialization
 │   ├── config_resolver.rs   # Merges CLI args + TOML config (CLI > config > defaults)
 │   ├── file_utils.rs        # .gitignore-aware traversal, OverrideBuilder for custom ignores
+│   ├── content_filter.rs    # Default skips: assets, max file size, likely secrets
 │   ├── tree.rs              # BTreeMap file tree (deterministic ordering)
 │   ├── state.rs             # ProjectState/FileState structured snapshots
 │   ├── markdown.rs          # Streaming file renderer, binary detection, encoding, parallel

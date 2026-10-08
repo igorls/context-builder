@@ -1,5 +1,7 @@
 use clap::Parser;
 
+use crate::content_filter::parse_max_file_size_arg;
+
 /// CLI tool to aggregate directory contents into a single Markdown file optimized for LLM consumption
 #[derive(Parser, Debug, Clone)]
 #[clap(author, version, about)]
@@ -72,12 +74,50 @@ pub struct Args {
     /// "o200k_base" matches GPT-4o/o-series (default); "cl100k_base" matches GPT-4/3.5.
     #[clap(long, value_parser = ["o200k_base", "cl100k_base"], default_value = "o200k_base")]
     pub encoding: String,
+
+    /// Skip files larger than SIZE. Examples: `256K` (default), `1M`, `262144` (bytes).
+    /// `K`/`M`/`G` are powers of 1024 (`KB` and `KiB` are accepted). `0` disables the limit.
+    /// Files strictly larger than SIZE are listed under `## Skipped` as "too large".
+    /// An explicit `--filter` of an asset extension does not bypass this limit.
+    #[clap(long, value_name = "SIZE", default_value = "256K", value_parser = parse_max_file_size_arg)]
+    pub max_file_size: String,
+
+    /// Include hidden files and directories (names starting with `.`).
+    ///
+    /// Off by default, which is unchanged: `.github/`, `.gitignore`, `.env`, and other
+    /// dot paths are omitted. With `--hidden` those paths are included — for example
+    /// `.github/workflows/ci.yml`, `.gitignore`, and `.cargo/config.toml`.
+    ///
+    /// `--hidden` does not follow symlinks, does not override `.gitignore` / `.ignore` /
+    /// `--ignore` / the built-in heavy-directory ignores, and does not descend into
+    /// version-control metadata (`.git`, `.hg`, `.svn`, `.bzr`). Likely-secret files
+    /// stay skipped unless `--include-secrets` is also set. `.env.example` and
+    /// `.env.sample` are not secrets, but they are hidden, so they appear only with
+    /// `--hidden`.
+    #[clap(long)]
+    pub hidden: bool,
+
+    /// Include likely-secret files that are skipped by default.
+    ///
+    /// Skipped names: `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (and their `*_sk`
+    /// forms), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`, `credentials*.json`,
+    /// `.env` and `.env.*` except `.env.example` and `.env.sample`, plus `.npmrc` /
+    /// `.pypirc` when they contain a token. Public keys (`id_rsa.pub`) are kept.
+    /// Warnings name the path and the category only — never file contents.
+    ///
+    /// `--hidden` does not imply this flag. Dotfile secrets such as `.env` also need
+    /// `--hidden` or they are never visited. Naming a secret extension in `--filter`
+    /// (`pem`, `key`, `p12`, `pfx`, `ppk`) includes that extension as well; name-only
+    /// secrets are not extensions, so use this flag for `id_rsa`, `credentials.json`,
+    /// and `.env`.
+    #[clap(long)]
+    pub include_secrets: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use super::Args;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn parses_with_no_args() {
@@ -235,5 +275,42 @@ mod tests {
         assert!(Args::try_parse_from(["context-builder", "--truncate", "bogus"]).is_err());
         assert!(Args::try_parse_from(["context-builder", "--visibility", "bogus"]).is_err());
         assert!(Args::try_parse_from(["context-builder", "--encoding", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn parses_content_filter_flags() {
+        let args = Args::try_parse_from([
+            "context-builder",
+            "--max-file-size",
+            "1M",
+            "--hidden",
+            "--include-secrets",
+        ])
+        .expect("should parse content-filter flags");
+        assert_eq!(args.max_file_size, "1M");
+        assert!(args.hidden);
+        assert!(args.include_secrets);
+
+        let defaults = Args::try_parse_from(["context-builder"]).expect("defaults");
+        assert_eq!(defaults.max_file_size, "256K");
+        assert!(!defaults.hidden);
+        assert!(!defaults.include_secrets);
+
+        assert!(Args::try_parse_from(["context-builder", "--max-file-size", "nope"]).is_err());
+        assert!(Args::try_parse_from(["context-builder", "--max-file-size", "0"]).is_ok());
+    }
+
+    #[test]
+    fn help_documents_skip_policy() {
+        let mut help = Vec::new();
+        Args::command()
+            .write_long_help(&mut help)
+            .expect("help renders");
+        let help = String::from_utf8(help).expect("help is utf-8");
+        assert!(help.contains("--max-file-size"));
+        assert!(help.contains("--hidden"));
+        assert!(help.contains("--include-secrets"));
+        assert!(help.contains(".env.example"));
+        assert!(help.contains(".git"));
     }
 }

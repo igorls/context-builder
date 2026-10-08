@@ -127,6 +127,9 @@ filter = ["rs", "txt"]
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     // Apply config manually (simulating what happens in the real application)
@@ -306,6 +309,9 @@ fn test_encoding_strategy_configuration() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let result = run_with_args(args, config, &prompter);

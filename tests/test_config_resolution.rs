@@ -73,6 +73,9 @@ fn run_with_resolved_config(
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
         encoding: resolution.config.encoding,
+        max_file_size: resolution.config.max_file_size,
+        hidden: resolution.config.hidden,
+        include_secrets: resolution.config.include_secrets,
     };
 
     // Create final Config with resolved values
@@ -134,6 +137,9 @@ output = "from_config.md"
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -217,6 +223,9 @@ ignore = ["target"]
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -304,6 +313,9 @@ timestamped_output = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -386,6 +398,9 @@ yes = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -463,6 +478,9 @@ timestamped_output = false
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();

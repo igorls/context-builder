@@ -216,6 +216,9 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     };
 
     let prompter = NoPrompt;
@@ -265,6 +268,9 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     structure: false,
                     truncate: "smart".to_string(),
                     visibility: "all".to_string(),
+                    max_file_size: "256K".to_string(),
+                    hidden: false,
+                    include_secrets: false,
                 },
                 Config::default(),
                 &prompter,

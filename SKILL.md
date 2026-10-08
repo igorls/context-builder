@@ -197,6 +197,7 @@ These behaviors require no configuration:
 | **Self-exclusion** | Output file, cache dir, and `context-builder.toml` are auto-excluded |
 | **.gitignore** | Respected automatically when `.git` directory exists |
 | **Binary detection** | Binary files are skipped via UTF-8 sniffing |
+| **Asset / size / secret skips** | Images (incl. SVG), fonts, media, archives, PDFs, compiled objects, wasm, weights, `*.min.js`, and `*.map` are omitted; files over 256 KiB are omitted (`--max-file-size 0` disables); `id_rsa`, `*.pem`, `credentials*.json`, `.env` (not `.env.example`) are omitted. See README "Default skips" |
 | **File ordering** | Config/docs first → source (entry points before helpers) → tests → build/CI → lockfiles |
 
 ## CLI Reference (Agent-Relevant Flags)
@@ -216,6 +217,9 @@ These behaviors require no configuration:
 | `--structure` | Structural summary | Pair with `--signatures` for compact output |
 | `--visibility <V>` | Filter by visibility | `all` (default), `public` (public API only) |
 | `--truncate <MODE>` | Truncation strategy for `--max-tokens` | `smart` (AST-aware) or `byte` |
+| `--max-file-size <SIZE>` | Skip files over SIZE (`256K` default; `0` disables) | Raise for a large source file you filtered in |
+| `--hidden` | Include dotfiles and dot-directories | Does not enter `.git` and does not include secrets |
+| `--include-secrets` | Include likely-secret files | Combine with `--hidden` for `.env` |
 | `--init` | Create config file | Auto-detects project file types |
 | `--clear-cache` | Reset diff cache | Use if diff output seems stale |
 

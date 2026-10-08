@@ -180,6 +180,30 @@ context-builder --clear-cache
 context-builder -d ./src -f rs -f toml -i tests --line-numbers --max-tokens 100000 -o rust_context.md
 ```
 
+### Default skips (v0.11)
+
+On a full-tree run the tool leaves out three kinds of files and lists each one under a `## Skipped` heading (`path` — `asset`, `too large`, or `secret`). A one-line count is printed to stderr. Secret warnings name the path and a category only — never the file contents.
+
+**Assets.** Images (including SVG), fonts, audio, video, archives, PDFs and office documents, design files (`.ai`, `.psd`, …), compiled objects, wasm, model weights, source maps (`*.map`), and minified bundles (`*.min.js`, `*.min.css`, and the `.mjs` / `.cjs` forms). The extension list lives in `src/content_filter.rs` (`ASSET_EXTENSIONS`).
+
+**Size.** Files strictly larger than **256 KiB** are skipped. `--max-file-size` accepts `256K`, `1M`, `1MB`, `262144` (bytes), and the `KiB` / `MiB` spellings (`K`/`M`/`G` are powers of 1024). **`--max-file-size 0`** disables the limit.
+
+**Secrets.** `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (and the `*_sk` names), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`, `credentials*.json`, `.env` and `.env.*` **except** `.env.example` and `.env.sample`, and `.npmrc` / `.pypirc` when they assign a token. `id_rsa.pub` is kept. A placeholder value such as `changeme` does not count as a token.
+
+**Escape hatches**
+
+- `--filter svg` (or `png`, `pdf`, `pem`, …) is an allow-list, and naming an excluded extension includes it. `--filter js` likewise includes `*.min.js`. The size limit still applies; raise it or pass `--max-file-size 0` to keep a large file of that type. `--filter json` does **not** opt `credentials*.json` back in.
+- `--include-secrets` includes likely-secret files the walk collected. Name-only secrets (`id_rsa`, `credentials.json`, `.env`) are not extensions, so this flag is how you include them. `--filter pem` is enough for `*.pem`.
+- **`--hidden`** includes hidden files and directories (`.github/workflows/ci.yml`, `.gitignore`, `.cargo/config.toml`). It does **not** follow symlinks, override `.gitignore` / `--ignore` / the built-in heavy-directory ignores, or descend into `.git`, `.hg`, `.svn`, or `.bzr`. It does **not** include secrets: `.env` stays skipped unless you also pass `--include-secrets`. `.env.example` and `.env.sample` are not secrets, but they are hidden, so they show up only with `--hidden`.
+
+```bash
+context-builder --max-file-size 1M          # raise the cap
+context-builder --max-file-size 0           # no size cap
+context-builder -f svg                      # include SVG files (and nothing else)
+context-builder --hidden                    # dotfiles, still no secrets
+context-builder --hidden --include-secrets  # also .env, .npmrc, …
+```
+
 ---
 
 ## Configuration
@@ -240,6 +264,15 @@ yes = false
 
 encoding_strategy = "detect"
 
+# Skip files larger than this. "256K" (default), "1M", "262144", or "0" (no limit).
+# max_file_size = "256K"
+
+# Include hidden dotfiles and directories, except .git / .hg / .svn / .bzr.
+# hidden = false
+
+# Include likely-secret files. Dotfile secrets (.env, .npmrc, …) also need hidden = true.
+# include_secrets = false
+
 ```
 
 
@@ -279,6 +312,9 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--truncate <MODE>` - Truncation strategy for `--max-tokens`: `smart` (cut at AST boundaries, default) or `byte` (cut at a UTF-8 character boundary) *(requires tree-sitter)*.
 - `--visibility <FILTER>` - Filter extracted signatures by visibility: `all` (default), `public`, or `private`. Honored for Rust, Go, Java, and TypeScript; other languages warn that the filter is not yet applied *(requires tree-sitter)*.
 - `--encoding <ENC>` - Tokenizer used for `--token-count` and `--max-tokens`: `o200k_base` (GPT-4o / o-series, default) or `cl100k_base` (GPT-4 / GPT-3.5).
+- `--max-file-size <SIZE>` - Skip files strictly larger than SIZE (`256K` default, `1M`, `262144` bytes; `0` disables). See [Default skips](#default-skips-v011).
+- `--hidden` - Include hidden dotfiles and directories. Does not enter `.git`/`.hg`/`.svn`/`.bzr`, does not follow symlinks, and does not include likely-secret files.
+- `--include-secrets` - Include likely-secret files (`id_rsa`, `*.pem`, `.env`, `credentials*.json`, token-bearing `.npmrc`/`.pypirc`, …). Dotfile secrets also need `--hidden`.
 - `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
 ---
