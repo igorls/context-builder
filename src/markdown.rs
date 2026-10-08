@@ -1015,10 +1015,20 @@ fn has_utf16_or_utf32_bom(bytes: &[u8]) -> bool {
 
 /// True when `bytes` starts with a known binary file signature.
 ///
-/// The explicit set is PDF, PNG, JPEG, GIF, ZIP (and docx/jar/xlsx), gzip,
-/// ELF, Mach-O, PE/MZ, and WebAssembly. The same check includes the other
-/// common containers whose headers decode as Windows-1252: bzip2, xz, zstd,
-/// 7z, RAR, WebP/WAV/AVI, ISO BMFF (`ftyp`), Ogg, FLAC, and WOFF/WOFF2.
+/// PDF, PNG, JPEG, GIF, ZIP (and docx/jar/xlsx), gzip, ELF, Mach-O, and
+/// WebAssembly. Also the other common containers whose headers decode as
+/// Windows-1252: bzip2, xz, zstd, 7z, RAR, WebP/WAV/AVI, ISO BMFF (`ftyp`),
+/// Ogg, FLAC, and WOFF/WOFF2.
+///
+/// PE/DOS is not matched on the bare `MZ` prefix. Those two letters start
+/// ordinary text ("MZ is a postal prefix"), and a real executable always
+/// has a NUL in the first 64 bytes of the DOS header, so the NUL rule
+/// already classifies it.
+///
+/// `OggS` and `fLaC` are kept as four-byte ASCII container magics. A UTF-8
+/// file whose first line is plain text starting with either tag is therefore
+/// binary. That trade-off is accepted: real prose does not begin with those
+/// tags, and omitting them would emit Ogg/FLAC headers as text.
 fn has_binary_magic(bytes: &[u8]) -> bool {
     const SIGNATURES: &[&[u8]] = &[
         b"%PDF",
@@ -1037,12 +1047,12 @@ fn has_binary_magic(bytes: &[u8]) -> bool {
         b"\xCF\xFA\xED\xFE",
         b"\xCA\xFE\xBA\xBE",
         b"\xBE\xBA\xFE\xCA",
-        b"MZ",
         b"\x00asm",
         b"\xFD7zXZ\x00",
         b"7z\xBC\xAF\x27\x1C",
         b"Rar!\x1A\x07",
         b"\x28\xB5\x2F\xFD",
+        // ASCII container tags. See the trade-off noted on this function.
         b"OggS",
         b"fLaC",
         b"wOFF",
@@ -1504,7 +1514,6 @@ mod tests {
             b"\xCF\xFA\xED\xFE",
             b"\xCA\xFE\xBA\xBE",
             b"\xBE\xBA\xFE\xCA",
-            b"MZheader",
             b"\x00asm",
             b"\xFD7zXZ\x00",
             b"7z\xBC\xAF\x27\x1C",
@@ -1538,6 +1547,65 @@ mod tests {
         // "BZh" alone is not bzip2; the block-size digit is required.
         assert!(!is_binary_content(b"BZh"));
         assert!(!is_binary_content(b"BZh0"));
+
+        // Bare "MZ" is text. A DOS/PE image is binary because of its NULs.
+        assert!(!is_binary_content(b"MZ is a postal prefix\n"));
+        assert!(!has_binary_magic(b"MZ"));
+        assert!(is_binary_content(&minimal_dos_pe_header()));
+    }
+
+    /// 64-byte DOS header with `e_lfanew` pointing at a following `PE\0\0`.
+    /// The stub is NUL-padded, as every real PE/DOS executable is.
+    fn minimal_dos_pe_header() -> Vec<u8> {
+        let mut header = vec![0u8; 64];
+        header[0] = b'M';
+        header[1] = b'Z';
+        header[0x3C] = 64; // e_lfanew
+        header.extend_from_slice(b"PE\0\0");
+        header
+    }
+
+    #[test]
+    fn test_mz_text_stays_text_and_pe_header_is_binary() {
+        let text = b"MZ is a postal prefix\n";
+        let content = render_bytes("postal.txt", text);
+        assert!(
+            content.contains("MZ is a postal prefix"),
+            "text starting with MZ must be kept, got:\n{content}"
+        );
+        assert!(
+            !content.contains("<Binary file"),
+            "text starting with MZ must not be a binary placeholder, got:\n{content}"
+        );
+
+        let header = minimal_dos_pe_header();
+        let content = render_bytes("program.exe", &header);
+        assert_binary_placeholder(&content, header.len());
+        assert!(
+            !content.contains("PE"),
+            "DOS/PE header must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_ogg_and_flac_ascii_prefixes_are_binary() {
+        // Documented trade-off: `OggS` and `fLaC` are container magics, so a
+        // UTF-8 file whose first line is plain text starting with either tag
+        // is binary. See `has_binary_magic`.
+        for (name, bytes) in [
+            ("note-ogg.txt", &b"OggS this line is plain UTF-8 text\n"[..]),
+            (
+                "note-flac.txt",
+                &b"fLaC this line is plain UTF-8 text\n"[..],
+            ),
+        ] {
+            let content = render_bytes(name, bytes);
+            assert_binary_placeholder(&content, bytes.len());
+            assert!(
+                !content.contains("plain UTF-8 text"),
+                "{name} must follow the OggS/fLaC signature rule, got:\n{content}"
+            );
+        }
     }
 
     #[test]
