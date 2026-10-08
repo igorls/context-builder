@@ -10,6 +10,7 @@ pub mod cli;
 pub mod config;
 pub mod config_resolver;
 pub mod diff;
+pub mod fences;
 pub mod file_utils;
 pub mod languages;
 pub mod markdown;
@@ -311,8 +312,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 total_tokens += estimate_tokens(
                     encoding,
                     &format!(
-                        "This document contains files from the `{}` directory with extensions: {} \n",
-                        final_args.input,
+                        "This document contains files from the {} directory with extensions: {} \n",
+                        fences::inline_code(&final_args.input),
                         final_args.filter.join(", ")
                     ),
                 );
@@ -320,8 +321,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 total_tokens += estimate_tokens(
                     encoding,
                     &format!(
-                        "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
-                        final_args.input
+                        "This document contains all files from the {} directory, optimized for LLM consumption.\n",
+                        fences::inline_code(&final_args.input)
                     ),
                 );
             }
@@ -531,14 +532,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 }
                 final_doc.truncate(truncate_at);
 
-                // Close any open markdown code fence to prevent LLMs from
-                // interpreting the truncation notice as part of a code block.
-                // Count unmatched ``` fences — if odd, we're inside a block.
-                let fence_count = final_doc.matches("\n```").count()
-                    + if final_doc.starts_with("```") { 1 } else { 0 };
-                if fence_count % 2 != 0 {
-                    final_doc.push_str("\n```\n");
-                }
+                // Close any open code fence so the truncation notice is not
+                // swallowed by the block. The closer matches the opening
+                // fence's length — a fixed ``` would not close a longer fence
+                // chosen because the file itself contains ```.
+                fences::close_unmatched_backtick_fence(&mut final_doc);
 
                 final_doc.push_str("\n---\n\n");
                 final_doc.push_str(&format!(
@@ -733,7 +731,10 @@ fn generate_markdown_with_diff(
             if diff_config.diff_only && !added_files.is_empty() {
                 output.push_str("## Added Files\n\n");
                 for added in added_files {
-                    output.push_str(&format!("### File: `{}`\n\n", added.path));
+                    output.push_str(&format!(
+                        "### File: {}\n\n",
+                        fences::inline_code(&added.path)
+                    ));
                     output.push_str("_Status: Added_\n\n");
                     // Reconstruct content from + lines.
                     let mut lines: Vec<String> = Vec::new();
@@ -747,18 +748,19 @@ fn generate_markdown_with_diff(
                             lines.push(rest.to_string());
                         }
                     }
-                    output.push_str("```text\n");
+                    let mut body = String::new();
                     if args.line_numbers {
                         for (idx, l) in lines.iter().enumerate() {
-                            output.push_str(&format!("{:>4} | {}\n", idx + 1, l));
+                            body.push_str(&format!("{:>4} | {}\n", idx + 1, l));
                         }
                     } else {
-                        for l in lines {
-                            output.push_str(&l);
-                            output.push('\n');
+                        for l in &lines {
+                            body.push_str(l);
+                            body.push('\n');
                         }
                     }
-                    output.push_str("```\n\n");
+                    output.push_str(&fences::fenced_block("text", &body));
+                    output.push('\n');
                 }
             }
 
@@ -794,7 +796,10 @@ fn generate_markdown_with_diff(
         // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
         for path in sorted_paths {
             if let Some(file_state) = current_state.files.get(path) {
-                output.push_str(&format!("### File: `{}`\n\n", path.display()));
+                output.push_str(&format!(
+                    "### File: {}\n\n",
+                    fences::inline_code(&path.display().to_string())
+                ));
                 output.push_str(&format!("- Size: {} bytes\n", file_state.size));
                 output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
 
@@ -808,20 +813,17 @@ fn generate_markdown_with_diff(
                     ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
 
                 if !signatures_only {
-                    output.push_str(&format!("```{}\n", language));
-
-                    if args.line_numbers {
-                        for (i, line) in file_state.content.lines().enumerate() {
-                            output.push_str(&format!("{:>4} | {}\n", i + 1, line));
-                        }
-                    } else {
-                        output.push_str(&file_state.content);
-                        if !file_state.content.ends_with('\n') {
-                            output.push('\n');
-                        }
-                    }
-
-                    output.push_str("```\n");
+                    // `output` is a String (`fmt::Write`); the shared writer speaks `io::Write`.
+                    let mut rendered = Vec::new();
+                    markdown::write_text_content(
+                        &mut rendered,
+                        &file_state.content,
+                        language,
+                        args.line_numbers,
+                    )?;
+                    let rendered = std::str::from_utf8(&rendered)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    output.push_str(rendered);
                 }
 
                 // Tree-sitter enrichment (same as standard path)
@@ -2595,5 +2597,177 @@ mod tests {
 
         let content = result.unwrap();
         assert!(content.contains("test.rs"));
+    }
+
+    fn section_fence(doc: &str, header: &str) -> (String, String, String) {
+        let idx = doc
+            .find(header)
+            .unwrap_or_else(|| panic!("missing header {header} in:\n{doc}"));
+        let rest = &doc[idx + header.len()..];
+        let mut offset = 0;
+        for line in rest.split_inclusive('\n') {
+            let stripped = line.trim_end_matches(['\n', '\r']);
+            let ticks = stripped.bytes().take_while(|b| *b == b'`').count();
+            if ticks >= 3 && !stripped[ticks..].contains('`') {
+                let fence = "`".repeat(ticks);
+                let info = stripped[ticks..].to_string();
+                let after = &rest[offset + line.len()..];
+                let mut pos = 0;
+                for bline in after.split_inclusive('\n') {
+                    let bstripped = bline.trim_end_matches(['\n', '\r']);
+                    if bstripped == fence {
+                        return (fence, info, after[..pos].to_string());
+                    }
+                    pos += bline.len();
+                }
+                panic!("no closer for {header} in:\n{doc}");
+            }
+            offset += line.len();
+        }
+        panic!("no fence after {header} in:\n{doc}");
+    }
+
+    #[test]
+    fn auto_diff_content_fence_outgrows_inner_backticks() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let triple = "before\n```\nafter\n";
+        let quad = "before\n````\nafter\n";
+        fs::write(base_path.join("triple.md"), triple).unwrap();
+        fs::write(base_path.join("quad.md"), quad).unwrap();
+        fs::write(base_path.join("weird`name.py"), "print(1)\n").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+        let diff_config = DiffConfig::default();
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let doc = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &markdown::TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        assert!(
+            fences::unmatched_backtick_fence_len(&doc).is_none(),
+            "{doc}"
+        );
+        assert!(doc.contains("### File: ``weird`name.py``"), "{doc}");
+
+        let (fence, info, body) = section_fence(&doc, "### File: `triple.md`");
+        assert_eq!(info, "markdown");
+        assert_eq!(fence.len(), 4);
+        assert_eq!(body, triple);
+
+        let (fence, info, body) = section_fence(&doc, "### File: `quad.md`");
+        assert_eq!(info, "markdown");
+        assert_eq!(fence.len(), 5);
+        assert_eq!(body, quad);
+    }
+
+    #[test]
+    fn auto_diff_added_file_fence_outgrows_inner_backticks() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let mut previous = std::collections::HashMap::new();
+        let mut current = std::collections::HashMap::new();
+        previous.insert("old.md".to_string(), "gone\n".to_string());
+        current.insert("README.md".to_string(), "before\n```\nafter\n".to_string());
+        let file_diffs = diff::diff_file_contents(&previous, &current, true, None);
+        let summary = state::ChangeSummary {
+            added: vec![PathBuf::from("README.md")],
+            removed: vec![PathBuf::from("old.md")],
+            modified: vec![],
+            total_changes: 2,
+        };
+        let comparison = StateComparison {
+            file_diffs,
+            summary,
+        };
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: true,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+        };
+
+        let doc = generate_markdown_with_diff(
+            &state,
+            Some(&comparison),
+            &args,
+            &file_tree,
+            &DiffConfig {
+                context_lines: 3,
+                enabled: true,
+                diff_only: true,
+            },
+            &[],
+            &markdown::TreeSitterConfig::default(),
+        )
+        .unwrap();
+
+        assert!(
+            fences::unmatched_backtick_fence_len(&doc).is_none(),
+            "{doc}"
+        );
+        assert!(doc.contains("- Added: `README.md`"));
+        let (fence, info, body) = section_fence(&doc, "### File: `README.md`");
+        assert_eq!(info, "text");
+        assert_eq!(fence.len(), 4, "{doc}");
+        assert_eq!(body, "before\n```\nafter\n");
     }
 }

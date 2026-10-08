@@ -39,15 +39,26 @@ fn resolve_context_lines(explicit: Option<usize>) -> usize {
 /// Original API: produce a single markdown section headed by "## File Differences".
 /// (Kept unchanged for compatibility.)
 pub fn generate_diff(old_content: &str, new_content: &str) -> String {
-    let diff = TextDiff::from_lines(old_content, new_content);
-    if diff.ratio() == 1.0 {
-        return String::new();
-    }
     let context_lines = resolve_context_lines(None);
-    let grouped = diff.grouped_ops(context_lines);
+    let Some(body) = unified_diff_body(old_content, new_content, context_lines) else {
+        return String::new();
+    };
     let mut out = String::new();
     out.push_str("## File Differences\n\n");
-    out.push_str("```diff\n");
+    out.push_str(&crate::fences::fenced_block("diff", &body));
+    // Historical shape is a blank line after the closing fence.
+    out.push('\n');
+    out
+}
+
+/// Inner unified-diff text (no fence). `None` when the inputs are identical.
+fn unified_diff_body(old: &str, new: &str, context_lines: usize) -> Option<String> {
+    let diff = TextDiff::from_lines(old, new);
+    if diff.ratio() == 1.0 {
+        return None;
+    }
+    let grouped = diff.grouped_ops(context_lines);
+    let mut out = String::new();
     for (group_index, group) in grouped.iter().enumerate() {
         if group_index > 0 {
             out.push_str("  ...\n");
@@ -94,8 +105,18 @@ pub fn generate_diff(old_content: &str, new_content: &str) -> String {
             }
         }
     }
-    out.push_str("```\n\n");
-    out
+    Some(out)
+}
+
+/// Prefix every line of `content` (`+ ` / `- `) for an added or removed snapshot.
+fn prefixed_snapshot(content: &str, prefix: &str) -> String {
+    let mut body = String::new();
+    for line in content.lines() {
+        body.push_str(prefix);
+        body.push_str(line);
+        body.push('\n');
+    }
+    body
 }
 
 /// Classification of how a file changed between two snapshots.
@@ -112,7 +133,8 @@ pub enum PerFileStatus {
 pub struct PerFileDiff {
     pub path: String,
     pub status: PerFileStatus,
-    /// Unified diff fenced in ```diff (omitted when status == Unchanged and skip_unchanged=true)
+    /// Unified diff inside a backtick fence (omitted when status == Unchanged and skip_unchanged=true).
+    /// The fence is longer than any backtick run in the diff body.
     pub diff: String,
 }
 
@@ -125,61 +147,10 @@ impl PerFileDiff {
 /// Produce a unified style diff for two text blobs WITHOUT adding any global
 /// section header. Returns empty string if contents are identical.
 fn unified_no_header(old: &str, new: &str, context_lines: usize) -> String {
-    let diff = TextDiff::from_lines(old, new);
-    if diff.ratio() == 1.0 {
-        return String::new();
+    match unified_diff_body(old, new, context_lines) {
+        Some(body) => crate::fences::fenced_block("diff", &body),
+        None => String::new(),
     }
-    let grouped = diff.grouped_ops(context_lines);
-    let mut out = String::new();
-    out.push_str("```diff\n");
-    for (group_index, group) in grouped.iter().enumerate() {
-        if group_index > 0 {
-            out.push_str("  ...\n");
-        }
-        // Emit standard unified diff hunk header for positional context
-        if let (Some(first), Some(last)) = (group.first(), group.last()) {
-            let old_start = first.old_range().start + 1;
-            let old_len = last.old_range().end - first.old_range().start;
-            let new_start = first.new_range().start + 1;
-            let new_len = last.new_range().end - first.new_range().start;
-            out.push_str(&format!(
-                "@@ -{},{} +{},{} @@\n",
-                old_start, old_len, new_start, new_len
-            ));
-        }
-        for op in group {
-            for change in diff.iter_changes(op) {
-                let tag = change.tag();
-                let mut line = change.to_string();
-                if line.ends_with('\n') {
-                    line.pop();
-                    if line.ends_with('\r') {
-                        line.pop();
-                    }
-                }
-
-                match tag {
-                    ChangeTag::Delete => {
-                        out.push_str("- ");
-                        out.push_str(&line);
-                        out.push('\n');
-                    }
-                    ChangeTag::Insert => {
-                        out.push_str("+ ");
-                        out.push_str(&line);
-                        out.push('\n');
-                    }
-                    ChangeTag::Equal => {
-                        out.push_str("  ");
-                        out.push_str(&line);
-                        out.push('\n');
-                    }
-                }
-            }
-        }
-    }
-    out.push_str("```\n");
-    out
 }
 
 /// Diff per file content sets.
@@ -212,35 +183,20 @@ pub fn diff_file_contents(
         match (old_opt, new_opt) {
             (None, Some(new_content)) => {
                 // Added file: present only in current snapshot
-                let mut diff = String::new();
-                diff.push_str("```diff\n");
-                for line in new_content.lines() {
-                    diff.push_str("+ ");
-                    diff.push_str(line);
-                    diff.push('\n');
-                }
-                diff.push_str("```\n");
+                let body = prefixed_snapshot(new_content, "+ ");
                 results.push(PerFileDiff {
                     path,
                     status: PerFileStatus::Added,
-                    diff,
+                    diff: crate::fences::fenced_block("diff", &body),
                 });
             }
-            (Some(_old_content), None) => {
+            (Some(old_content), None) => {
                 // Removed file
-                let old_content = previous.get(&path).unwrap();
-                let mut diff = String::new();
-                diff.push_str("```diff\n");
-                for line in old_content.lines() {
-                    diff.push_str("- ");
-                    diff.push_str(line);
-                    diff.push('\n');
-                }
-                diff.push_str("```\n");
+                let body = prefixed_snapshot(old_content, "- ");
                 results.push(PerFileDiff {
                     path,
                     status: PerFileStatus::Removed,
-                    diff,
+                    diff: crate::fences::fenced_block("diff", &body),
                 });
             }
             (Some(old_content), Some(new_content)) => {
@@ -274,7 +230,10 @@ pub fn diff_file_contents(
 pub fn render_per_file_diffs(diffs: &[PerFileDiff]) -> String {
     let mut out = String::new();
     for d in diffs {
-        out.push_str(&format!("### Diff: `{}`\n\n", d.path));
+        out.push_str(&format!(
+            "### Diff: {}\n\n",
+            crate::fences::inline_code(&d.path)
+        ));
         match d.status {
             PerFileStatus::Added => out.push_str("_Status: Added_\n\n"),
             PerFileStatus::Removed => out.push_str("_Status: Removed_\n\n"),
@@ -580,5 +539,48 @@ mod tests {
         assert!(diff.contains("```diff"));
         assert!(diff.contains("line1_modified"));
         assert!(!diff.is_empty());
+    }
+
+    #[test]
+    fn diff_fence_outgrows_inner_backticks() {
+        // Equal context lines are prefixed with two spaces, so a line of ```
+        // becomes a legal closer for a 3-backtick fence. The wrapper must be longer.
+        let prev = map(&[("readme.md", "keep\n```\nkeep\n")]);
+        let curr = map(&[("readme.md", "keep\n```\nchanged\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, Some(3));
+        assert_eq!(diffs.len(), 1);
+        let diff = &diffs[0].diff;
+        assert!(diff.starts_with("````diff\n"), "{diff}");
+        let body = diff
+            .strip_prefix("````diff\n")
+            .unwrap()
+            .strip_suffix("````\n")
+            .unwrap();
+        assert!(body.contains("```"), "{diff}");
+        assert!(!body.contains("````"), "{diff}");
+        assert!(crate::fences::unmatched_backtick_fence_len(diff).is_none());
+    }
+
+    #[test]
+    fn added_file_fence_outgrows_four_backticks() {
+        let prev = map(&[]);
+        let curr = map(&[("readme.md", "before\n````\nafter\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        assert_eq!(diffs.len(), 1);
+        let diff = &diffs[0].diff;
+        assert!(diff.starts_with("`````diff\n"), "{diff}");
+        assert!(diff.contains("+ before\n"));
+        assert!(diff.contains("+ ````\n"));
+        assert!(diff.contains("+ after\n"));
+        assert!(crate::fences::unmatched_backtick_fence_len(diff).is_none());
+    }
+
+    #[test]
+    fn diff_heading_escapes_backtick_in_path() {
+        let prev = map(&[]);
+        let curr = map(&[("weird`name.py", "x\n")]);
+        let diffs = diff_file_contents(&prev, &curr, true, None);
+        let out = render_per_file_diffs(&diffs);
+        assert!(out.contains("### Diff: ``weird`name.py``"), "{out}");
     }
 }
