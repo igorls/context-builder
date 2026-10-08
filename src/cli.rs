@@ -12,7 +12,12 @@ pub struct Args {
     #[clap(short, long, default_value = "output.md")]
     pub output: String,
 
-    /// File extensions to include (e.g., --filter rs,toml)
+    /// File types to include (e.g., --filter rs,toml).
+    ///
+    /// Values are ripgrep file types, not exact extensions: `toml` also matches
+    /// Cargo.lock, and `md` also matches `.markdown` and `.mdx`. A leading `.`
+    /// or `*.` is stripped and the value is lowercased, so `.rs`, `*.rs`, and
+    /// `RS` all mean `rs`.
     #[clap(short = 'f', long, value_delimiter = ',')]
     pub filter: Vec<String>,
 
@@ -226,6 +231,21 @@ mod tests {
         let args_default =
             Args::try_parse_from(["context-builder"]).expect("should parse with default encoding");
         assert_eq!(args_default.encoding, "o200k_base");
+    }
+
+    #[test]
+    fn filter_help_documents_ripgrep_types() {
+        use clap::CommandFactory;
+        // `--help` renders the long help, which carries the ripgrep-type note.
+        let help = Args::command().render_long_help().to_string();
+        assert!(
+            help.contains("ripgrep"),
+            "expected --help to mention ripgrep file types:\n{help}"
+        );
+        assert!(
+            help.contains("Cargo.lock"),
+            "expected --help to mention that toml expands beyond *.toml:\n{help}"
+        );
     }
 
     #[test]
