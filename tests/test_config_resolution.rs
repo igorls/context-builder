@@ -61,6 +61,7 @@ fn run_with_resolved_config(
         filter: resolution.config.filter,
         ignore: resolution.config.ignore,
         line_numbers: resolution.config.line_numbers,
+        file_metadata: resolution.config.file_metadata,
         preview: resolution.config.preview,
         token_count: resolution.config.token_count,
         yes: resolution.config.yes,
@@ -134,6 +135,7 @@ output = "from_config.md"
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -217,6 +219,7 @@ ignore = ["target"]
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -304,6 +307,7 @@ timestamped_output = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -386,6 +390,7 @@ yes = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
@@ -463,6 +468,7 @@ timestamped_output = false
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();

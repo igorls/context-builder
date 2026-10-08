@@ -216,6 +216,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = NoPrompt;
@@ -255,6 +256,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     preview: args.preview,
                     token_count: args.token_count,
                     line_numbers: args.line_numbers,
+                    file_metadata: args.file_metadata,
                     yes: true,
                     diff_only: false,
                     clear_cache: false,

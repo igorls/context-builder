@@ -97,6 +97,7 @@ fn test_deterministic_output_multiple_runs() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         },
         Config::default(),
         &prompter,
@@ -125,6 +126,7 @@ fn test_deterministic_output_multiple_runs() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         },
         Config::default(),
         &prompter,
@@ -277,6 +279,7 @@ fn test_deterministic_file_tree_order() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -346,6 +349,7 @@ fn test_cache_collision_prevention() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -375,6 +379,7 @@ fn test_cache_collision_prevention() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -445,6 +450,7 @@ fn test_custom_ignores_performance() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -505,6 +511,7 @@ fn test_configuration_affects_cache_key() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let args2 = Args {
@@ -525,6 +532,7 @@ fn test_configuration_affects_cache_key() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -595,6 +603,7 @@ auto_diff = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;

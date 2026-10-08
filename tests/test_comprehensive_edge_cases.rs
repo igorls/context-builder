@@ -124,6 +124,7 @@ fn test_comprehensive_binary_file_edge_cases() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let prompter = TestPrompter::new(true, true);
@@ -214,6 +215,7 @@ fn test_configuration_precedence_edge_cases() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -255,6 +257,7 @@ fn test_configuration_precedence_edge_cases() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -316,6 +319,7 @@ timestamped_output = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
@@ -423,6 +427,7 @@ fn test_error_conditions_and_exit_codes() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -454,6 +459,7 @@ fn test_error_conditions_and_exit_codes() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter_deny = TestPrompter::new(false, true); // Deny overwrite
@@ -482,6 +488,7 @@ fn test_error_conditions_and_exit_codes() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter_cancel = TestPrompter::new(true, false); // Allow overwrite, deny processing
@@ -532,6 +539,7 @@ fn test_memory_usage_under_parallel_processing() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(true, true);
@@ -557,10 +565,13 @@ fn test_memory_usage_under_parallel_processing() {
         "Should contain last function"
     );
 
-    // Verify substantial content was generated
+    // Verify substantial content was generated. Per-file Size/Modified lines
+    // are off by default, so this is the file bodies plus headers, not the
+    // old metadata-inflated size.
     assert!(
-        content.len() > 100_000,
-        "Should generate substantial output"
+        content.len() > 50_000,
+        "Should generate substantial output, got {} bytes",
+        content.len()
     );
 
     // Check that files appear in a reasonable order (not completely scrambled)
@@ -624,6 +635,7 @@ line_numbers = true
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config =
@@ -727,6 +739,7 @@ fn test_edge_case_filenames_and_paths() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(true, true);

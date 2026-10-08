@@ -127,6 +127,7 @@ filter = ["rs", "txt"]
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     // Apply config manually (simulating what happens in the real application)
@@ -306,6 +307,7 @@ fn test_encoding_strategy_configuration() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = run_with_args(args, config, &prompter);
