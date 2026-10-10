@@ -1445,6 +1445,19 @@ mod tests {
     }
 
     #[test]
+    fn counting_writer_counts_bytes_and_flushes() {
+        let mut writer = CountingWriter {
+            inner: Vec::new(),
+            count: 0,
+        };
+        writer.write_all(b"hello ").unwrap();
+        writer.write_all(b"world").unwrap();
+        writer.flush().unwrap();
+        assert_eq!(writer.count, 11);
+        assert_eq!(writer.inner, b"hello world");
+    }
+
+    #[test]
     fn test_pdf_header_is_binary() {
         // PDF-based `.ai` from dogfood B2 (repro.sh case B4): `%PDF` header,
         // the binary comment, and an object. No NUL in this prefix, and the

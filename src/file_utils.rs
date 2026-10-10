@@ -543,10 +543,7 @@ fn is_prior_context_output(path: &Path) -> bool {
     if !header_is_context_builder_output(&buf[..n]) {
         return false;
     }
-    log::debug!(
-        "skipping previous context-builder output: {}",
-        path.display()
-    );
+    log::debug!("skipping prior report: {}", path.display());
     true
 }
 
