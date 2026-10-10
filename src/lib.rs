@@ -1169,6 +1169,45 @@ mod tests {
         }
     }
 
+    /// Run the pipeline in-process on `dir` with the given CLI flags (no config file).
+    fn run_in_process(dir: &Path, extra: &[&str]) -> io::Result<()> {
+        use clap::Parser;
+        let mut argv = vec![
+            "context-builder".to_string(),
+            "-d".to_string(),
+            dir.to_string_lossy().into_owned(),
+        ];
+        argv.extend(extra.iter().map(|s| s.to_string()));
+        let args = Args::parse_from(argv);
+        run_with_args(args, Config::default(), &MockPrompter::new(true))
+    }
+
+    #[test]
+    fn empty_walk_and_unmatched_filters_still_succeed() {
+        let dir = tempdir().unwrap();
+        let out = dir.path().join("empty.md");
+        // Nothing to collect: warns on stderr and still writes the document.
+        run_in_process(dir.path(), &["-o", &out.to_string_lossy(), "-y"]).unwrap();
+        assert!(out.exists());
+
+        fs::write(dir.path().join("a.txt"), "a").unwrap();
+        for filters in [vec!["-f", "rs"], vec!["-f", "rs,go"]] {
+            let mut flags = vec!["-o", "unmatched.md", "-y"];
+            let out2 = dir.path().join("unmatched.md");
+            let out2 = out2.to_string_lossy().into_owned();
+            flags[1] = &out2;
+            flags.extend(filters);
+            run_in_process(dir.path(), &flags).unwrap();
+        }
+    }
+
+    #[test]
+    fn output_to_stdout_pipe_mode_succeeds() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "a").unwrap();
+        run_in_process(dir.path(), &["-o", "-"]).unwrap();
+    }
+
     #[test]
     fn test_diff_config_default() {
         let config = DiffConfig::default();
