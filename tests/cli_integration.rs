@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use clap::Parser;
 use tempfile::tempdir;
 
 use context_builder::config::Config;
@@ -491,5 +492,131 @@ fn token_count_mode_does_not_create_output_file() {
     assert!(
         !root.join("output.md").exists(),
         "output file should not be created in token count mode"
+    );
+}
+
+/// Parse ignore flags the way the CLI does, then collect files with those patterns.
+fn collected_with_ignore_args(root: &Path, ignore_args: &[&str]) -> Vec<String> {
+    let mut argv = vec!["context-builder".to_string()];
+    for arg in ignore_args {
+        argv.push((*arg).to_string());
+    }
+    let args = Args::try_parse_from(&argv).unwrap_or_else(|err| panic!("parse failed: {err}"));
+    let files = context_builder::file_utils::collect_files(root, &[], &args.ignore, &[]).unwrap();
+    let mut paths: Vec<String> = files
+        .iter()
+        .map(|entry| {
+            entry
+                .path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[test]
+fn comma_separated_ignore_excludes_both_directories() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    write_file(&root.join("src/main.rs"), "fn main() {}");
+    write_file(&root.join("docs/guide.md"), "# guide");
+    write_file(&root.join("assets/logo.svg"), "<svg></svg>");
+    write_file(&root.join("keep.txt"), "keep");
+
+    let paths = collected_with_ignore_args(root, &["-i", "docs,assets"]);
+    assert!(
+        paths.iter().any(|path| path == "src/main.rs"),
+        "source should remain, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "keep.txt"),
+        "unrelated files should remain, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.starts_with("docs")),
+        "docs/ should be ignored, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.starts_with("assets")),
+        "assets/ should be ignored, got {paths:?}"
+    );
+}
+
+#[test]
+fn repeated_ignore_flags_still_exclude_each_name() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    write_file(&root.join("src/main.rs"), "fn main() {}");
+    write_file(&root.join("docs/guide.md"), "# guide");
+    write_file(&root.join("assets/logo.svg"), "<svg></svg>");
+    write_file(&root.join("keep.txt"), "keep");
+
+    let paths = collected_with_ignore_args(root, &["-i", "docs", "-i", "assets"]);
+    assert!(
+        paths.iter().any(|path| path == "src/main.rs"),
+        "source should remain, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "keep.txt"),
+        "unrelated files should remain, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.starts_with("docs")),
+        "repeated -i docs should ignore docs/, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.starts_with("assets")),
+        "repeated -i assets should ignore assets/, got {paths:?}"
+    );
+}
+
+#[test]
+fn glob_ignore_excludes_matching_files() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    write_file(&root.join("src/lib.rs"), "fn lib() {}");
+    write_file(&root.join("Cargo.lock"), "# lock");
+    write_file(&root.join("nested/pkg.lock"), "# nested lock");
+    write_file(&root.join("keep.txt"), "keep");
+
+    let paths = collected_with_ignore_args(root, &["-i", "*.lock"]);
+    assert!(
+        paths.iter().any(|path| path == "src/lib.rs"),
+        "non-matching files should remain, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "keep.txt"),
+        "non-matching files should remain, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.ends_with(".lock")),
+        "gitignore glob *.lock should exclude lockfiles, got {paths:?}"
+    );
+}
+
+#[test]
+fn path_ignore_excludes_that_directory() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    write_file(&root.join("src/main.rs"), "fn main() {}");
+    write_file(&root.join("crates/core/lib.rs"), "fn core() {}");
+    write_file(&root.join("crates/cli/main.rs"), "fn cli() {}");
+
+    let paths = collected_with_ignore_args(root, &["-i", "crates/core"]);
+    assert!(
+        paths.iter().any(|path| path == "src/main.rs"),
+        "unrelated source should remain, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "crates/cli/main.rs"),
+        "sibling paths should remain, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.starts_with("crates/core")),
+        "path pattern crates/core should be ignored, got {paths:?}"
     );
 }

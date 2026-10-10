@@ -28,7 +28,8 @@ pub struct Config {
     /// File extensions to include (no leading dot, e.g. `rs`, `toml`)
     pub filter: Option<Vec<String>>,
 
-    /// File / directory names to ignore (exact name matches)
+    /// Paths or gitignore-style globs to ignore (names like `docs`, paths like
+    /// `crates/core`, globs like `*.lock`). Same patterns as `--ignore`.
     pub ignore: Option<Vec<String>>,
 
     /// Add line numbers to code blocks

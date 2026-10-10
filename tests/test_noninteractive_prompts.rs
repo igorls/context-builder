@@ -402,13 +402,16 @@ fn run_on_pty(input: &str, output: &str, extra: &[&str], answer: Option<&[u8]>) 
     let slave = unsafe { OwnedFd::from_raw_fd(slave_fd) };
     let mut master = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(master_fd) });
 
+    // Prompts need a terminal on both stdin and stderr, so stderr is the PTY
+    // too. What the child writes to stderr is read back from the master.
+    let slave_err = slave.try_clone().expect("clone pty slave");
     let mut child = Command::new(bin_path())
         .args(["-d", input, "-o", output])
         .args(extra)
         .env_remove("CB_SILENT")
         .stdin(Stdio::from(slave))
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::from(slave_err))
         .spawn()
         .expect("failed to spawn context-builder");
 
@@ -420,9 +423,20 @@ fn run_on_pty(input: &str, output: &str, extra: &[&str], answer: Option<&[u8]>) 
     }
 
     let stdout_pipe = child.stdout.take().expect("piped stdout");
-    let stderr_pipe = child.stderr.take().expect("piped stderr");
+    let mut master_reader = master.try_clone().expect("clone pty master");
     let stdout_thread = thread::spawn(move || read_pipe(stdout_pipe));
-    let stderr_thread = thread::spawn(move || read_pipe(stderr_pipe));
+    let stderr_thread = thread::spawn(move || {
+        // Ends with EIO once the child has exited and the slave is closed.
+        let mut bytes = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = master_reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
 
     let waited = wait_timeout(&mut child, TIMEOUT);
     drop(master);
