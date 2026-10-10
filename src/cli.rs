@@ -12,12 +12,17 @@ pub struct Args {
     #[clap(short, long, default_value = "output.md")]
     pub output: String,
 
-    /// File extensions to include (e.g., --filter rs,toml)
+    /// File types to include (e.g., --filter rs,toml).
+    ///
+    /// Values are ripgrep file types, not exact extensions: `toml` also matches
+    /// Cargo.lock, and `md` also matches `.markdown` and `.mdx`. A leading `.`
+    /// or `*.` is stripped and the value is lowercased, so `.rs`, `*.rs`, and
+    /// `RS` all mean `rs`.
     #[clap(short = 'f', long, value_delimiter = ',')]
     pub filter: Vec<String>,
 
-    /// Folder or file names to ignore (e.g., --ignore target --ignore lock)
-    #[clap(short = 'i', long)]
+    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core)
+    #[clap(short = 'i', long, value_delimiter = ',', value_name = "PATTERN")]
     pub ignore: Vec<String>,
 
     /// Preview mode: only print the file tree to the console, don't generate the documentation file
@@ -226,6 +231,105 @@ mod tests {
         let args_default =
             Args::try_parse_from(["context-builder"]).expect("should parse with default encoding");
         assert_eq!(args_default.encoding, "o200k_base");
+    }
+
+    #[test]
+    fn output_flag_value_source_distinguishes_explicit_from_default() {
+        use clap::CommandFactory;
+
+        // The resolver keys off this id. `-o output.md` must count as explicit
+        // even though the string equals the clap default.
+        let explicit = Args::command().get_matches_from(["context-builder", "-o", "wanted.md"]);
+        assert_eq!(
+            explicit.value_source("output"),
+            Some(clap::parser::ValueSource::CommandLine)
+        );
+
+        let explicit_default =
+            Args::command().get_matches_from(["context-builder", "-o", "output.md"]);
+        assert_eq!(
+            explicit_default.value_source("output"),
+            Some(clap::parser::ValueSource::CommandLine)
+        );
+
+        let omitted = Args::command().get_matches_from(["context-builder", "-d", "proj"]);
+        assert_eq!(
+            omitted.value_source("output"),
+            Some(clap::parser::ValueSource::DefaultValue)
+        );
+    }
+
+    #[test]
+    fn filter_help_documents_ripgrep_types() {
+        use clap::CommandFactory;
+        // `--help` renders the long help, which carries the ripgrep-type note.
+        let help = Args::command().render_long_help().to_string();
+        assert!(
+            help.contains("ripgrep"),
+            "expected --help to mention ripgrep file types:\n{help}"
+        );
+        assert!(
+            help.contains("Cargo.lock"),
+            "expected --help to mention that toml expands beyond *.toml:\n{help}"
+        );
+    }
+
+    #[test]
+    fn ignore_comma_delimiter_splits_and_repeated_flags_append() {
+        let comma = Args::try_parse_from(["context-builder", "-i", "docs,assets"]).expect("parse");
+        assert_eq!(comma.ignore, vec!["docs".to_string(), "assets".to_string()]);
+
+        let long =
+            Args::try_parse_from(["context-builder", "--ignore", "docs,assets"]).expect("parse");
+        assert_eq!(long.ignore, vec!["docs".to_string(), "assets".to_string()]);
+
+        // Repeated -i still appends, including after a comma-separated value.
+        let repeated = Args::try_parse_from([
+            "context-builder",
+            "-i",
+            "docs,assets",
+            "-i",
+            "target",
+            "--ignore",
+            "*.lock",
+        ])
+        .expect("parse");
+        assert_eq!(
+            repeated.ignore,
+            vec![
+                "docs".to_string(),
+                "assets".to_string(),
+                "target".to_string(),
+                "*.lock".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn ignore_help_documents_globs_paths_and_a_working_example() {
+        use clap::CommandFactory;
+
+        let help = Args::command().render_long_help().to_string();
+        assert!(
+            help.contains("gitignore-style globs"),
+            "help should say ignore accepts gitignore-style globs: {help}"
+        );
+        assert!(
+            help.contains("docs,assets"),
+            "help should show the comma form: {help}"
+        );
+        assert!(
+            help.contains("*.lock"),
+            "help should show a glob example: {help}"
+        );
+        assert!(
+            help.contains("crates/core"),
+            "help should show a path example: {help}"
+        );
+        assert!(
+            !help.contains("--ignore lock"),
+            "help must not suggest a bare name that matches nothing useful: {help}"
+        );
     }
 
     #[test]
