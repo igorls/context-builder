@@ -991,9 +991,18 @@ mod tests {
         fs::write(base.join("notes.unknownext"), "x\n").unwrap();
 
         for filter in ["toml", "TOML", ".toml", "*.toml"] {
-            let files = collect_files(base, &[filter.to_string()], &[], &[])
-                .unwrap_or_else(|e| panic!("filter {filter:?} should keep the toml type: {e}"));
+            // Lockfiles are opt-in, so ask for them to observe the type expansion.
+            let files = collect_files_reporting(base, &[filter.to_string()], &[], &[], false, true)
+                .unwrap_or_else(|e| panic!("filter {filter:?} should keep the toml type: {e}"))
+                .files;
             let relative_paths = to_rel_paths(files, base);
+
+            // By default the same filter still leaves the lockfile out.
+            let default_paths = to_rel_paths(
+                collect_files(base, &[filter.to_string()], &[], &[]).unwrap(),
+                base,
+            );
+            assert!(!default_paths.contains(&"Cargo.lock".to_string()));
             assert!(
                 relative_paths.contains(&"Cargo.toml".to_string()),
                 "{filter:?}: {relative_paths:?}"
