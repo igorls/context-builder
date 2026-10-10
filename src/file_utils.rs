@@ -150,7 +150,90 @@ fn file_entry_point_priority(path: &Path) -> u8 {
     }
 }
 
+/// Strip one leading `*.` or `.`, then lowercase.
+///
+/// `.rs`, `*.rs`, and `RS` all become `rs`. Names that are already ripgrep
+/// types (`toml`, `md`, `rust`) are left as those type names so their
+/// built-in globs still apply.
+fn normalize_filter(filter: &str) -> String {
+    let stripped = if let Some(rest) = filter.strip_prefix("*.") {
+        rest
+    } else if let Some(rest) = filter.strip_prefix('.') {
+        rest
+    } else {
+        filter
+    };
+    stripped.to_ascii_lowercase()
+}
+
+/// Ripgrep type names are non-empty and alphanumeric. `all` is alphanumeric
+/// but reserved by `TypesBuilder::add` (it means "every defined type").
+fn is_legal_type_name(name: &str) -> bool {
+    !name.is_empty() && name != "all" && name.chars().all(|c| c.is_alphanumeric())
+}
+
+fn unrecognized_filter_error(original: &str, normalized: &str) -> io::Error {
+    let shown = if original == normalized {
+        format!("'{original}'")
+    } else {
+        format!("'{original}' (normalized to '{normalized}')")
+    };
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "Unrecognized file type filter {shown}. Filters are ripgrep file types \
+             (for example, rust, toml, md) or plain extensions (for example, rs). \
+             A leading '.' or '*.' is stripped and the value is lowercased; \
+             what remains must be letters and digits only."
+        ),
+    )
+}
+
+/// Apply `--filter` values as ripgrep file types.
+///
+/// Known types keep their built-in globs (`toml` still matches `Cargo.lock`).
+/// A name that is not a known type is registered as `*.{name}` when that name
+/// is a legal type name. Anything that still cannot be registered is returned
+/// as an error — `TypesBuilder::build` is never unwrapped.
+fn configure_file_type_filters(walker: &mut WalkBuilder, filters: &[String]) -> io::Result<()> {
+    if filters.is_empty() {
+        return Ok(());
+    }
+
+    let mut type_builder = ignore::types::TypesBuilder::new();
+    type_builder.add_defaults();
+    for filter in filters {
+        let name = normalize_filter(filter);
+        // `all` selects every default type. It is not a legal `add` name.
+        if name == "all" {
+            type_builder.select("all");
+            continue;
+        }
+        if !is_legal_type_name(&name) {
+            return Err(unrecognized_filter_error(filter, &name));
+        }
+        // Appending `*.{name}` extends an existing ripgrep type and creates a
+        // custom extension type otherwise. The previous code did this too;
+        // the `Result` used to be discarded, which is what made `build` panic.
+        let glob = format!("*.{name}");
+        type_builder
+            .add(&name, &glob)
+            .map_err(|_| unrecognized_filter_error(filter, &name))?;
+        type_builder.select(&name);
+    }
+
+    let types = type_builder
+        .build()
+        .map_err(|_| unrecognized_filter_error("(combined)", "(combined)"))?;
+    walker.types(types);
+    Ok(())
+}
+
 /// Collects all files to be processed using `ignore` crate for efficient traversal.
+///
+/// `filters` are ripgrep file types or extensions. A leading `.` or `*.` is
+/// stripped and the value is lowercased. A filter that still is not a legal
+/// type name returns an error instead of panicking.
 ///
 /// `auto_ignores` are runtime-computed exclusion patterns (e.g., the tool's own
 /// output file or cache directory). They are processed identically to user ignores
@@ -244,17 +327,7 @@ pub fn collect_files(
         )
     })?;
     walker.overrides(overrides);
-
-    if !filters.is_empty() {
-        let mut type_builder = ignore::types::TypesBuilder::new();
-        type_builder.add_defaults();
-        for filter in filters {
-            let _ = type_builder.add(filter, &format!("*.{}", filter));
-            type_builder.select(filter);
-        }
-        let types = type_builder.build().unwrap();
-        walker.types(types);
-    }
+    configure_file_type_filters(&mut walker, filters)?;
 
     let mut files: Vec<DirEntry> = walker
         .build()
@@ -488,6 +561,113 @@ mod tests {
 
         let files = collect_files(base, &filters, &ignores, &[]).unwrap();
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn collect_files_normalizes_dotted_glob_and_case_filters() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src").join("a.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("README.md"), "# readme").unwrap();
+
+        for filter in [".rs", "*.rs", "RS", "Rs", ".RS", "*.RS"] {
+            let files = collect_files(base, &[filter.to_string()], &[], &[])
+                .unwrap_or_else(|e| panic!("filter {filter:?} should not error: {e}"));
+            let relative_paths = to_rel_paths(files, base);
+            assert!(
+                relative_paths.contains(&"src/a.rs".to_string()),
+                "filter {filter:?} should include src/a.rs, got {relative_paths:?}"
+            );
+            assert!(
+                !relative_paths.contains(&"README.md".to_string()),
+                "filter {filter:?} should exclude README.md, got {relative_paths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_files_unrecognized_filter_is_an_error() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("a.rs"), "fn main() {}").unwrap();
+
+        for filter in ["d.ts", "c++", "tar.gz", "*.d.ts", ".c++"] {
+            let err = collect_files(base, &[filter.to_string()], &[], &[])
+                .expect_err("unrecognized filter must return an error, not panic");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(filter),
+                "error for {filter:?} should name the filter, got {msg}"
+            );
+            assert!(
+                msg.contains("Unrecognized file type filter"),
+                "error for {filter:?} should be user-facing, got {msg}"
+            );
+            assert!(
+                !msg.contains("UnrecognizedFileType"),
+                "error for {filter:?} should not leak the ignore-crate panic payload, got {msg}"
+            );
+        }
+
+        // A later bad filter must not be dropped or panic after a valid one.
+        let err = collect_files(base, &["rs".to_string(), "tar.gz".to_string()], &[], &[])
+            .expect_err("mixed filters should still error");
+        assert!(err.to_string().contains("tar.gz"));
+    }
+
+    #[test]
+    fn collect_files_keeps_ripgrep_type_expansion() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
+        fs::write(base.join("Cargo.lock"), "# lock\n").unwrap();
+        fs::write(base.join("notes.mdx"), "# notes\n").unwrap();
+        fs::write(base.join("skip.txt"), "nope\n").unwrap();
+        fs::write(base.join("notes.unknownext"), "x\n").unwrap();
+
+        for filter in ["toml", "TOML", ".toml", "*.toml"] {
+            let files = collect_files(base, &[filter.to_string()], &[], &[])
+                .unwrap_or_else(|e| panic!("filter {filter:?} should keep the toml type: {e}"));
+            let relative_paths = to_rel_paths(files, base);
+            assert!(
+                relative_paths.contains(&"Cargo.toml".to_string()),
+                "{filter:?}: {relative_paths:?}"
+            );
+            assert!(
+                relative_paths.contains(&"Cargo.lock".to_string()),
+                "{filter:?} should still expand to the ripgrep toml type: {relative_paths:?}"
+            );
+            assert!(!relative_paths.contains(&"skip.txt".to_string()));
+        }
+
+        // `all` is ripgrep's "every defined type" name. Lowercasing must not
+        // turn it into an unrecognized filter.
+        for filter in ["all", "ALL"] {
+            let files = collect_files(base, &[filter.to_string()], &[], &[])
+                .unwrap_or_else(|e| panic!("filter {filter:?} should select known types: {e}"));
+            let relative_paths = to_rel_paths(files, base);
+            assert!(
+                relative_paths.contains(&"Cargo.toml".to_string()),
+                "{filter:?}: {relative_paths:?}"
+            );
+            assert!(
+                relative_paths.contains(&"notes.mdx".to_string()),
+                "{filter:?}: {relative_paths:?}"
+            );
+            assert!(
+                !relative_paths.contains(&"notes.unknownext".to_string()),
+                "{filter:?} should not include extensions outside the default types: {relative_paths:?}"
+            );
+        }
+
+        let md_files = collect_files(base, &["md".to_string()], &[], &[]).unwrap();
+        let md_paths = to_rel_paths(md_files, base);
+        assert!(
+            md_paths.contains(&"notes.mdx".to_string()),
+            "md should keep the ripgrep markdown globs, got {md_paths:?}"
+        );
+        assert!(!md_paths.contains(&"Cargo.lock".to_string()));
     }
 
     #[test]

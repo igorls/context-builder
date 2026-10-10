@@ -227,6 +227,22 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         &final_args.ignore,
         &auto_ignores,
     )?;
+    // A filter that selects nothing used to write an empty document with no
+    // signal. Warn on stderr so `-o -` pipes stay clean, and still write.
+    if !silent && !final_args.filter.is_empty() && files.is_empty() {
+        let quoted = final_args
+            .filter
+            .iter()
+            .map(|f| format!("'{f}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let noun = if final_args.filter.len() == 1 {
+            "filter"
+        } else {
+            "filters"
+        };
+        eprintln!("Warning: no files matched {noun} {quoted}.");
+    }
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
         eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
