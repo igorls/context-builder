@@ -16,8 +16,8 @@ pub struct Args {
     #[clap(short = 'f', long, value_delimiter = ',')]
     pub filter: Vec<String>,
 
-    /// Folder or file names to ignore (e.g., --ignore target --ignore lock)
-    #[clap(short = 'i', long)]
+    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core)
+    #[clap(short = 'i', long, value_delimiter = ',', value_name = "PATTERN")]
     pub ignore: Vec<String>,
 
     /// Preview mode: only print the file tree to the console, don't generate the documentation file
@@ -226,6 +226,64 @@ mod tests {
         let args_default =
             Args::try_parse_from(["context-builder"]).expect("should parse with default encoding");
         assert_eq!(args_default.encoding, "o200k_base");
+    }
+
+    #[test]
+    fn ignore_comma_delimiter_splits_and_repeated_flags_append() {
+        let comma = Args::try_parse_from(["context-builder", "-i", "docs,assets"]).expect("parse");
+        assert_eq!(comma.ignore, vec!["docs".to_string(), "assets".to_string()]);
+
+        let long =
+            Args::try_parse_from(["context-builder", "--ignore", "docs,assets"]).expect("parse");
+        assert_eq!(long.ignore, vec!["docs".to_string(), "assets".to_string()]);
+
+        // Repeated -i still appends, including after a comma-separated value.
+        let repeated = Args::try_parse_from([
+            "context-builder",
+            "-i",
+            "docs,assets",
+            "-i",
+            "target",
+            "--ignore",
+            "*.lock",
+        ])
+        .expect("parse");
+        assert_eq!(
+            repeated.ignore,
+            vec![
+                "docs".to_string(),
+                "assets".to_string(),
+                "target".to_string(),
+                "*.lock".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn ignore_help_documents_globs_paths_and_a_working_example() {
+        use clap::CommandFactory;
+
+        let help = Args::command().render_long_help().to_string();
+        assert!(
+            help.contains("gitignore-style globs"),
+            "help should say ignore accepts gitignore-style globs: {help}"
+        );
+        assert!(
+            help.contains("docs,assets"),
+            "help should show the comma form: {help}"
+        );
+        assert!(
+            help.contains("*.lock"),
+            "help should show a glob example: {help}"
+        );
+        assert!(
+            help.contains("crates/core"),
+            "help should show a path example: {help}"
+        );
+        assert!(
+            !help.contains("--ignore lock"),
+            "help must not suggest a bare name that matches nothing useful: {help}"
+        );
     }
 
     #[test]
