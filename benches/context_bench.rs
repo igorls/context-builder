@@ -25,9 +25,6 @@ fn init_bench_env() {
 struct NoPrompt;
 
 impl Prompter for NoPrompt {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(true)
-    }
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(true)
     }

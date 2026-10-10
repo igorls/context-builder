@@ -17,10 +17,7 @@ pub fn format_signatures_as_markdown(signatures: &[Signature], language: &str) -
         return String::new();
     }
 
-    let mut output = String::new();
-    output.push_str("```");
-    output.push_str(language);
-    output.push('\n');
+    let mut body = String::new();
 
     let mut current_kind: Option<&str> = None;
 
@@ -42,20 +39,19 @@ pub fn format_signatures_as_markdown(signatures: &[Signature], language: &str) -
 
         if current_kind != Some(kind_str) {
             if current_kind.is_some() {
-                output.push('\n');
+                body.push('\n');
             }
-            output.push_str("// ");
-            output.push_str(kind_str);
-            output.push('\n');
+            body.push_str("// ");
+            body.push_str(kind_str);
+            body.push('\n');
             current_kind = Some(kind_str);
         }
 
-        output.push_str(&sig.full_signature);
-        output.push('\n');
+        body.push_str(&sig.full_signature);
+        body.push('\n');
     }
 
-    output.push_str("```\n");
-    output
+    crate::fences::fenced_block(language, &body)
 }
 
 #[cfg(test)]
@@ -93,6 +89,19 @@ mod tests {
         assert!(output.contains("// Functions\n"));
         assert!(output.contains("fn foo(x: i32) -> i32\n"));
         assert!(output.ends_with("```\n"));
+    }
+
+    #[test]
+    fn fence_outgrows_backticks_inside_signature() {
+        let sigs = vec![make_sig(
+            SignatureKind::Function,
+            "example",
+            "fn example() { /* ``` */ }",
+        )];
+        let output = format_signatures_as_markdown(&sigs, "rust");
+        assert!(output.starts_with("````rust\n"), "{output}");
+        assert!(output.contains("fn example() { /* ``` */ }\n"));
+        assert!(output.ends_with("````\n"));
     }
 
     #[test]

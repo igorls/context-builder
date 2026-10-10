@@ -29,7 +29,8 @@ pub struct Config {
     /// File extensions to include (no leading dot, e.g. `rs`, `toml`)
     pub filter: Option<Vec<String>>,
 
-    /// File / directory names to ignore (exact name matches)
+    /// Paths or gitignore-style globs to ignore (names like `docs`, paths like
+    /// `crates/core`, globs like `*.lock`). Same patterns as `--ignore`.
     pub ignore: Option<Vec<String>>,
 
     /// Add line numbers to code blocks
@@ -52,7 +53,10 @@ pub struct Config {
     /// If true, append a UTC timestamp to the output file name (before extension)
     pub timestamped_output: Option<bool>,
 
-    /// Assume "yes" for overwrite / processing confirmations
+    /// Assume "yes" for the overwrite prompt.
+    ///
+    /// Still accepted after the >100-file confirmation was removed in v0.11.0.
+    /// It does not change processing; there is no processing prompt to skip.
     pub yes: Option<bool>,
 
     /// Enable automatic diff generation (requires `timestamped_output = true`)

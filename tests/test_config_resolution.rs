@@ -8,27 +8,24 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
-use context_builder::{Prompter, cli::Args, config_resolver::resolve_final_config, run_with_args};
+use context_builder::{
+    Prompter,
+    cli::Args,
+    config_resolver::{ExplicitCli, resolve_final_config},
+    run_with_args,
+};
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-        }
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -47,12 +44,19 @@ fn run_with_resolved_config(
     config: Option<context_builder::config::Config>,
     prompter: &impl Prompter,
 ) -> std::io::Result<()> {
+    run_with_resolved_config_explicit(args, config, ExplicitCli::default(), prompter)
+}
+
+/// Same as [`run_with_resolved_config`], but with an explicit-flag signal so
+/// tests can simulate a user-typed `-o` (including `-o output.md`).
+fn run_with_resolved_config_explicit(
+    args: Args,
+    config: Option<context_builder::config::Config>,
+    explicit: ExplicitCli,
+    prompter: &impl Prompter,
+) -> std::io::Result<()> {
     // Resolve final configuration using the new config resolver
-    let resolution = resolve_final_config(
-        args,
-        config.clone(),
-        context_builder::config_resolver::ExplicitCli::default(),
-    );
+    let resolution = resolve_final_config(args, config.clone(), explicit);
 
     // Convert resolved config back to Args for run_with_args
     let final_args = Args {
@@ -139,7 +143,7 @@ output = "from_config.md"
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -223,7 +227,7 @@ ignore = ["target"]
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -311,7 +315,7 @@ timestamped_output = true
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -394,7 +398,7 @@ yes = true
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let result = run_with_resolved_config(args, Some(config), &prompter);
 
@@ -472,7 +476,7 @@ timestamped_output = false
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Capture stderr to check for warnings
     let result = run_with_resolved_config(args, Some(config), &prompter);
@@ -483,4 +487,189 @@ timestamped_output = false
 
     // Note: In a real application, we would capture stderr to verify the warning
     // For this test, we're just ensuring the config is handled without crashing
+}
+
+/// Restores the process working directory even if the test panics.
+struct CwdGuard(std::path::PathBuf);
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
+fn args_for(input: &str, output: &str) -> Args {
+    Args {
+        input: input.to_string(),
+        output: output.to_string(),
+        filter: vec![],
+        ignore: vec![],
+        line_numbers: false,
+        preview: false,
+        token_count: false,
+        yes: true,
+        diff_only: false,
+        clear_cache: false,
+        encoding: "o200k_base".to_string(),
+        init: false,
+        max_tokens: None,
+        signatures: false,
+        structure: false,
+        truncate: "smart".to_string(),
+        visibility: "all".to_string(),
+        file_metadata: false,
+    }
+}
+
+fn markdown_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    let mut files: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// B3 repro: config sets `output_folder` + `timestamped_output`, then the tool
+/// is invoked from another directory with an explicit `-o`.
+#[test]
+#[serial]
+fn explicit_output_overrides_folder_and_timestamp_from_other_cwd() {
+    let temp = tempdir().unwrap();
+    let project = temp.path().join("proj");
+    let elsewhere = temp.path().join("elsewhere");
+    write_file(&project.join("a.rs"), "fn main() {}\n");
+    write_file(
+        &project.join("context-builder.toml"),
+        "output_folder = \"docs\"\ntimestamped_output = true\n",
+    );
+    fs::create_dir_all(&elsewhere).unwrap();
+
+    let original = std::env::current_dir().unwrap();
+    let _guard = CwdGuard(original);
+    std::env::set_current_dir(&elsewhere).unwrap();
+
+    let config = context_builder::config::load_config_from_path(&project).unwrap();
+    let prompter = TestPrompter::new(true);
+    let explicit = ExplicitCli {
+        output: true,
+        ..ExplicitCli::default()
+    };
+    let project_arg = project.to_string_lossy().into_owned();
+
+    // Absolute `-o /…/wanted.md` must be created at that path, not
+    // `./docs/wanted_<ts>.md` relative to cwd.
+    let wanted = temp.path().join("wanted.md");
+    let result = run_with_resolved_config_explicit(
+        args_for(&project_arg, &wanted.to_string_lossy()),
+        Some(config.clone()),
+        explicit,
+        &prompter,
+    );
+    assert!(result.is_ok(), "absolute -o should succeed: {result:?}");
+    assert!(
+        wanted.is_file(),
+        "explicit absolute -o was not created at {}",
+        wanted.display()
+    );
+    let body = fs::read_to_string(&wanted).unwrap();
+    assert!(
+        body.contains("fn main"),
+        "output should contain the project"
+    );
+    assert!(
+        !elsewhere.join("docs").exists(),
+        "must not write cwd/docs when -o is explicit"
+    );
+    assert!(
+        markdown_files(&project.join("docs")).is_empty(),
+        "must not write project/docs when -o is explicit"
+    );
+
+    // Relative `-o rel-wanted.md` is used verbatim (created in cwd), not
+    // rewritten to `docs/rel-wanted_<ts>.md`.
+    let result = run_with_resolved_config_explicit(
+        args_for(&project_arg, "rel-wanted.md"),
+        Some(config.clone()),
+        explicit,
+        &prompter,
+    );
+    assert!(result.is_ok(), "relative -o should succeed: {result:?}");
+    let relative = elsewhere.join("rel-wanted.md");
+    assert!(
+        relative.is_file(),
+        "explicit relative -o was not created at {}",
+        relative.display()
+    );
+    assert!(
+        !elsewhere.join("docs").exists(),
+        "relative -o must not be placed in cwd/docs"
+    );
+    assert!(markdown_files(&project.join("docs")).is_empty());
+
+    // `-o -` stays stdout: no file named `-`, and still no docs folder.
+    let result = run_with_resolved_config_explicit(
+        args_for(&project_arg, "-"),
+        Some(config),
+        explicit,
+        &prompter,
+    );
+    assert!(result.is_ok(), "stdout -o should succeed: {result:?}");
+    assert!(!elsewhere.join("-").exists());
+    assert!(!Path::new("-").exists());
+    assert!(!elsewhere.join("docs").exists());
+}
+
+/// B20: `output_folder = "docs"` is relative to the project (`-d`), not cwd.
+#[test]
+#[serial]
+fn output_folder_resolves_against_project_root_not_cwd() {
+    let temp = tempdir().unwrap();
+    let project = temp.path().join("repo");
+    let elsewhere = temp.path().join("elsewhere");
+    write_file(&project.join("a.rs"), "fn main() {}\n");
+    write_file(
+        &project.join("context-builder.toml"),
+        "output_folder = \"docs\"\ntimestamped_output = true\n",
+    );
+    fs::create_dir_all(&elsewhere).unwrap();
+
+    let original = std::env::current_dir().unwrap();
+    let _guard = CwdGuard(original);
+    std::env::set_current_dir(&elsewhere).unwrap();
+
+    let config = context_builder::config::load_config_from_path(&project).unwrap();
+    let prompter = TestPrompter::new(true);
+
+    // No `-o`: clap default `output.md`, ExplicitCli::default().
+    let result = run_with_resolved_config(
+        args_for(&project.to_string_lossy(), "output.md"),
+        Some(config),
+        &prompter,
+    );
+    assert!(result.is_ok(), "default output should succeed: {result:?}");
+
+    let written = markdown_files(&project.join("docs"));
+    assert_eq!(
+        written.len(),
+        1,
+        "expected one timestamped file under the project docs dir, found {written:?}"
+    );
+    let name = written[0].file_name().unwrap().to_string_lossy();
+    assert!(
+        name.starts_with("output_") && name.ends_with(".md"),
+        "timestamped name under project root, got {name}"
+    );
+    let body = fs::read_to_string(&written[0]).unwrap();
+    assert!(body.contains("fn main"));
+    assert!(
+        !elsewhere.join("docs").exists(),
+        "output_folder must not be created relative to cwd ({})",
+        elsewhere.join("docs").display()
+    );
 }

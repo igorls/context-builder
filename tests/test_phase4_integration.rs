@@ -12,23 +12,15 @@ use tempfile::tempdir;
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-        }
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -105,7 +97,7 @@ filter = ["rs", "txt"]
     ];
     write_binary_file(&project_dir.join("data.txt"), &binary_data);
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
 
     // First run - establish baseline
@@ -277,7 +269,7 @@ fn test_encoding_strategy_configuration() {
     ];
     write_binary_file(&project_dir.join("test.txt"), &windows1252_data);
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Test all encoding strategies
     for strategy in &["detect", "strict", "skip"] {

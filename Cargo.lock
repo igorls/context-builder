@@ -267,6 +267,7 @@ dependencies = [
  "encoding_rs",
  "env_logger",
  "ignore",
+ "libc",
  "log",
  "pretty_assertions",
  "rayon",
