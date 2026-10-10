@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):
 
-- Lockfiles, binary/media assets, files over 256 KiB, and likely secrets are skipped by default (`--include-lockfiles`, `--max-file-size`, `--include-secrets`, `--hidden`).
+- Lockfiles, binary/media assets, files over 256 KiB, and likely secrets are skipped by default (opt back in with: `--include-lockfiles` for lockfiles; a matching explicit `--filter`, e.g. `--filter svg`, for an asset; `--max-file-size` for the size cap, `0` disables it; `--include-secrets` for name-only secrets such as `id_rsa`; `--hidden` for dotfiles, with hidden secret files like `.env` needing both `--hidden` and `--include-secrets`).
 - Per-file `Size` / `Modified` lines are off by default (`--file-metadata` opts in).
 - The >100-file confirmation prompt is gone; the overwrite prompt only appears when both stdin and stderr are terminals.
 - New file ranking: category 0 is root-only, files are grouped by directory.
@@ -42,7 +42,7 @@ v0.11.0 trims what a default run puts in the document and removes the surprises 
 
 ### Breaking: asset, size, and secret defaults
 
-**Breaking default change.** A full-tree run no longer inlines common binary/media assets, files larger than 256 KiB, or likely-secret files. Previously those files were copied into the markdown (hidden dotfiles were already omitted). Outputs are smaller and no longer dump `id_rsa`, `*.pem`, or `.env` once `--hidden` is turned on. Pass the escape hatches below to restore the old inclusion.
+**Breaking default change.** A full-tree run no longer inlines common binary/media assets, files larger than 256 KiB, or likely-secret files. Previously those files were copied into the markdown (hidden dotfiles were already omitted). Outputs are smaller and no longer dump `id_rsa`, `*.pem`, or `.env` (the last only once `--hidden` is on). Assets are restored by an explicit matching `--filter`, secrets by `--include-secrets` (dotfile secrets also need `--hidden`), and large files by `--max-file-size`; see the escape hatches below.
 
 - **Assets are skipped by default.** Images (including SVG), fonts, audio, video, archives, PDFs and office documents, design files (`.ai`, `.psd`), compiled objects, wasm, model weights, source maps (`*.map`), and minified bundles (`*.min.js`, `*.min.mjs`, `*.min.cjs`, `*.min.css`). The list is `ASSET_EXTENSIONS` in `src/content_filter.rs`.
 - **`--max-file-size <SIZE>`** (default `256K`). Accepts `256K`, `1M`, `262144` (bytes), and `KB`/`KiB` spellings; `K`/`M`/`G` are powers of 1024. Files strictly larger than the limit are skipped. **`--max-file-size 0`** disables the limit.
