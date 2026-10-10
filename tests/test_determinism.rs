@@ -98,6 +98,7 @@ fn test_deterministic_output_multiple_runs() {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         },
         Config::default(),
         &prompter,
@@ -130,6 +131,7 @@ fn test_deterministic_output_multiple_runs() {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         },
         Config::default(),
         &prompter,
@@ -229,9 +231,10 @@ fn test_deterministic_output_multiple_runs() {
     );
 
     // Check that files are sorted by relevance category:
-    // Category 0: Cargo.toml (config), README.md (key project doc)
-    // Category 1: src/* (source code) — entry points first (lib.rs, main.rs before utils.rs)
-    // Category 2: tests/* (tests)
+    // Category 0: root Cargo.toml
+    // Category 1: src/* (entry points first: lib.rs, main.rs, then utils.rs)
+    // Category 2: tests/*
+    // Category 3: docs/README.md (nested README is not category 0)
     // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
     let file_lines: Vec<String> = file_lines
         .iter()
@@ -239,16 +242,16 @@ fn test_deterministic_output_multiple_runs() {
         .collect();
     let expected_order = vec![
         "### File: `Cargo.toml`",
-        "### File: `docs/README.md`",
         "### File: `src/lib.rs`",
         "### File: `src/main.rs`",
         "### File: `src/utils.rs`",
         "### File: `tests/integration.rs`",
         "### File: `tests/unit.rs`",
+        "### File: `docs/README.md`",
     ];
     assert_eq!(
         file_lines, expected_order,
-        "Files should be listed in relevance order (config+docs → source (entry points first) → tests)"
+        "Files should be listed in relevance order (root manifest → source by directory → tests → docs)"
     );
 }
 #[test]
@@ -286,6 +289,7 @@ fn test_deterministic_file_tree_order() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let prompter = TestPrompter;
@@ -359,6 +363,7 @@ fn test_cache_collision_prevention() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -392,6 +397,7 @@ fn test_cache_collision_prevention() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -466,6 +472,7 @@ fn test_custom_ignores_performance() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let prompter = TestPrompter;
@@ -530,6 +537,7 @@ fn test_configuration_affects_cache_key() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let args2 = Args {
@@ -554,6 +562,7 @@ fn test_configuration_affects_cache_key() {
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let prompter = TestPrompter;
@@ -628,6 +637,7 @@ auto_diff = true
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     let prompter = TestPrompter;

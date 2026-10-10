@@ -18,6 +18,7 @@ pub struct ResolvedConfig {
     pub output: String,
     pub filter: Vec<String>,
     pub ignore: Vec<String>,
+    pub include_lockfiles: bool,
     pub line_numbers: bool,
     pub file_metadata: bool,
     pub preview: bool,
@@ -106,6 +107,7 @@ pub fn resolve_final_config(
         output: args.output,
         filter: args.filter,
         ignore: args.ignore,
+        include_lockfiles: args.include_lockfiles,
         line_numbers: args.line_numbers,
         file_metadata: args.file_metadata,
         preview: args.preview,
@@ -207,6 +209,14 @@ fn apply_config_to_args(
         && let Some(ref ignore) = config.ignore
     {
         args.ignore = ignore.clone();
+    }
+
+    // Lockfiles are off unless the CLI flag or the config key turns them on.
+    // An explicit `--include-lockfiles` (args already true) wins over config.
+    if !args.include_lockfiles
+        && let Some(include_lockfiles) = config.include_lockfiles
+    {
+        args.include_lockfiles = include_lockfiles;
     }
 
     // Boolean flags: config applies only if CLI is using default (false)
@@ -370,6 +380,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let config = Config {
@@ -412,6 +423,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let config = Config {
@@ -467,6 +479,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let config = Config {
@@ -506,6 +519,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let config = Config {
@@ -547,6 +561,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let config = Config {
@@ -589,6 +604,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let config = Config {
@@ -626,6 +642,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let config = Config {
@@ -665,6 +682,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let resolution = resolve_final_config(args.clone(), None, ExplicitCli::default());
@@ -713,6 +731,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
         let config = Config {
             encoding: Some("cl100k_base".to_string()),
@@ -768,7 +787,33 @@ mod tests {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         }
+    }
+
+    #[test]
+    fn include_lockfiles_cli_wins_over_config() {
+        let mut args = bare_args(".", "output.md");
+        let from_config = resolve_final_config(
+            args.clone(),
+            Some(Config {
+                include_lockfiles: Some(true),
+                ..Default::default()
+            }),
+            ExplicitCli::default(),
+        );
+        assert!(from_config.config.include_lockfiles);
+
+        args.include_lockfiles = true;
+        let cli_on = resolve_final_config(
+            args,
+            Some(Config {
+                include_lockfiles: Some(false),
+                ..Default::default()
+            }),
+            ExplicitCli::default(),
+        );
+        assert!(cli_on.config.include_lockfiles);
     }
 
     fn folder_and_timestamp_config() -> Config {

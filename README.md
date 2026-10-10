@@ -53,7 +53,7 @@ It's a command-line utility that recursively processes directories and creates c
   Respects `.gitignore` and custom ignore patterns out-of-the-box. Ignore files inside the directory apply even when it is not a git checkout; ignore files in parent directories apply only when a `.git` directory or file exists at that directory or an ancestor. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) at any depth even without a `.git` directory. `target` is excluded only at the directory root, and any directory that contains a `CACHEDIR.TAG` file (such as Cargo's `target/`) is skipped.
 
 - 📊 **Relevance-Based File Ordering:**
-  Files appear in LLM-optimized order: config & project docs first, then source code (entry points before helpers), tests, documentation, build/CI files, and lockfiles last. This helps LLMs build a mental model faster.
+  The root README comes first, then other root manifests (`Cargo.toml`, `package.json`, …) and root project docs. Source follows, grouped by directory: that directory's manifest and README, then entry points (`main`, `lib`, `index`, …), then the remaining files. Tests, documentation (including `CHANGELOG` and `HISTORY`, even at the repo root), and build/CI files come after source. Dependency lockfiles are omitted unless you pass `--include-lockfiles`.
 
 - 💰 **Context Budgeting (`--max-tokens`):**
   Cap token output to fit your model's context window. When output exceeds about 128K tokens, a non-blocking warning is printed to stderr — nothing is asked.
@@ -156,6 +156,10 @@ context-builder -f rs -f toml
 # Quote globs so your shell does not expand them.
 context-builder -i docs,assets -i '*.lock' -i crates/core
 
+# Opt in to dependency lockfiles (Cargo.lock, package-lock.json, uv.lock, …).
+# `-f toml` and `-f lock` do not pull them in on their own.
+context-builder --include-lockfiles
+
 # Cap output to a token budget (prevents context overflow)
 context-builder --max-tokens 100000
 
@@ -248,6 +252,11 @@ filter = ["rs", "toml", "md"]
 # (names like "docs", paths like "crates/core", globs like "*.lock")
 ignore = ["target", "node_modules", "*.lock", "crates/core"]
 
+# Dependency lockfiles are skipped by default. A filter that matches their
+# type (`toml`, `lock`, …) does not include them. Set true, or pass
+# `--include-lockfiles` (the flag wins).
+include_lockfiles = false
+
 # Add line numbers to code blocks
 line_numbers = true
 
@@ -314,6 +323,7 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `-d, --input <PATH>` - Directory path to process (default: current directory).
 - `-o, --output <FILE>` - Output file path (default: `output.md`). Use `-` to stream the document to **stdout** (e.g. `context-builder -o - | llm`); progress messages then go to stderr so the pipe stays clean.
 - `-f, --filter <EXT>` - File types to include (can be used multiple times). These are ripgrep file types, not exact extensions: `toml` also matches `Cargo.lock`, and `md` also matches `.markdown` and `.mdx`. A leading `.` or `*.` is stripped and the value is lowercased (`.rs`, `*.rs`, and `RS` all mean `rs`).
+- `--include-lockfiles` - Include dependency lockfiles (`Cargo.lock`, `package-lock.json`, `uv.lock`, …). Off by default. `-f toml` and `-f lock` do not override that. Also `include_lockfiles` in `context-builder.toml`; the flag wins.
 - `-i, --ignore <PATTERN>` - Paths or gitignore-style globs to ignore. Use a comma-separated list (`-i docs,assets`) or repeat the flag (`-i '*.lock' -i crates/core`). A pattern can be a file or directory name (`docs`), a path relative to the project (`crates/core`), or a glob (`*.lock`). Quote globs so the shell does not expand them. Commas always separate patterns on the command line, so a pattern that contains a comma (e.g. `report,old.md`) must go in the `ignore = [...]` list of `context-builder.toml` instead.
 - `--max-tokens <N>` - Maximum token budget for the output. Files that exceed the remaining budget are truncated in place (per the `--truncate` mode); further files are omitted with a notice.
 - `--preview` - Preview mode: only show the file tree, don't generate output.

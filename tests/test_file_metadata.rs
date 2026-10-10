@@ -46,6 +46,7 @@ fn sample_args(input: &Path, output: &Path, file_metadata: bool) -> Args {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        include_lockfiles: false,
     }
 }
 

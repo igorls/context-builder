@@ -123,6 +123,7 @@ filter = ["rs", "txt"]
         hidden: false,
         include_secrets: false,
         file_metadata: false,
+        include_lockfiles: false,
     };
 
     // Apply config manually (simulating what happens in the real application)
@@ -306,6 +307,7 @@ fn test_encoding_strategy_configuration() {
             hidden: false,
             include_secrets: false,
             file_metadata: false,
+            include_lockfiles: false,
         };
 
         let result = run_with_args(args, config, &prompter);

@@ -199,7 +199,7 @@ These behaviors require no configuration:
 | **.gitignore** | Files inside the directory are respected even when it is not a git checkout. Parent ignore files apply only when a `.git` directory or file exists at the directory or an ancestor |
 | **Binary detection** | Binary files are skipped via UTF-8 sniffing |
 | **Asset / size / secret skips** | Images (incl. SVG), fonts, media, archives, PDFs, compiled objects, wasm, weights, `*.min.js`, and `*.map` are omitted; files over 256 KiB are omitted (`--max-file-size 0` disables); `id_rsa`, `*.pem`, `credentials*.json`, `.env` (not `.env.example`) are omitted. See README "Default skips" |
-| **File ordering** | Config/docs first → source (entry points before helpers) → tests → build/CI → lockfiles |
+| **File ordering** | Root README, then root manifests/docs → source grouped by directory (manifest/README, then entry points) → tests → docs (CHANGELOG/HISTORY included) → build/CI. Lockfiles omitted unless `--include-lockfiles`. |
 
 ## CLI Reference (Agent-Relevant Flags)
 

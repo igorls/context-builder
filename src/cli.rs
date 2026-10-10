@@ -19,9 +19,19 @@ pub struct Args {
     /// Values are ripgrep file types, not exact extensions: `toml` also matches
     /// Cargo.lock, and `md` also matches `.markdown` and `.mdx`. A leading `.`
     /// or `*.` is stripped and the value is lowercased, so `.rs`, `*.rs`, and
-    /// `RS` all mean `rs`.
+    /// `RS` all mean `rs`. Dependency lockfiles stay out unless you pass
+    /// `--include-lockfiles`, even when a type like `toml` matches them.
     #[clap(short = 'f', long, value_delimiter = ',')]
     pub filter: Vec<String>,
+
+    /// Include dependency lockfiles (Cargo.lock, package-lock.json, uv.lock, …).
+    ///
+    /// Skipped by default. A filter that matches a lockfile's type, such as
+    /// `-f toml` or `-f lock`, does not override this. Set
+    /// `include_lockfiles = true` in context-builder.toml for the same opt-in;
+    /// this flag wins when both are set.
+    #[clap(long, default_value_t = false)]
+    pub include_lockfiles: bool,
 
     /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core)
     #[clap(short = 'i', long, value_delimiter = ',', value_name = "PATTERN")]
@@ -217,6 +227,18 @@ mod tests {
         assert!(!args.file_metadata);
         assert!(!args.diff_only);
         assert!(!args.clear_cache);
+        assert!(!args.include_lockfiles);
+    }
+
+    #[test]
+    fn parses_include_lockfiles_flag() {
+        let args = Args::try_parse_from(["context-builder", "--include-lockfiles"])
+            .expect("should parse include-lockfiles");
+        assert!(args.include_lockfiles);
+
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("--include-lockfiles"));
+        assert!(help.contains("-f toml") || help.contains("toml"));
     }
 
     #[test]

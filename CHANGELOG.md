@@ -42,6 +42,17 @@ All notable changes to this project will be documented in this file.
 - **`--hidden`** opts into hidden files and directories (`.github/workflows/ci.yml`, `.gitignore`, `.cargo/config.toml`). It does not follow symlinks, does not override gitignore or `--ignore`, does not descend into `.git` / `.hg` / `.svn` / `.bzr`, and does **not** include secrets.
 - **Config keys** (CLI wins): `max_file_size` (string or integer bytes), `hidden`, `include_secrets`. For the boolean keys, omitting the flag leaves a config `true` in place, same as `--line-numbers`. An explicit `--max-file-size 256K` overrides a different config value.
 
+### Breaking (v0.11.0): lockfiles and ranking
+
+Breaking defaults. Category numbers are unchanged.
+
+### Breaking defaults
+
+- **Lockfiles are skipped by default.** Basenames in `LOCKFILES` (`Cargo.lock`, `package-lock.json`, `uv.lock`, `pnpm-lock.yaml`, …) are left out of the tree and the document. Opt in with `--include-lockfiles` or `include_lockfiles = true` in `context-builder.toml`. The CLI flag wins when both are set. A type filter that matches a lockfile (`-f toml` for `Cargo.lock`, `-f lock`) still skips them until the opt-in is set. When any are skipped, stderr reports the count: `Skipped N lockfiles (use --include-lockfiles to include)`.
+- **Category 0 is root-only.** Root manifests, the root README (first), and other root priority docs (`AGENTS.md`, `CONTRIBUTING.md`, …) stay category 0. Nested `README`, `package.json`, and other manifests rank with their directory and sort at the top of that directory's files.
+- **Changelogs are documentation (category 3) at every depth,** including the repository root: `CHANGELOG.md`, `CHANGELOG`, `HISTORY.md`, `HISTORY`, `CHANGES.md`, `NEWS.md`.
+- **Within a category, files are grouped by directory,** then README/manifest, then the existing entry-point priority (`main`, `lib`, `mod`, `index`, `app`, `__init__`), then path. The order is deterministic across operating systems.
+
 ## v0.10.0 (2026-08-31) — "Honest Signatures"
 
 > Delivered per `docs/research/v0.10-plan.md` (derived from the post-v0.9.0 review): every documented flag now does what it says, divergent language maps are unified, and packaging/CI gaps are closed.
