@@ -406,7 +406,17 @@ fn header_is_context_builder_output(prefix: &[u8]) -> bool {
     if lines.next() != Some(REPORT_TITLE_LINE) {
         return false;
     }
-    lines.any(is_content_hash_line)
+    let rest: Vec<&str> = lines.collect();
+    if rest.iter().any(|l| is_content_hash_line(l)) {
+        return true;
+    }
+    // The auto-diff renderer (lib.rs) writes the title followed directly by
+    // `**Project:**` and `**Generated:**` lines and has no content hash.
+    let mut meta = rest.iter().filter(|l| !l.is_empty());
+    matches!(
+        (meta.next(), meta.next()),
+        (Some(p), Some(g)) if p.starts_with("**Project:** ") && g.starts_with("**Generated:** ")
+    )
 }
 
 /// The header line `markdown.rs` writes: `Content hash: ` plus 16 lowercase hex digits.
@@ -1127,6 +1137,29 @@ mod tests {
         assert!(rel.contains(&"other.md".to_string()));
         assert!(rel.contains(&"almost.md".to_string()));
         assert!(!rel.contains(&"old.md".to_string()));
+    }
+
+    #[test]
+    fn skips_prior_auto_diff_report_but_not_near_misses() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("keep.txt"), "hello").unwrap();
+        fs::write(
+            base.join("auto.md"),
+            "# Directory Structure Report\n\n**Project:** proj\n**Generated:** 2026-01-01 00:00:00 UTC\n\n## File Tree Structure\n",
+        )
+        .unwrap();
+        // Title and Project line, but no Generated line.
+        fs::write(
+            base.join("near.md"),
+            "# Directory Structure Report\n\n**Project:** proj\nSome prose.\n",
+        )
+        .unwrap();
+
+        let rel = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(rel.contains(&"near.md".to_string()));
+        assert!(!rel.contains(&"auto.md".to_string()));
     }
 
     #[test]

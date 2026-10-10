@@ -67,10 +67,13 @@ fn run(input: impl Into<String>, output: impl Into<String>) -> std::io::Result<(
     run_with_args(args(input, output), Config::default(), &TestPrompter)
 }
 
-fn file_sections(content: &str) -> Vec<&str> {
+/// `### File: ` headers, with Windows `\\` separators shown as `/` so the
+/// assertions are platform-independent.
+fn file_sections(content: &str) -> Vec<String> {
     content
         .lines()
         .filter(|line| line.starts_with("### File: "))
+        .map(|line| line.replace('\\', "/"))
         .collect()
 }
 
@@ -157,11 +160,11 @@ fn previous_output_is_not_reingested() {
         "source file should still be included"
     );
     assert!(
-        sections.contains(&"### File: `a.txt`"),
+        sections.iter().any(|s| s == "### File: `a.txt`"),
         "expected a.txt, got {sections:?}"
     );
     assert!(
-        !sections.contains(&"### File: `output.md`"),
+        !sections.iter().any(|s| s == "### File: `output.md`"),
         "previous output.md was re-ingested: {sections:?}"
     );
     let hash_lines = second_body
@@ -190,13 +193,13 @@ fn nested_output_md_kept_when_output_is_project_root() {
     let sections = file_sections(&content);
 
     assert!(
-        sections.contains(&"### File: `docs/output.md`"),
+        sections.iter().any(|s| s == "### File: `docs/output.md`"),
         "nested docs/output.md was dropped: {sections:?}"
     );
     assert!(content.contains("NESTED_DOC_MARKER"));
-    assert!(sections.contains(&"### File: `a.txt`"));
+    assert!(sections.iter().any(|s| s == "### File: `a.txt`"));
     assert!(
-        !sections.contains(&"### File: `output.md`"),
+        !sections.iter().any(|s| s == "### File: `output.md`"),
         "the output file itself should not be part of the report: {sections:?}"
     );
 
@@ -205,10 +208,12 @@ fn nested_output_md_kept_when_output_is_project_root() {
     let again = fs::read_to_string(&output).unwrap();
     let again_sections = file_sections(&again);
     assert!(
-        again_sections.contains(&"### File: `docs/output.md`"),
+        again_sections
+            .iter()
+            .any(|s| s == "### File: `docs/output.md`"),
         "nested docs/output.md disappeared on rerun: {again_sections:?}"
     );
-    assert!(!again_sections.contains(&"### File: `output.md`"));
+    assert!(!again_sections.iter().any(|s| s == "### File: `output.md`"));
 }
 
 /// Repro: `context-builder -d proj` from the parent, default `-o output.md`.
@@ -234,11 +239,11 @@ fn default_output_name_from_parent_keeps_nested_output_md() {
     let sections = file_sections(&content);
 
     assert!(
-        sections.contains(&"### File: `docs/output.md`"),
+        sections.iter().any(|s| s == "### File: `docs/output.md`"),
         "default output name hid docs/output.md: {sections:?}\n{content}"
     );
     assert!(content.contains("PARENT_NESTED_MARKER"));
-    assert!(sections.contains(&"### File: `a.txt`"));
+    assert!(sections.iter().any(|s| s == "### File: `a.txt`"));
 }
 
 fn run_cli(current_dir: &Path, args: &[&str]) -> std::process::Output {
@@ -281,7 +286,7 @@ fn parent_gitignore_without_repo_keeps_project_files() {
     let content = fs::read_to_string(proj.join("out.md")).unwrap();
     let sections = file_sections(&content);
     assert!(
-        sections.contains(&"### File: `keep.txt`"),
+        sections.iter().any(|s| s == "### File: `keep.txt`"),
         "parent .gitignore hid the tree: {sections:?}\n{content}"
     );
     assert!(content.contains("PARENT_IGNORE_KEEP"));
