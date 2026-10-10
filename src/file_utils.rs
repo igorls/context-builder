@@ -172,13 +172,6 @@ fn is_legal_type_name(name: &str) -> bool {
     !name.is_empty() && name != "all" && name.chars().all(|c| c.is_alphanumeric())
 }
 
-fn filter_error(filter: &str, cause: &dyn std::fmt::Display) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("Cannot apply file type filter '{filter}': {cause}"),
-    )
-}
-
 fn unrecognized_filter_error(original: &str, normalized: &str) -> io::Error {
     let shown = if original == normalized {
         format!("'{original}'")
@@ -225,13 +218,13 @@ fn configure_file_type_filters(walker: &mut WalkBuilder, filters: &[String]) -> 
         let glob = format!("*.{name}");
         type_builder
             .add(&name, &glob)
-            .map_err(|e| filter_error(filter, &e))?;
+            .map_err(|_| unrecognized_filter_error(filter, &name))?;
         type_builder.select(&name);
     }
 
     let types = type_builder
         .build()
-        .map_err(|e| filter_error("(all)", &e))?;
+        .map_err(|_| unrecognized_filter_error("(combined)", "(combined)"))?;
     walker.types(types);
     Ok(())
 }
