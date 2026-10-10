@@ -139,7 +139,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !prompter.confirm_overwrite(&final_args.output)?
     {
         if !silent {
-            println!("Operation cancelled.");
+            eprintln!("Operation cancelled.");
         }
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -360,12 +360,14 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     }
 
     // In pipe mode (`-o -`) there is no interactive terminal to answer a prompt,
-    // and `confirm_processing` would `print!` to stdout — corrupting the piped
-    // document and blocking on stdin. Skip the >100-file confirmation and proceed,
-    // exactly as `--yes` would.
+    // and waiting on stdin would stall `context-builder -o - | llm`. Skip the
+    // >100-file confirmation and proceed, exactly as `--yes` would.
+    // Non-TTY stdin (CI, `</dev/null`, an open pipe) is handled inside
+    // `confirm_processing`: the prompt is skipped and the run proceeds.
+    // Interactive prompts are written to stderr.
     if !final_args.yes && !to_stdout && !prompter.confirm_processing(files.len())? {
         if !silent {
-            println!("Operation cancelled.");
+            eprintln!("Operation cancelled.");
         }
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
