@@ -33,6 +33,7 @@ samples/
 docs/*.md
 *_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].md
 docs/research/context-files/
+docs/research/babysitter_review_context.md
 
 .context-builder
 check_coverage.ps1
