@@ -995,7 +995,7 @@ fn write_binary_placeholder(output: &mut impl Write, len: u64) -> io::Result<()>
 /// transcoded). Known binary signatures are binary even when the header is
 /// valid UTF-8 or Windows-1252, which is how PDF-based `.ai` files were
 /// emitted as text.
-fn is_binary_content(bytes: &[u8]) -> bool {
+pub(crate) fn is_binary_content(bytes: &[u8]) -> bool {
     if bytes.is_empty() || has_utf16_or_utf32_bom(bytes) {
         return false;
     }

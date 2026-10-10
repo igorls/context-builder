@@ -233,18 +233,24 @@ impl FileState {
     /// Create a file state from a file path
     pub fn from_path(path: &Path) -> std::io::Result<Self> {
         use std::fs;
-        use std::io::ErrorKind;
 
         let metadata = fs::metadata(path)?;
 
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(e) if e.kind() == ErrorKind::InvalidData => {
-                // Handle binary files gracefully
-                log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
-                format!("<Binary file - {} bytes>", metadata.len())
+        let bytes = fs::read(path)?;
+        // Same text-vs-binary decision as the main renderer (NUL bytes and
+        // known magic numbers), so auto-diff never snapshots binary data as text.
+        let sniff = &bytes[..bytes.len().min(8192)];
+        let content = if crate::markdown::is_binary_content(sniff) {
+            log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
+            format!("<Binary file - {} bytes>", metadata.len())
+        } else {
+            match String::from_utf8(bytes) {
+                Ok(content) => content,
+                Err(_) => {
+                    log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
+                    format!("<Binary file - {} bytes>", metadata.len())
+                }
             }
-            Err(e) => return Err(e),
         };
 
         // Compute content hash using stable xxh3
@@ -426,6 +432,21 @@ mod tests {
         assert!(file_state.content.contains("8 bytes"));
         assert_eq!(file_state.size, 8);
         assert!(!file_state.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_binary_magic_with_valid_utf8_header_is_placeholder() {
+        let temp_dir = tempdir().unwrap();
+        let pdf_like = temp_dir.path().join("doc.ai");
+        // Valid UTF-8 and no NUL, but a PDF signature.
+        fs::write(&pdf_like, b"%PDF-1.5\n%\xc3\xa9\xc3\xa9 stream data").unwrap();
+        let file_state = FileState::from_path(&pdf_like).unwrap();
+        assert!(file_state.content.contains("Binary file"));
+
+        let text = temp_dir.path().join("note.txt");
+        fs::write(&text, "MZ is a postal prefix\n").unwrap();
+        let text_state = FileState::from_path(&text).unwrap();
+        assert_eq!(text_state.content, "MZ is a postal prefix\n");
     }
 
     #[test]
