@@ -240,18 +240,15 @@ impl FileState {
         // Same text-vs-binary decision as the main renderer (NUL bytes and
         // known magic numbers), so auto-diff never snapshots binary data as text.
         let sniff = &bytes[..bytes.len().min(8192)];
-        let content = if crate::markdown::is_binary_content(sniff) {
+        let text = if crate::markdown::is_binary_content(sniff) {
+            None
+        } else {
+            String::from_utf8(bytes).ok()
+        };
+        let content = text.unwrap_or_else(|| {
             log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
             format!("<Binary file - {} bytes>", metadata.len())
-        } else {
-            match String::from_utf8(bytes) {
-                Ok(content) => content,
-                Err(_) => {
-                    log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
-                    format!("<Binary file - {} bytes>", metadata.len())
-                }
-            }
-        };
+        });
 
         // Compute content hash using stable xxh3
         let content_hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
@@ -442,6 +439,16 @@ mod tests {
         fs::write(&pdf_like, b"%PDF-1.5\n%\xc3\xa9\xc3\xa9 stream data").unwrap();
         let file_state = FileState::from_path(&pdf_like).unwrap();
         assert!(file_state.content.contains("Binary file"));
+
+        // Not valid UTF-8 and no NUL or magic number: still not text.
+        let latin1 = temp_dir.path().join("latin1.txt");
+        fs::write(&latin1, [0xC3u8, 0x28, b'a']).unwrap();
+        assert!(
+            FileState::from_path(&latin1)
+                .unwrap()
+                .content
+                .contains("Binary file")
+        );
 
         let text = temp_dir.path().join("note.txt");
         fs::write(&text, "MZ is a postal prefix\n").unwrap();
