@@ -287,7 +287,14 @@ pub fn collect_files(
 /// `-o -` already do. The check lives here — not in `run_with_args` — so tests
 /// that inject their own `Prompter` still control confirmations.
 fn stdin_is_terminal() -> bool {
-    io::stdin().is_terminal()
+    can_prompt(io::stdin().is_terminal(), io::stderr().is_terminal())
+}
+
+/// A prompt needs a person on both ends: stdin to answer and stderr (where
+/// prompts are written) to see the question. With stderr redirected, e.g.
+/// `2>build.log`, the question would be invisible and the run would hang.
+fn can_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
+    stdin_tty && stderr_tty
 }
 
 /// Writes `prompt` to stderr and returns whether the answer was `y`/`Y`.
@@ -354,6 +361,17 @@ pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn can_prompt_requires_stdin_and_stderr_terminals() {
+        assert!(can_prompt(true, true));
+        assert!(
+            !can_prompt(true, false),
+            "stderr redirected: prompt invisible"
+        );
+        assert!(!can_prompt(false, true));
+        assert!(!can_prompt(false, false));
+    }
+
     use super::*;
     use std::fs;
     use std::path::Path;
