@@ -6,7 +6,7 @@ description: >
   implementation agent). Use when generating project context, preparing Deep Think reviews,
   or binding a weaker coding agent to a senior reasoning pass.
 homepage: https://github.com/igorls/context-builder
-version: 0.10.0
+version: 0.11.0
 requires:
   - context-builder
 ---
@@ -26,7 +26,7 @@ cargo install context-builder --features tree-sitter-all
 
 Pre-built binaries with SHA256 checksums are also available for manual download from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
 
-Verify: `context-builder --version` (expected: `0.10.0`)
+Verify: `context-builder --version` (expected: `0.11.0`)
 
 
 ## Security & Path Scoping
@@ -219,6 +219,8 @@ These behaviors require no configuration:
 | `--visibility <V>` | Filter by visibility | `all` (default), `public` (public API only) |
 | `--truncate <MODE>` | Truncation strategy for `--max-tokens` | `smart` (AST-aware) or `byte` |
 | `--max-file-size <SIZE>` | Skip files over SIZE (`256K` default; `0` disables) | Raise for a large source file you filtered in |
+| `--include-lockfiles` | Include dependency lockfiles | Skipped by default; `-f toml` does not pull them in |
+| `--file-metadata` | Add per-file `Size` / `Modified` lines | Off by default (v0.11.0) |
 | `--hidden` | Include dotfiles and dot-directories | Does not enter `.git` and does not include secrets |
 | `--include-secrets` | Include likely-secret files | Combine with `--hidden` for `.env` |
 | `--init` | Create config file | Auto-detects project file types |

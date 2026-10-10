@@ -1,6 +1,6 @@
 [package]
 name = "context-builder"
-version = "0.10.0"
+version = "0.11.0"
 default-run = "context-builder"
 edition = "2024"
 # std::fs::File advisory locking (used by the cache) stabilized in Rust 1.89.
