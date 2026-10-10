@@ -9,6 +9,13 @@ use crate::token_count::{Encoding as TokenEncoding, estimate_tokens};
 use crate::tree::{FileTree, write_tree_to_file};
 use encoding_rs::{Encoding, UTF_8};
 
+/// First line of every generated report. A blank line follows it.
+pub(crate) const REPORT_TITLE_LINE: &str = "# Directory Structure Report";
+
+/// Prefix of the header line that fingerprints a generated report.
+/// The writer appends 16 lowercase hex digits (`{:016x}`).
+pub(crate) const CONTENT_HASH_PREFIX: &str = "Content hash: ";
+
 #[cfg(feature = "parallel")]
 use crossbeam_channel::{Receiver, Sender, bounded};
 #[cfg(feature = "parallel")]
@@ -71,7 +78,7 @@ pub fn generate_markdown(
     // Build the header and tree into a buffer first so we can (a) write them in
     // one shot and (b) debit their token cost from the `--max-tokens` budget.
     let mut head_buf: Vec<u8> = Vec::new();
-    writeln!(head_buf, "# Directory Structure Report\n")?;
+    writeln!(head_buf, "{REPORT_TITLE_LINE}\n")?;
 
     if !filters.is_empty() {
         writeln!(
@@ -131,7 +138,11 @@ pub fn generate_markdown(
         }
         content_hasher.update(b"\0");
     }
-    writeln!(head_buf, "Content hash: {:016x}", content_hasher.digest())?;
+    writeln!(
+        head_buf,
+        "{CONTENT_HASH_PREFIX}{:016x}",
+        content_hasher.digest()
+    )?;
     writeln!(head_buf)?;
 
     writeln!(head_buf, "## File Tree Structure\n")?;

@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
   - `-i docs,assets` ignores both names, matching `--filter`. Repeated `-i` flags still append.
   - `--help` and the README document that `--ignore` takes gitignore-style globs and paths (`*.lock`, `crates/core`). The help example no longer suggests `--ignore lock`, which matched nothing useful.
   - The >128K-token warning suggests `--filter` extensions detected in that run instead of a hardcoded `--filter rs,toml`, and its `--ignore docs,assets` example is a command the flag actually honors.
+- **File inclusion**
+  - `.gitignore` and `.ignore` files inside the `-d` tree apply even when that tree has no checkout. Ignore files above `-d` apply only when a `.git` directory or file exists at the walk root or an ancestor (a real repository, including worktrees). Otherwise parent ignore files are not read
+  - Directories containing a `CACHEDIR.TAG` file are skipped. `target` is a default ignore only at the walk root (`/target`); a nested source directory such as `src/target/` is kept. Nested Cargo `target/` directories are still skipped via `CACHEDIR.TAG`
+  - When the walk matches no files, one stderr warning is printed (`No files matched; check .gitignore, --ignore, and --filter`) and the process still exits 0
+  - A previous context-builder report is not pulled back in. A file is skipped when its header is `# Directory Structure Report` followed by a `Content hash:` line; only a small prefix is read
+  - The output auto-ignore is anchored to the resolved output path relative to the project, so a nested `docs/output.md` is kept when the default output name is `output.md`
 
 ## v0.10.0 (2026-08-31) — "Honest Signatures"
 
