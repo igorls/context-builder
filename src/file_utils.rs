@@ -172,6 +172,13 @@ fn is_legal_type_name(name: &str) -> bool {
     !name.is_empty() && name != "all" && name.chars().all(|c| c.is_alphanumeric())
 }
 
+fn filter_error(filter: &str, cause: &dyn std::fmt::Display) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("Cannot apply file type filter '{filter}': {cause}"),
+    )
+}
+
 fn unrecognized_filter_error(original: &str, normalized: &str) -> io::Error {
     let shown = if original == normalized {
         format!("'{original}'")
@@ -216,21 +223,15 @@ fn configure_file_type_filters(walker: &mut WalkBuilder, filters: &[String]) -> 
         // custom extension type otherwise. The previous code did this too;
         // the `Result` used to be discarded, which is what made `build` panic.
         let glob = format!("*.{name}");
-        if let Err(e) = type_builder.add(&name, &glob) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Unrecognized file type filter '{filter}': {e}"),
-            ));
-        }
+        type_builder
+            .add(&name, &glob)
+            .map_err(|e| filter_error(filter, &e))?;
         type_builder.select(&name);
     }
 
-    let types = type_builder.build().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("Failed to apply file type filters: {e}"),
-        )
-    })?;
+    let types = type_builder
+        .build()
+        .map_err(|e| filter_error("(all)", &e))?;
     walker.types(types);
     Ok(())
 }
