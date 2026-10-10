@@ -1382,6 +1382,25 @@ mod tests {
     }
 
     #[test]
+    fn test_multibyte_char_split_by_sniff_boundary_stays_text() {
+        // The 8 KiB sniff buffer can cut a multi-byte char; the file must still
+        // be classified as UTF-8 text, for 2-, 3- and 4-byte sequences, split
+        // at every offset and when the sequence ends exactly on the boundary.
+        for (ch, len) in [("é", 2usize), ("世", 3), ("🌍", 4)] {
+            for start in (8192 - len)..=8192 {
+                let mut text = "a".repeat(start);
+                text.push_str(ch);
+                text.push_str("\ntail marker\n");
+                let content = render_bytes("big.txt", text.as_bytes());
+                assert!(
+                    content.contains("tail marker") && !content.contains("Binary file"),
+                    "{ch} at {start} misclassified"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_pdf_header_is_binary() {
         // PDF-based `.ai` from dogfood B2 (repro.sh case B4): `%PDF` header,
         // the binary comment, and an object. No NUL in this prefix, and the
