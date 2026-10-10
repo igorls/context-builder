@@ -94,6 +94,9 @@ fn test_deterministic_output_multiple_runs() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         },
         Config::default(),
@@ -123,6 +126,9 @@ fn test_deterministic_output_multiple_runs() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         },
         Config::default(),
@@ -276,6 +282,9 @@ fn test_deterministic_file_tree_order() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -346,6 +355,9 @@ fn test_cache_collision_prevention() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -376,6 +388,9 @@ fn test_cache_collision_prevention() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -447,6 +462,9 @@ fn test_custom_ignores_performance() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -508,6 +526,9 @@ fn test_configuration_affects_cache_key() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -529,6 +550,9 @@ fn test_configuration_affects_cache_key() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -600,6 +624,9 @@ auto_diff = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 

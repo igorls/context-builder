@@ -57,6 +57,9 @@ fn preview_mode_does_not_create_output_file() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -104,6 +107,9 @@ fn preview_mode_skips_overwrite_confirmation() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -156,6 +162,9 @@ fn token_count_mode_skips_overwrite_confirmation() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -205,6 +214,9 @@ fn both_preview_and_token_count_modes_work_together() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -267,6 +279,9 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -361,6 +376,9 @@ fn overwrite_prompt_is_respected() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -409,6 +427,9 @@ fn many_files_proceed_without_a_processing_prompt() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -449,6 +470,9 @@ fn pipe_mode_many_files_does_not_block() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -488,6 +512,9 @@ fn token_count_mode_does_not_create_output_file() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 

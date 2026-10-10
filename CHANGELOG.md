@@ -30,6 +30,18 @@ All notable changes to this project will be documented in this file.
   - The content hash still fingerprints file bytes, not mtime. With metadata off, two runs that differ only in mtime produce identical output and an identical hash.
   - The auto-diff cache compares those content hashes, so an mtime-only change is not reported as an edit and does not rewrite the per-file sections. Toggling `file_metadata` does not reset the diff baseline (it is a rendering option, like `line_numbers`).
 
+### Breaking (v0.11.0): asset, size, and secret defaults
+
+**Breaking default change.** A full-tree run no longer inlines common binary/media assets, files larger than 256 KiB, or likely-secret files. Previously those files were copied into the markdown (hidden dotfiles were already omitted). Outputs are smaller and no longer dump `id_rsa`, `*.pem`, or `.env` once `--hidden` is turned on. Pass the escape hatches below to restore the old inclusion.
+
+- **Assets are skipped by default.** Images (including SVG), fonts, audio, video, archives, PDFs and office documents, design files (`.ai`, `.psd`), compiled objects, wasm, model weights, source maps (`*.map`), and minified bundles (`*.min.js`, `*.min.mjs`, `*.min.cjs`, `*.min.css`). The list is `ASSET_EXTENSIONS` in `src/content_filter.rs`.
+- **`--max-file-size <SIZE>`** (default `256K`). Accepts `256K`, `1M`, `262144` (bytes), and `KB`/`KiB` spellings; `K`/`M`/`G` are powers of 1024. Files strictly larger than the limit are skipped. **`--max-file-size 0`** disables the limit.
+- **Likely secrets are skipped** with a stderr warning that names the path and a category, never the contents: `id_rsa` / `id_dsa` / `id_ecdsa` / `id_ed25519` (and `*_sk`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`, `credentials*.json`, `.env` and `.env.*` except `.env.example` and `.env.sample`, and `.npmrc` / `.pypirc` when they contain a token. A value that is wholly an environment reference (`${VAR}`, `$VAR`, `%VAR%`) — including `//registry.npmjs.org/:_authToken=${NPM_TOKEN}` — is a placeholder, not a token. `id_rsa.pub` is kept.
+- **Skipped files are reported.** The markdown gains a short `## Skipped` section (`path` — `asset` | `too large` | `secret`). Stderr gets one summary line (`Skipped N files (…)`).
+- **Escape hatches.** An explicit `--filter` / config `filter` of an excluded extension includes it (`--filter svg`, `--filter pem`, `--filter js` for `*.min.js`). The size limit still applies to those files. `--include-secrets` includes name-only secrets (`id_rsa`, `credentials.json`, `.env`); `--filter json` does not. Dotfile secrets also need `--hidden`.
+- **`--hidden`** opts into hidden files and directories (`.github/workflows/ci.yml`, `.gitignore`, `.cargo/config.toml`). It does not follow symlinks, does not override gitignore or `--ignore`, does not descend into `.git` / `.hg` / `.svn` / `.bzr`, and does **not** include secrets.
+- **Config keys** (CLI wins): `max_file_size` (string or integer bytes), `hidden`, `include_secrets`. For the boolean keys, omitting the flag leaves a config `true` in place, same as `--line-numbers`. An explicit `--max-file-size 256K` overrides a different config value.
+
 ## v0.10.0 (2026-08-31) — "Honest Signatures"
 
 > Delivered per `docs/research/v0.10-plan.md` (derived from the post-v0.9.0 review): every documented flag now does what it says, divergent language maps are unified, and packaging/CI gaps are closed.

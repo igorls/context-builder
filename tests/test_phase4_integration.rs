@@ -119,6 +119,9 @@ filter = ["rs", "txt"]
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -299,6 +302,9 @@ fn test_encoding_strategy_configuration() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 

@@ -116,6 +116,9 @@ fn test_comprehensive_binary_file_edge_cases() {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -207,6 +210,9 @@ fn test_configuration_precedence_edge_cases() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -249,6 +255,9 @@ fn test_configuration_precedence_edge_cases() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -311,6 +320,9 @@ timestamped_output = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -419,6 +431,9 @@ fn test_error_conditions_and_exit_codes() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -451,6 +466,9 @@ fn test_error_conditions_and_exit_codes() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -480,6 +498,9 @@ fn test_error_conditions_and_exit_codes() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -535,6 +556,9 @@ fn test_memory_usage_under_parallel_processing() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -631,6 +655,9 @@ line_numbers = true
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -735,6 +762,9 @@ fn test_edge_case_filenames_and_paths() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 

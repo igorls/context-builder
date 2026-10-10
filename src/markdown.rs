@@ -74,6 +74,7 @@ pub fn generate_markdown(
     max_tokens: Option<usize>,
     token_encoding: TokenEncoding,
     ts_config: &TreeSitterConfig,
+    skipped: &[crate::content_filter::SkippedFile],
 ) -> io::Result<usize> {
     // `-` selects stdout (pipe mode, e.g. `context-builder -o - | llm`);
     // otherwise create/truncate the file path (creating parent dirs as needed).
@@ -171,6 +172,16 @@ pub fn generate_markdown(
         }
         content_hasher.update(b"\0");
     }
+    // Skipped paths are part of the document (the `## Skipped` section) even
+    // though their bytes are not. Fold them in so two runs that drop different
+    // files do not share a hash.
+    content_hasher.update(b"\0skipped\0");
+    for item in skipped {
+        content_hasher.update(item.path.as_bytes());
+        content_hasher.update(b"\0");
+        content_hasher.update(item.reason.label().as_bytes());
+        content_hasher.update(b"\0");
+    }
     writeln!(
         head_buf,
         "{CONTENT_HASH_PREFIX}{:016x}",
@@ -181,6 +192,7 @@ pub fn generate_markdown(
     writeln!(head_buf, "## File Tree Structure\n")?;
     write_tree_to_file(&mut head_buf, file_tree, 0)?;
     writeln!(head_buf)?;
+    crate::content_filter::write_skipped_section(&mut head_buf, skipped)?;
 
     // Debit the header + tree token cost so `--max-tokens` budgets the whole
     // document, not just file bodies. Only computed when a budget is set
@@ -1841,6 +1853,7 @@ mod tests {
             None, // max_tokens
             TokenEncoding::default(),
             &TreeSitterConfig::default(),
+            &[],
         );
 
         // Restore original directory
@@ -1876,6 +1889,7 @@ mod tests {
             None, // max_tokens
             TokenEncoding::default(),
             &TreeSitterConfig::default(),
+            &[],
         );
 
         assert!(result.is_ok());
@@ -1909,6 +1923,7 @@ mod tests {
             None, // max_tokens
             TokenEncoding::default(),
             &TreeSitterConfig::default(),
+            &[],
         );
 
         assert!(result.is_ok());
@@ -2341,6 +2356,7 @@ mod tests {
             Some(100),
             TokenEncoding::default(),
             &TreeSitterConfig::default(),
+            &[],
         );
 
         assert!(result.is_ok());
@@ -2378,6 +2394,7 @@ mod tests {
             Some(100), // tiny budget — smaller than the single file
             TokenEncoding::default(),
             &TreeSitterConfig::default(),
+            &[],
         );
 
         assert!(result.is_ok());
@@ -2421,6 +2438,7 @@ mod tests {
                 None,
                 TokenEncoding::default(),
                 &TreeSitterConfig::default(),
+                &[],
             )
             .unwrap();
         };
@@ -2523,6 +2541,7 @@ mod tests {
             None,
             TokenEncoding::default(),
             &TreeSitterConfig::default(),
+            &[],
         );
 
         assert!(result.is_ok());
@@ -2707,6 +2726,7 @@ mod tests {
                 truncate: "smart".to_string(),
                 ..Default::default()
             },
+            &[],
         );
 
         assert!(result.is_ok());

@@ -108,6 +108,9 @@ fn test_binary_files_dont_crash_autodiff() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -193,6 +196,9 @@ fn test_mixed_text_and_binary_files_autodiff() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -262,6 +268,9 @@ fn test_large_binary_file_autodiff() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 

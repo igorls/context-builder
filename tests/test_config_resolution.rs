@@ -78,6 +78,9 @@ fn run_with_resolved_config_explicit(
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
         encoding: resolution.config.encoding,
+        max_file_size: resolution.config.max_file_size,
+        hidden: resolution.config.hidden,
+        include_secrets: resolution.config.include_secrets,
     };
 
     // Create final Config with resolved values
@@ -139,6 +142,9 @@ output = "from_config.md"
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -223,6 +229,9 @@ ignore = ["target"]
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -311,6 +320,9 @@ timestamped_output = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -394,6 +406,9 @@ yes = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -472,6 +487,9 @@ timestamped_output = false
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
         file_metadata: false,
     };
 
@@ -518,6 +536,9 @@ fn args_for(input: &str, output: &str) -> Args {
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
         file_metadata: false,
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     }
 }
 

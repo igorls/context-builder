@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::Args;
 use crate::config::Config;
+use crate::content_filter::{self, DEFAULT_MAX_FILE_SIZE_SPEC};
 
 /// Resolved configuration combining CLI arguments and config file values
 #[derive(Debug, Clone)]
@@ -33,6 +34,12 @@ pub struct ResolvedConfig {
     pub truncate: String,
     pub visibility: String,
     pub encoding: String,
+    /// Resolved size specification (`256K`, `1M`, `0`, …).
+    pub max_file_size: String,
+    /// Include hidden dotfiles and dot-directories.
+    pub hidden: bool,
+    /// Include likely-secret files the walk collected.
+    pub include_secrets: bool,
 }
 
 /// Result of configuration resolution including the final config and any warnings
@@ -54,6 +61,7 @@ pub struct ExplicitCli {
     pub truncate: bool,
     pub visibility: bool,
     pub encoding: bool,
+    pub max_file_size: bool,
     /// `-o` / `--output` was present on the command line.
     pub output: bool,
 }
@@ -88,6 +96,10 @@ pub fn resolve_final_config(
     } else {
         Config::default()
     };
+
+    let max_file_size = resolve_max_file_size(&args, &final_config, explicit, &mut warnings);
+    let hidden = args.hidden || final_config.hidden.unwrap_or(false);
+    let include_secrets = args.include_secrets || final_config.include_secrets.unwrap_or(false);
 
     let resolved = ResolvedConfig {
         input: args.input,
@@ -134,12 +146,37 @@ pub fn resolve_final_config(
                 .clone()
                 .unwrap_or_else(|| args.encoding.clone())
         },
+        max_file_size,
+        hidden,
+        include_secrets,
     };
 
     ConfigResolution {
         config: resolved,
         warnings,
     }
+}
+
+/// Pick the size limit: an explicit CLI value (even the default `256K`) wins,
+/// otherwise a valid config value, otherwise the CLI default.
+fn resolve_max_file_size(
+    args: &Args,
+    config: &Config,
+    explicit: ExplicitCli,
+    warnings: &mut Vec<String>,
+) -> String {
+    if explicit.max_file_size || args.max_file_size != DEFAULT_MAX_FILE_SIZE_SPEC {
+        return args.max_file_size.clone();
+    }
+    if let Some(ref spec) = config.max_file_size {
+        match content_filter::parse_file_size(spec) {
+            Ok(_) => return spec.clone(),
+            Err(err) => warnings.push(format!(
+                "Invalid max_file_size '{spec}' in config ({err}). Using {DEFAULT_MAX_FILE_SIZE_SPEC}."
+            )),
+        }
+    }
+    args.max_file_size.clone()
 }
 
 /// Apply configuration file values to CLI arguments based on precedence rules
@@ -329,6 +366,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -368,6 +408,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -420,6 +463,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -456,6 +502,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -494,6 +543,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -533,6 +585,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -567,6 +622,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -603,6 +661,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -648,6 +709,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config {
@@ -672,6 +736,7 @@ mod tests {
                 truncate: true,
                 visibility: true,
                 encoding: true,
+                max_file_size: false,
                 output: false,
             },
         );
@@ -699,6 +764,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         }
     }
@@ -856,5 +924,77 @@ mod tests {
         };
         let from_config = resolve_final_config(args, Some(config_on), ExplicitCli::default());
         assert!(from_config.config.file_metadata);
+    }
+
+    #[test]
+    fn content_filter_config_precedence() {
+        let make_args = |size: &str, hidden: bool, secrets: bool| {
+            let mut args = bare_args(".", "output.md");
+            args.max_file_size = size.to_string();
+            args.hidden = hidden;
+            args.include_secrets = secrets;
+            args
+        };
+        let config = Config {
+            max_file_size: Some("1M".to_string()),
+            hidden: Some(true),
+            include_secrets: Some(true),
+            ..Default::default()
+        };
+
+        // Omitted CLI flags: config wins, including a non-default size.
+        let from_config = resolve_final_config(
+            make_args("256K", false, false),
+            Some(config.clone()),
+            ExplicitCli::default(),
+        );
+        assert_eq!(from_config.config.max_file_size, "1M");
+        assert!(from_config.config.hidden);
+        assert!(from_config.config.include_secrets);
+
+        // Explicit `--max-file-size 256K` beats config `1M`. A non-default CLI
+        // size wins even without the explicit-flag bit (tests build Args directly).
+        let explicit_default = resolve_final_config(
+            make_args("256K", false, false),
+            Some(config.clone()),
+            ExplicitCli {
+                max_file_size: true,
+                ..ExplicitCli::default()
+            },
+        );
+        assert_eq!(explicit_default.config.max_file_size, "256K");
+
+        let raised = resolve_final_config(
+            make_args("0", true, false),
+            Some(config.clone()),
+            ExplicitCli::default(),
+        );
+        assert_eq!(raised.config.max_file_size, "0");
+        assert!(raised.config.hidden);
+        assert!(raised.config.include_secrets); // config still enables it
+
+        let invalid = Config {
+            max_file_size: Some("lots".to_string()),
+            ..Default::default()
+        };
+        let warned = resolve_final_config(
+            make_args("256K", false, false),
+            Some(invalid),
+            ExplicitCli::default(),
+        );
+        assert_eq!(warned.config.max_file_size, "256K");
+        assert!(warned.warnings.iter().any(|w| w.contains("max_file_size")));
+
+        // Integer byte counts from TOML arrive as decimal strings.
+        let numeric = Config {
+            max_file_size: Some("100".to_string()),
+            ..Default::default()
+        };
+        let parsed = resolve_final_config(
+            make_args("256K", false, false),
+            Some(numeric),
+            ExplicitCli::default(),
+        );
+        assert_eq!(parsed.config.max_file_size, "100");
     }
 }

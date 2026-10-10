@@ -57,6 +57,9 @@ fn args(input: impl Into<String>, output: impl Into<String>) -> Args {
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
         file_metadata: false,
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     }
 }
 

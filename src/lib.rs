@@ -9,6 +9,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod config_resolver;
+pub mod content_filter;
 pub mod diff;
 pub mod fences;
 pub mod file_utils;
@@ -24,8 +25,11 @@ use std::fs::File;
 use cache::CacheManager;
 use cli::Args;
 use config::{Config, load_config_from_path};
+use content_filter::{ContentPolicy, SkippedFile};
 use diff::render_per_file_diffs;
-use file_utils::{collect_files, confirm_overwrite};
+#[cfg(test)]
+use file_utils::collect_files;
+use file_utils::{collect_files_ext, confirm_overwrite};
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
 use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
@@ -245,15 +249,23 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         auto_ignores.push(format!("{}/*.md", output_folder));
     }
 
-    let files = collect_files(
+    let files = collect_files_ext(
         base_path,
         &final_args.filter,
         &final_args.ignore,
         &auto_ignores,
+        final_args.hidden,
     )?;
+    let policy = ContentPolicy::new(
+        &final_args.max_file_size,
+        &final_args.filter,
+        final_args.include_secrets,
+    );
+    let (files, skipped) = content_filter::partition(files, base_path, &policy);
+    content_filter::report_skips(&skipped, silent);
     // Nothing matched: warn on stderr so `-o -` pipes stay clean, and still
     // write the (empty) document. Name the filters when any were given.
-    if !silent && files.is_empty() {
+    if !silent && files.is_empty() && skipped.is_empty() {
         if final_args.filter.is_empty() {
             eprintln!("Warning: No files matched; check .gitignore, --ignore, and --filter");
         } else {
@@ -387,6 +399,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
+            // The `## Skipped` section is part of the generated report.
+            total_tokens += skipped_section_tokens(encoding, &skipped)?;
             let file_tokens: usize = files
                 .iter()
                 .map(|entry| {
@@ -424,14 +438,15 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if config.auto_diff.unwrap_or(false) {
         // Build an effective config that mirrors the *actual* file selection coming
         // from resolved CLI args, so the cache/diff fingerprint reflects real
-        // behavior even when filter/ignore originate from the CLI, not the config
-        // file. Only `filter`/`ignore` matter: they decide which files form the
-        // diff baseline. Rendering options (signatures/structure/truncate/
-        // visibility/max_tokens/line_numbers/file_metadata/encoding) deliberately
-        // do NOT feed the fingerprint — they don't change the captured raw
-        // content — so propagating them here would only risk spurious baseline
-        // resets (see `config_fingerprint`). The per-file content hash stored in
-        // the cache is the file bytes only, so an mtime-only change is not a diff.
+        // behavior even when selection originates from the CLI, not the config
+        // file. `filter`, `ignore`, `max_file_size`, `hidden`, and
+        // `include_secrets` decide which files form the diff baseline. Rendering
+        // options (signatures/structure/truncate/visibility/max_tokens/
+        // line_numbers/file_metadata/encoding) deliberately do NOT feed the fingerprint — they
+        // don't change the captured raw content — so propagating them here would
+        // only risk spurious baseline resets (see `config_fingerprint`). The per-file
+        // content hash stored in the cache is the file bytes only, so an mtime-only
+        // change is not a diff.
         let mut effective_config = config.clone();
         if !final_args.filter.is_empty() {
             effective_config.filter = Some(final_args.filter.clone());
@@ -439,6 +454,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if !final_args.ignore.is_empty() {
             effective_config.ignore = Some(final_args.ignore.clone());
         }
+        // Size, hidden, and secret policy decide which bytes form the baseline.
+        effective_config.max_file_size = Some(final_args.max_file_size.clone());
+        effective_config.hidden = Some(final_args.hidden);
+        effective_config.include_secrets = Some(final_args.include_secrets);
 
         // 1. Create current project state
         let current_state = ProjectState::from_files(
@@ -556,6 +575,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             diff_cfg,
             &sorted_paths,
             &ts_config,
+            &skipped,
         )?;
 
         // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
@@ -672,6 +692,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         final_args.max_tokens,
         final_args.encoding.parse::<Encoding>().unwrap_or_default(),
         &ts_config,
+        &skipped,
     )?;
 
     let duration = start_time.elapsed();
@@ -689,6 +710,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 }
 
 /// Print context window overflow warnings with actionable recommendations.
+/// Tokens in the `## Skipped` section (zero when nothing was skipped).
+fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Result<usize> {
+    let mut buf = Vec::new();
+    content_filter::write_skipped_section(&mut buf, skipped)?;
+    Ok(estimate_tokens(encoding, &String::from_utf8_lossy(&buf)))
+}
+
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
 /// exceeds 128K tokens — beyond this size, context quality degrades
 /// significantly for most LLM use cases.
@@ -794,6 +822,7 @@ fn advice_line(flag: &str, description: &str) -> String {
 }
 
 /// Generate markdown document with diff annotations
+#[allow(clippy::too_many_arguments)]
 fn generate_markdown_with_diff(
     current_state: &ProjectState,
     comparison: Option<&StateComparison>,
@@ -802,6 +831,7 @@ fn generate_markdown_with_diff(
     diff_config: &DiffConfig,
     sorted_paths: &[PathBuf],
     ts_config: &markdown::TreeSitterConfig,
+    skipped: &[SkippedFile],
 ) -> io::Result<String> {
     let mut output = String::new();
 
@@ -897,6 +927,9 @@ fn generate_markdown_with_diff(
     tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
     output.push_str(&String::from_utf8_lossy(&tree_output));
     output.push('\n');
+    let mut skipped_buf = Vec::new();
+    content_filter::write_skipped_section(&mut skipped_buf, skipped)?;
+    output.push_str(&String::from_utf8_lossy(&skipped_buf));
 
     // File contents (unless diff_only mode)
     if !diff_config.diff_only {
@@ -974,6 +1007,8 @@ pub fn run() -> io::Result<()> {
         visibility: matches.value_source("visibility")
             == Some(clap::parser::ValueSource::CommandLine),
         encoding: matches.value_source("encoding") == Some(clap::parser::ValueSource::CommandLine),
+        max_file_size: matches.value_source("max_file_size")
+            == Some(clap::parser::ValueSource::CommandLine),
         // `-o output.md` carries the same string as the default, so the value
         // alone can't tell an explicit path from an omitted flag. An explicit
         // `-o` is used verbatim (no output_folder / timestamp rewrite).
@@ -1044,6 +1079,9 @@ pub fn run() -> io::Result<()> {
         truncate: resolution.config.truncate,
         visibility: resolution.config.visibility,
         encoding: resolution.config.encoding,
+        max_file_size: resolution.config.max_file_size,
+        hidden: resolution.config.hidden,
+        include_secrets: resolution.config.include_secrets,
     };
 
     // Create final Config with resolved values
@@ -1140,6 +1178,16 @@ ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
 line_numbers = false
+
+# Skip files larger than this ("256K", "1M", "262144"; "0" disables). Default: 256K
+# max_file_size = "256K"
+
+# Include hidden dotfiles and directories, except .git/.hg/.svn/.bzr. Default: false
+# hidden = false
+
+# Include likely-secret files (id_rsa, *.pem, .env, credentials*.json, …). Default: false
+# Dotfile secrets also need hidden = true.
+# include_secrets = false
 
 # Per-file Size and Modified lines under each file header.
 # Off by default: they cost tokens and change the document when mtime changes.
@@ -1264,6 +1312,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1302,6 +1353,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1317,6 +1371,18 @@ mod tests {
         }
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn skipped_section_counts_toward_token_estimate() {
+        let encoding = Encoding::default();
+        assert_eq!(skipped_section_tokens(encoding, &[]).unwrap(), 0);
+        let skipped = vec![SkippedFile {
+            path: "assets/logo.png".to_string(),
+            reason: content_filter::SkipReason::Asset,
+            detail: "image",
+        }];
+        assert!(skipped_section_tokens(encoding, &skipped).unwrap() > 0);
     }
 
     #[test]
@@ -1345,6 +1411,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1386,6 +1455,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1430,6 +1502,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1477,6 +1552,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1521,6 +1599,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1571,6 +1652,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1620,6 +1704,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1668,6 +1755,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config {
@@ -1719,6 +1809,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -1767,6 +1860,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -1798,6 +1894,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -1960,6 +2057,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -2002,6 +2102,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -2044,6 +2147,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config {
@@ -2090,6 +2196,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config {
@@ -2124,6 +2233,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -2163,6 +2275,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config {
@@ -2210,6 +2325,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config {
@@ -2243,6 +2361,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -2290,6 +2411,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -2328,6 +2452,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -2371,6 +2496,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -2408,6 +2536,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -2543,6 +2672,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -2586,6 +2718,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -2630,6 +2765,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config = Config::default();
@@ -2672,6 +2810,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config1 = Config {
@@ -2703,6 +2844,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
         let config2 = Config {
@@ -2753,6 +2897,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -2788,6 +2935,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -2829,6 +2977,9 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
             file_metadata: false,
         };
 
@@ -2864,6 +3015,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &ts_config,
+            &[],
         );
         assert!(result.is_ok());
 
@@ -2933,6 +3085,9 @@ mod tests {
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
             file_metadata: false,
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
         let diff_config = DiffConfig::default();
         let sorted_paths: Vec<PathBuf> = files
@@ -2953,6 +3108,7 @@ mod tests {
             &diff_config,
             &sorted_paths,
             &markdown::TreeSitterConfig::default(),
+            &[],
         )
         .unwrap();
 
@@ -3017,6 +3173,9 @@ mod tests {
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
             file_metadata: false,
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
         };
 
         let doc = generate_markdown_with_diff(
@@ -3031,6 +3190,7 @@ mod tests {
             },
             &[],
             &markdown::TreeSitterConfig::default(),
+            &[],
         )
         .unwrap();
 

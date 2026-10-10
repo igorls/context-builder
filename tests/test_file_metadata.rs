@@ -43,6 +43,9 @@ fn sample_args(input: &Path, output: &Path, file_metadata: bool) -> Args {
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
         file_metadata,
+        max_file_size: "256K".to_string(),
+        hidden: false,
+        include_secrets: false,
     }
 }
 

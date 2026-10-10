@@ -221,9 +221,12 @@ fn large_output_warning_goes_to_stderr_not_stdout() {
     let dir = tempdir().unwrap();
     let fixture = dir.path().join("repo");
     fs::create_dir_all(&fixture).unwrap();
-    // bytes/4 must exceed the 128K warning threshold. 600_000 bytes of text
+    // bytes/4 must exceed the 128K warning threshold. 800_000 bytes of text
     // plus the markdown wrapper is well over 512_000 output bytes.
-    fs::write(fixture.join("big.txt"), "a".repeat(600_000)).unwrap();
+    // Each file stays under the default 256K size limit.
+    for n in 0..4 {
+        fs::write(fixture.join(format!("big{n}.txt")), "a".repeat(200_000)).unwrap();
+    }
 
     let output = dir.path().join("out.md");
     let file_run = run_binary(
