@@ -2,7 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## v0.11.0 (2026-10-10) — "Quiet Defaults"
+
+v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):
+
+- Lockfiles, binary/media assets, files over 256 KiB, and likely secrets are skipped by default (`--include-lockfiles`, `--max-file-size`, `--include-secrets`, `--hidden`).
+- Per-file `Size` / `Modified` lines are off by default (`--file-metadata` opts in).
+- The >100-file confirmation prompt is gone; the overwrite prompt only appears when both stdin and stderr are terminals.
+- New file ranking: category 0 is root-only, files are grouped by directory.
+- **Library API:** `Prompter` no longer has `confirm_processing`, `file_utils::confirm_processing` is removed, `markdown::generate_markdown` takes a `skipped: &[SkippedFile]` argument and returns `io::Result<usize>`, and `cli::Args` / `config::Config` gained fields (`include_lockfiles`, `file_metadata`, `max_file_size`, `hidden`, `include_secrets`). The auto-diff cache fingerprint changed, so the first run after upgrading resets the diff baseline once.
+
+### Fixes and file inclusion
 
 - **`--ignore` accepts comma-separated values (B12)**
   - `-i docs,assets` ignores both names, matching `--filter`. Repeated `-i` flags still append.
@@ -15,14 +25,14 @@ All notable changes to this project will be documented in this file.
   - A previous context-builder report is not pulled back in. A file is skipped when its header is `# Directory Structure Report` followed by a `Content hash:` line; only a small prefix is read
   - The output auto-ignore is anchored to the resolved output path relative to the project, so a nested `docs/output.md` is kept when the default output name is `output.md`
 
-### v0.11.0
+### Prompt removal
 
 - **Removed the >100-file confirmation prompt** ([#23](https://github.com/igorls/context-builder/issues/23) (b))
   - Processing no longer stops to ask before a large file set, on a terminal or in a script. File count is a poor proxy for cost (about 100 files takes milliseconds).
   - Large outputs still emit the existing non-blocking warning on stderr when the bytes/4 estimate exceeds 128K tokens. Nothing is asked, and the warning is not written to stdout (including `-o -`).
   - `-y` / `--yes` remains accepted so existing scripts keep working. It still skips the overwrite prompt on a TTY and does not change processing.
 
-### Breaking (v0.11.0)
+### Breaking: file metadata
 
 - **Per-file `Size` / `Modified` metadata is now off by default.**
   Each file header no longer includes `- Size:` and `- Modified:` lines unless you opt in. Those lines cost tokens, and the modification time changes the document on checkout, copy, or `touch` even when the file bytes (and therefore the content hash) did not.
@@ -30,7 +40,7 @@ All notable changes to this project will be documented in this file.
   - The content hash still fingerprints file bytes, not mtime. With metadata off, two runs that differ only in mtime produce identical output and an identical hash.
   - The auto-diff cache compares those content hashes, so an mtime-only change is not reported as an edit and does not rewrite the per-file sections. Toggling `file_metadata` does not reset the diff baseline (it is a rendering option, like `line_numbers`).
 
-### Breaking (v0.11.0): asset, size, and secret defaults
+### Breaking: asset, size, and secret defaults
 
 **Breaking default change.** A full-tree run no longer inlines common binary/media assets, files larger than 256 KiB, or likely-secret files. Previously those files were copied into the markdown (hidden dotfiles were already omitted). Outputs are smaller and no longer dump `id_rsa`, `*.pem`, or `.env` once `--hidden` is turned on. Pass the escape hatches below to restore the old inclusion.
 
@@ -42,11 +52,9 @@ All notable changes to this project will be documented in this file.
 - **`--hidden`** opts into hidden files and directories (`.github/workflows/ci.yml`, `.gitignore`, `.cargo/config.toml`). It does not follow symlinks, does not override gitignore or `--ignore`, does not descend into `.git` / `.hg` / `.svn` / `.bzr`, and does **not** include secrets.
 - **Config keys** (CLI wins): `max_file_size` (string or integer bytes), `hidden`, `include_secrets`. For the boolean keys, omitting the flag leaves a config `true` in place, same as `--line-numbers`. An explicit `--max-file-size 256K` overrides a different config value.
 
-### Breaking (v0.11.0): lockfiles and ranking
+### Breaking: lockfiles and ranking
 
-Breaking defaults. Category numbers are unchanged.
-
-### Breaking defaults
+Category numbers are unchanged.
 
 - **Lockfiles are skipped by default.** Basenames in `LOCKFILES` (`Cargo.lock`, `package-lock.json`, `uv.lock`, `pnpm-lock.yaml`, …) are left out of the tree and the document. Opt in with `--include-lockfiles` or `include_lockfiles = true` in `context-builder.toml`. The CLI flag wins when both are set. A type filter that matches a lockfile (`-f toml` for `Cargo.lock`, `-f lock`) still skips them until the opt-in is set. When any are skipped, stderr reports the count: `Skipped N lockfiles (use --include-lockfiles to include)`.
 - **Category 0 is root-only.** Root manifests, the root README (first), and other root priority docs (`AGENTS.md`, `CONTRIBUTING.md`, …) stay category 0. Nested `README`, `package.json`, and other manifests rank with their directory and sort at the top of that directory's files.
