@@ -1,6 +1,6 @@
 # Deep Think v5 Evaluation Prompt
 
-> **Usage**: Upload `docs/deep_think_review_v0.8.0.md` as an attachment, then paste the prompt below.
+> **Usage**: Regenerate the context dump, upload it as an attachment, then paste the prompt below. The previous dump `docs/research/context-files/deep_think_review_v0.8.0.md` was removed from the repo.
 > Generated with: `context-builder -f rs -o deep_think_review_v0.8.0.md -y` (from clean dir, no config overrides)
 
 ---

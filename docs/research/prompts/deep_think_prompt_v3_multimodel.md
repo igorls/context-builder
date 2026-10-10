@@ -2,6 +2,7 @@
 
 > **Usage**: Upload the context file as an attachment, then paste the prompt below.
 > Generated with: `context-builder -d . --filter rs,toml,md,sh,yml --signatures -o docs/research/context-files/deep_think_context_v3.md -y`
+> That generated dump was removed from the repo. `docs/research/context-files/` is gitignored; regenerate the file locally if you need a fresh copy.
 
 ---
 
