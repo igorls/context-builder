@@ -93,6 +93,7 @@ filter = ["txt"]
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     // Apply config settings to args (mimicking the run() function logic)
@@ -186,6 +187,7 @@ timestamped_output = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     // Apply timestamping manually since we're bypassing run()

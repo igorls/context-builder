@@ -24,3 +24,6 @@ ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
 line_numbers = false
+
+# Per-file Size and Modified lines (off by default; opt in with true or --file-metadata)
+file_metadata = false

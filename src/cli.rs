@@ -37,6 +37,12 @@ pub struct Args {
     #[clap(long)]
     pub line_numbers: bool,
 
+    /// Include per-file size and modification time under each file header.
+    /// Off by default: those lines cost tokens and change whenever a file's
+    /// mtime changes (checkout, copy, `touch`), even if the bytes did not.
+    #[clap(long)]
+    pub file_metadata: bool,
+
     /// Overwrite an existing output file without asking. The >100-file confirmation
     /// was removed in v0.11.0; this flag is still accepted and only affects the overwrite prompt
     #[clap(short = 'y', long)]
@@ -154,6 +160,7 @@ mod tests {
         assert_eq!(args.ignore, vec!["target".to_string(), ".git".to_string()]);
         assert!(!args.preview);
         assert!(!args.line_numbers);
+        assert!(!args.file_metadata);
         assert!(!args.clear_cache);
     }
 
@@ -167,8 +174,19 @@ mod tests {
         assert!(args.ignore.is_empty());
         assert!(!args.preview);
         assert!(!args.line_numbers);
+        assert!(!args.file_metadata);
         assert!(!args.diff_only);
         assert!(!args.clear_cache);
+    }
+
+    #[test]
+    fn parses_file_metadata_flag() {
+        let args = Args::try_parse_from(["context-builder", "--file-metadata"])
+            .expect("should parse file-metadata flag");
+        assert!(args.file_metadata);
+
+        let omitted = Args::try_parse_from(["context-builder", "-d", "."]).expect("should parse");
+        assert!(!omitted.file_metadata);
     }
 
     #[test]

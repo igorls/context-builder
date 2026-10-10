@@ -872,6 +872,50 @@ mod tests {
         assert_ne!(hash1, hash2);
     }
 
+    #[test]
+    fn content_hash_and_diff_ignore_mtime() {
+        // The auto-diff cache compares `content_hash` (file bytes). An mtime-only
+        // change must not look like an edit, whether or not Size/Modified lines
+        // are rendered.
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        fs::write(&path, "same bytes").unwrap();
+        let first = FileState::from_path(&path).unwrap();
+
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(10_000);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let second = FileState::from_path(&path).unwrap();
+
+        assert_ne!(first.modified, second.modified);
+        assert_eq!(first.content, second.content);
+        assert_eq!(first.content_hash, second.content_hash);
+
+        let state_of = |file: FileState, timestamp: &str| ProjectState {
+            timestamp: timestamp.to_string(),
+            config_hash: "hash".to_string(),
+            files: BTreeMap::from([(PathBuf::from("test.txt"), file)]),
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let before = state_of(first, "t1");
+        let after = state_of(second, "t2");
+        assert!(!after.has_changes(&before));
+        let comparison = after.compare_with(&before, None);
+        assert!(!comparison.summary.has_changes());
+        assert!(comparison.summary.modified.is_empty());
+    }
+
     // Helper function to create a mock DirEntry for testing
     fn create_mock_dir_entry(path: &std::path::Path) -> ignore::DirEntry {
         let walker = ignore::WalkBuilder::new(path.parent().unwrap());

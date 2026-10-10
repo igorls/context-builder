@@ -87,6 +87,7 @@ fn test_auto_diff_workflow_basic() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
     let prompter = TestPrompter;
 
@@ -247,6 +248,7 @@ fn test_auto_diff_added_and_removed_files() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -412,6 +414,7 @@ diff_only = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -561,6 +564,7 @@ fn test_cache_invalidation_on_config_change() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -717,6 +721,7 @@ fn test_concurrent_cache_access() {
                     structure: false,
                     truncate: "smart".to_string(),
                     visibility: "all".to_string(),
+                    file_metadata: false,
                 };
 
                 let prompter = TestPrompter;
@@ -773,6 +778,7 @@ fn test_corrupted_cache_recovery() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -945,6 +951,7 @@ diff_only = true
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();

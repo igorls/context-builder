@@ -57,6 +57,7 @@ fn preview_mode_does_not_create_output_file() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(true);
@@ -103,6 +104,7 @@ fn preview_mode_skips_overwrite_confirmation() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -154,6 +156,7 @@ fn token_count_mode_skips_overwrite_confirmation() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -202,6 +205,7 @@ fn both_preview_and_token_count_modes_work_together() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(false); // false for overwrite since it should be skipped
@@ -263,6 +267,7 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     // Always proceed without interactive prompts
@@ -356,6 +361,7 @@ fn overwrite_prompt_is_respected() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     // Deny overwrite
@@ -403,6 +409,7 @@ fn many_files_proceed_without_a_processing_prompt() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(true);
@@ -442,6 +449,7 @@ fn pipe_mode_many_files_does_not_block() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(true);
@@ -480,6 +488,7 @@ fn token_count_mode_does_not_create_output_file() {
         structure: false,
         truncate: "smart".to_string(),
         visibility: "all".to_string(),
+        file_metadata: false,
     };
 
     let prompter = TestPrompter::new(true);

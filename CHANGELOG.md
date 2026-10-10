@@ -22,6 +22,14 @@ All notable changes to this project will be documented in this file.
   - Large outputs still emit the existing non-blocking warning on stderr when the bytes/4 estimate exceeds 128K tokens. Nothing is asked, and the warning is not written to stdout (including `-o -`).
   - `-y` / `--yes` remains accepted so existing scripts keep working. It still skips the overwrite prompt on a TTY and does not change processing.
 
+### Breaking (v0.11.0)
+
+- **Per-file `Size` / `Modified` metadata is now off by default.**
+  Each file header no longer includes `- Size:` and `- Modified:` lines unless you opt in. Those lines cost tokens, and the modification time changes the document on checkout, copy, or `touch` even when the file bytes (and therefore the content hash) did not.
+  - Opt in with `--file-metadata`, or set `file_metadata = true` in `context-builder.toml`. An explicit `--file-metadata` overrides `file_metadata = false` in config. When the flag is omitted, the config key applies.
+  - The content hash still fingerprints file bytes, not mtime. With metadata off, two runs that differ only in mtime produce identical output and an identical hash.
+  - The auto-diff cache compares those content hashes, so an mtime-only change is not reported as an edit and does not rewrite the per-file sections. Toggling `file_metadata` does not reset the diff baseline (it is a rendering option, like `line_numbers`).
+
 ## v0.10.0 (2026-08-31) — "Honest Signatures"
 
 > Delivered per `docs/research/v0.10-plan.md` (derived from the post-v0.9.0 review): every documented flag now does what it says, divergent language maps are unified, and packaging/CI gaps are closed.

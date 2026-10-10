@@ -346,6 +346,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 structure: final_args.structure,
                 truncate: final_args.truncate.clone(),
                 visibility: final_args.visibility.clone(),
+                file_metadata: final_args.file_metadata,
             };
             let enc_strategy = config.encoding_strategy.as_deref();
             println!("\n# Token Count Estimation\n");
@@ -426,9 +427,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         // behavior even when filter/ignore originate from the CLI, not the config
         // file. Only `filter`/`ignore` matter: they decide which files form the
         // diff baseline. Rendering options (signatures/structure/truncate/
-        // visibility/max_tokens/line_numbers/encoding) deliberately do NOT feed the
-        // fingerprint — they don't change the captured raw content — so propagating
-        // them here would only risk spurious baseline resets (see `config_fingerprint`).
+        // visibility/max_tokens/line_numbers/file_metadata/encoding) deliberately
+        // do NOT feed the fingerprint — they don't change the captured raw
+        // content — so propagating them here would only risk spurious baseline
+        // resets (see `config_fingerprint`). The per-file content hash stored in
+        // the cache is the file bytes only, so an mtime-only change is not a diff.
         let mut effective_config = config.clone();
         if !final_args.filter.is_empty() {
             effective_config.filter = Some(final_args.filter.clone());
@@ -541,6 +544,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             structure: final_args.structure,
             truncate: final_args.truncate.clone(),
             visibility: final_args.visibility.clone(),
+            file_metadata: final_args.file_metadata,
         };
 
         // 4. Generate markdown with diff annotations
@@ -642,6 +646,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         structure: final_args.structure,
         truncate: final_args.truncate.clone(),
         visibility: final_args.visibility.clone(),
+        file_metadata: final_args.file_metadata,
     };
 
     // Graceful degradation: warn if tree-sitter flags are used without the feature
@@ -905,8 +910,13 @@ fn generate_markdown_with_diff(
                     "### File: {}\n\n",
                     fences::inline_code(&path.display().to_string())
                 ));
-                output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-                output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+                // Same opt-in as the standard renderer. Off by default so an
+                // mtime-only change does not rewrite the document. The cache
+                // compares content hashes (file bytes), not mtime.
+                if args.file_metadata {
+                    output.push_str(&format!("- Size: {} bytes\n", file_state.size));
+                    output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+                }
 
                 // Determine language from file extension (canonical map —
                 // same fence language as the main rendering path)
@@ -1021,6 +1031,7 @@ pub fn run() -> io::Result<()> {
         filter: resolution.config.filter,
         ignore: resolution.config.ignore,
         line_numbers: resolution.config.line_numbers,
+        file_metadata: resolution.config.file_metadata,
         preview: resolution.config.preview,
         token_count: resolution.config.token_count,
         yes: resolution.config.yes,
@@ -1129,6 +1140,11 @@ ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
 line_numbers = false
+
+# Per-file Size and Modified lines under each file header.
+# Off by default: they cost tokens and change the document when mtime changes.
+# Set to true, or pass --file-metadata, to opt in.
+file_metadata = false
 "#,
         filter_string
     );
@@ -1248,6 +1264,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1285,6 +1302,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1327,6 +1345,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1367,6 +1386,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1410,6 +1430,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false); // Deny overwrite
@@ -1456,6 +1477,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1499,6 +1521,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1548,6 +1571,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1596,6 +1620,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1643,6 +1668,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1693,6 +1719,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1740,6 +1767,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig::default();
@@ -1759,6 +1787,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -1931,6 +1960,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1972,6 +2002,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2013,6 +2044,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2058,6 +2090,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2091,6 +2124,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2129,6 +2163,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2175,6 +2210,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2207,6 +2243,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2253,6 +2290,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2276,6 +2314,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let previous = state.clone();
@@ -2332,6 +2371,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2357,6 +2397,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -2502,6 +2543,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2544,6 +2586,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2587,6 +2630,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2628,6 +2672,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config1 = Config {
             auto_diff: Some(true),
@@ -2658,6 +2703,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config2 = Config {
             auto_diff: Some(true),
@@ -2707,6 +2753,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2730,6 +2777,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -2781,6 +2829,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2804,6 +2853,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -2882,6 +2932,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let diff_config = DiffConfig::default();
         let sorted_paths: Vec<PathBuf> = files
@@ -2965,6 +3016,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let doc = generate_markdown_with_diff(

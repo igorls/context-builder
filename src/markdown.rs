@@ -32,6 +32,10 @@ pub struct TreeSitterConfig {
     pub truncate: String,
     /// Visibility filter: "public", "private", or "all".
     pub visibility: String,
+    /// Emit per-file `- Size:` / `- Modified:` lines. Carried here so
+    /// `process_file` does not grow another parameter (the renderer signature
+    /// is shared with in-flight fence work). Off by default.
+    pub file_metadata: bool,
 }
 
 /// Counts bytes written so callers can warn about large documents, including
@@ -122,10 +126,13 @@ pub fn generate_markdown(
     }
 
     // Deterministic content hash (enables LLM prompt caching across runs).
-    // Hashes raw file content (NOT mtime — see v0.7.0; the rendered output embeds
-    // each file's mtime, so hashing emitted bytes would be volatile) PLUS every
-    // option that changes the rendered output. The hash is therefore a complete
-    // fingerprint: two runs share a hash iff they produce identical output.
+    // Hashes raw file content (NOT mtime — see v0.7.0) PLUS every option that
+    // changes the rendered output, including whether per-file Size/Modified
+    // lines are emitted (`file_metadata`). mtime itself is never hashed.
+    // With metadata off (the default) those lines are absent, so two runs that
+    // differ only in mtime produce identical output and an identical hash.
+    // With `--file-metadata` the rendered mtime can still differ while the hash
+    // stays a content fingerprint, so prompt caches survive checkouts.
     // Folding in line_numbers / max_tokens / encoding / tree-sitter flags fixes
     // the bug where toggling those yielded a different document under the same
     // hash, and keeps the hash honest when `--max-tokens` truncates the file set.
@@ -144,6 +151,10 @@ pub fn generate_markdown(
     content_hasher.update(ts_config.visibility.as_bytes());
     content_hasher.update(b"\0encoding_strategy\0");
     content_hasher.update(encoding_strategy.unwrap_or("").as_bytes());
+    // The flag changes the document (the lines are present or not) but the
+    // mtime value is deliberately not hashed — see the comment above.
+    content_hasher.update(b"\0file_metadata\0");
+    content_hasher.update(&[ts_config.file_metadata as u8]);
     content_hasher.update(b"\0files\0");
     for entry in files {
         // Hash relative unix-style path for cross-OS determinism.
@@ -508,15 +519,6 @@ pub fn process_file_with_content_limit(
         }
     };
 
-    let modified_time = metadata
-        .modified()
-        .ok()
-        .map(|time| {
-            let system_time: chrono::DateTime<Utc> = time.into();
-            system_time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
-        })
-        .unwrap_or_else(|| "Unknown".to_string());
-
     writeln!(output)?;
     writeln!(
         output,
@@ -526,9 +528,23 @@ pub fn process_file_with_content_limit(
 
     writeln!(output)?;
 
-    writeln!(output, "- Size: {} bytes", metadata.len())?;
-    writeln!(output, "- Modified: {}", modified_time)?;
-    writeln!(output)?;
+    // Opt-in. Off by default so a checkout or `touch` does not change the
+    // document when the bytes are unchanged. The document content hash never
+    // includes mtime either way (see `generate_markdown`).
+    if ts_config.file_metadata {
+        let modified_time = metadata
+            .modified()
+            .ok()
+            .map(|time| {
+                let system_time: chrono::DateTime<Utc> = time.into();
+                system_time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+            })
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        writeln!(output, "- Size: {} bytes", metadata.len())?;
+        writeln!(output, "- Modified: {}", modified_time)?;
+        writeln!(output)?;
+    }
 
     // --- File Content --- //
     let extension = file_path
@@ -833,7 +849,7 @@ fn char_boundary_clamp(content: &str, position: usize) -> usize {
 /// serial and parallel budget paths so both builds truncate at the same
 /// boundary.
 ///
-/// The section header (`### File: …`, size/mtime, fence, truncation marker) is
+/// The section header (`### File: …`, optional size/mtime, fence, truncation marker) is
 /// a fixed token cost paid before any content fits, so it is measured first
 /// with a zero-byte content probe; the content allowance is what remains
 /// after it, converted to bytes at ~4 bytes/token and shrunk proportionally
@@ -2247,6 +2263,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = write_tree_sitter_enrichment(&mut output, content, "rs", &ts_config);
@@ -2334,14 +2351,15 @@ mod tests {
     #[test]
     fn test_max_tokens_truncates_single_oversized_first_file() {
         // Regression (B1): the first file used to bypass the budget and was always
-        // emitted in full. A single oversized file is now omitted with a notice.
+        // emitted in full. It is now truncated or omitted, with a notice.
         let dir = tempdir().unwrap();
         let base_path = dir.path();
         let output_path = base_path.join("output.md");
 
-        // ~17 KB of whitespace-separated text (well over a 100-token budget) with a
-        // unique marker we can assert is absent. Avoid a single-char run (slow BPE).
-        let body = "UNIQUE_BODY_MARKER alpha beta gamma ".repeat(500);
+        // ~17 KB of whitespace-separated text (well over a 100-token budget). The
+        // marker sits at the tail so it is absent whether the file is truncated
+        // in place or omitted. Avoid a single-char run (slow BPE).
+        let body = "alpha beta gamma ".repeat(500) + "UNIQUE_TAIL_MARKER";
         fs::write(base_path.join("huge.txt"), &body).unwrap();
 
         let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
@@ -2369,8 +2387,12 @@ mod tests {
             "expected the budget notice"
         );
         assert!(
-            !content.contains("UNIQUE_BODY_MARKER"),
-            "oversized first file body leaked despite the budget"
+            !content.contains("UNIQUE_TAIL_MARKER"),
+            "oversized first file was emitted in full despite the budget"
+        );
+        assert!(
+            content.len() < body.len(),
+            "output should be smaller than the unbudgeted file"
         );
     }
 
@@ -2446,7 +2468,9 @@ mod tests {
         assert!(result.is_ok());
         let content = fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("empty.txt"));
-        assert!(content.contains("Size: 0 bytes"));
+        // Size/Modified are opt-in (`file_metadata`, off by default).
+        assert!(!content.contains("Size:"));
+        assert!(!content.contains("Modified:"));
     }
 
     #[test]

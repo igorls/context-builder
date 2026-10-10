@@ -168,6 +168,9 @@ context-builder --token-count
 # Add line numbers to all code blocks
 context-builder --line-numbers
 
+# Opt in to per-file Size and Modified lines (off by default)
+context-builder --file-metadata
+
 # Stream the document to stdout and pipe it straight into an LLM tool
 context-builder -f rs -o - | llm
 
@@ -224,6 +227,10 @@ ignore = ["target", "node_modules", "*.lock", "crates/core"]
 # Add line numbers to code blocks
 line_numbers = true
 
+# Per-file Size and Modified lines under each file header (off by default).
+# They cost tokens and change the document whenever a file's mtime changes.
+file_metadata = false
+
 # Preview mode: only show file tree without generating output
 preview = false
 
@@ -279,6 +286,7 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
+- `--file-metadata` - Include per-file `- Size:` and `- Modified:` lines under each file header. **Off by default** (breaking change in v0.11.0): those lines cost tokens and change the output whenever a file's modification time changes, even if the bytes did not. Set `file_metadata = true` in `context-builder.toml` for the same effect. An explicit `--file-metadata` overrides `file_metadata = false`.
 - `-y, --yes` - Overwrite an existing output file without asking. The confirmation that used to run before processing more than 100 files was removed in v0.11.0; `-y` is still accepted so existing scripts keep working, and it only affects the overwrite prompt.
 - `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.

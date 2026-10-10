@@ -18,6 +18,7 @@ pub struct ResolvedConfig {
     pub filter: Vec<String>,
     pub ignore: Vec<String>,
     pub line_numbers: bool,
+    pub file_metadata: bool,
     pub preview: bool,
     pub token_count: bool,
     pub yes: bool,
@@ -94,6 +95,7 @@ pub fn resolve_final_config(
         filter: args.filter,
         ignore: args.ignore,
         line_numbers: args.line_numbers,
+        file_metadata: args.file_metadata,
         preview: args.preview,
         token_count: args.token_count,
         yes: args.yes,
@@ -177,6 +179,15 @@ fn apply_config_to_args(
         && let Some(line_numbers) = config.line_numbers
     {
         args.line_numbers = line_numbers;
+    }
+
+    // file_metadata: same boolean rule as line_numbers. `--file-metadata`
+    // (true) always wins; a config value applies only when the flag is omitted
+    // (the clap default is false, so it cannot express an explicit "off").
+    if !args.file_metadata
+        && let Some(file_metadata) = config.file_metadata
+    {
+        args.file_metadata = file_metadata;
     }
 
     if !args.preview
@@ -318,6 +329,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config = Config {
@@ -356,6 +368,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config = Config {
@@ -363,6 +376,7 @@ mod tests {
             filter: Some(vec!["rs".to_string(), "toml".to_string()]),
             ignore: Some(vec!["target".to_string()]),
             line_numbers: Some(true),
+            file_metadata: Some(true),
             preview: Some(true),
             token_count: Some(true),
             yes: Some(true),
@@ -379,6 +393,7 @@ mod tests {
         );
         assert_eq!(resolution.config.ignore, vec!["target".to_string()]);
         assert!(resolution.config.line_numbers);
+        assert!(resolution.config.file_metadata);
         assert!(resolution.config.preview);
         assert!(resolution.config.token_count);
         assert!(resolution.config.yes);
@@ -405,6 +420,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config = Config {
@@ -440,6 +456,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config = Config {
@@ -477,6 +494,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config = Config {
@@ -515,6 +533,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config = Config {
@@ -548,6 +567,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let config = Config {
@@ -583,6 +603,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let resolution = resolve_final_config(args.clone(), None, ExplicitCli::default());
@@ -592,6 +613,8 @@ mod tests {
         assert_eq!(resolution.config.filter, args.filter);
         assert_eq!(resolution.config.ignore, args.ignore);
         assert_eq!(resolution.config.line_numbers, args.line_numbers);
+        assert_eq!(resolution.config.file_metadata, args.file_metadata);
+        assert!(!resolution.config.file_metadata);
         assert_eq!(resolution.config.preview, args.preview);
         assert_eq!(resolution.config.token_count, args.token_count);
         assert_eq!(resolution.config.yes, args.yes);
@@ -625,6 +648,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
         let config = Config {
             encoding: Some("cl100k_base".to_string()),
@@ -675,6 +699,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         }
     }
 
@@ -809,5 +834,27 @@ mod tests {
             PathBuf::from(&resolution.config.output),
             Path::new("../proj").join("docs").join("output.md")
         );
+    }
+
+    #[test]
+    fn file_metadata_cli_overrides_config_false() {
+        // `--file-metadata` is an opt-in bool (default false). Passing it wins
+        // over `file_metadata = false`. Omitting it lets the config key apply.
+        let mut args = bare_args(".", "output.md");
+        args.file_metadata = true;
+        let config_off = Config {
+            file_metadata: Some(false),
+            ..Default::default()
+        };
+        let on = resolve_final_config(args.clone(), Some(config_off), ExplicitCli::default());
+        assert!(on.config.file_metadata);
+
+        args.file_metadata = false;
+        let config_on = Config {
+            file_metadata: Some(true),
+            ..Default::default()
+        };
+        let from_config = resolve_final_config(args, Some(config_on), ExplicitCli::default());
+        assert!(from_config.config.file_metadata);
     }
 }
