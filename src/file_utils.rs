@@ -3,136 +3,214 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
+/// Basenames of generated dependency lockfiles (category 5).
+///
+/// A lockfile is a resolved dependency snapshot, such as `Cargo.lock`,
+/// `package-lock.json`, or `uv.lock`. It is not a project manifest
+/// ([`ROOT_MANIFESTS`]). Matched by exact basename at any depth.
+pub const LOCKFILES: &[&str] = &[
+    "Cargo.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Gemfile.lock",
+    "poetry.lock",
+    "composer.lock",
+    "go.sum",
+    "bun.lockb",
+    "flake.lock",
+    "uv.lock",
+    "Pipfile.lock",
+    "bun.lock",
+    "deno.lock",
+    "mix.lock",
+    "pubspec.lock",
+    "npm-shrinkwrap.json",
+    "Package.resolved",
+];
+
+/// Basenames of root project manifests (category 0).
+///
+/// A manifest defines a project or package: metadata, dependency
+/// declarations, and the build entry. Examples: `Cargo.toml`, `package.json`,
+/// `pyproject.toml`, `pom.xml`. Not lockfiles ([`LOCKFILES`]), READMEs,
+/// changelogs, or tool-only config. Matched by exact basename at any depth.
+pub const ROOT_MANIFESTS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "tsconfig.json",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "go.mod",
+    "Gemfile",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Package.swift",
+    "composer.json",
+    "deno.json",
+    "mix.exs",
+    "pubspec.yaml",
+    "flake.nix",
+    "requirements.txt",
+    "Pipfile",
+];
+
+/// Tool config and key project docs that stay category 0, but are not manifests.
+const PRIORITY_CONFIG_AND_DOCS: &[&str] = &[
+    "context-builder.toml",
+    ".gitignore",
+    "README.md",
+    "README",
+    "README.txt",
+    "README.rst",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "COPILOT.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+];
+
+/// Directory names that mark tests or benchmarks, at any depth.
+const TEST_DIR_NAMES: &[&str] = &[
+    "tests",
+    "test",
+    "spec",
+    "__tests__",
+    "benches",
+    "benchmarks",
+    "testdata",
+    "fixtures",
+];
+
+/// Source extensions for which a `test_*` basename is a test module.
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "go", "py", "ts", "tsx", "js", "jsx", "java", "c", "cpp", "h", "hpp", "rb", "swift",
+    "kt", "scala", "ex", "exs", "zig", "hs",
+];
+
+/// Build and CI filenames matched by exact basename.
+///
+/// `CMakeLists.txt` is included even though it has a `.txt` extension, so the
+/// extension fallback cannot classify it as prose. `justfile` is matched
+/// separately and case-insensitively.
+const BUILD_FILE_NAMES: &[&str] = &[
+    "Makefile",
+    "CMakeLists.txt",
+    "Dockerfile",
+    "Containerfile",
+    "Taskfile",
+    "Rakefile",
+    "Vagrantfile",
+];
+
+/// Test-module filename suffixes, matched against the basename at any depth.
+const TEST_FILE_SUFFIXES: &[&str] = &[
+    "_test.rs",
+    "_test.go",
+    "_test.py",
+    "_spec.rb",
+    ".test.ts",
+    ".test.tsx",
+    ".test.js",
+    ".test.jsx",
+    ".spec.ts",
+    ".spec.tsx",
+    ".spec.js",
+    ".spec.jsx",
+];
+
 /// Returns a numeric category for file relevance ordering.
 /// Lower numbers appear first in output. Categories:
 /// 0 = Project config + key docs (Cargo.toml, README.md, AGENTS.md, etc.)
 /// 1 = Source code (src/, lib/) — entry points sorted first within category
-/// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
+/// 2 = Tests and benchmarks (tests/, benches/, test/, spec/, testdata/, fixtures/)
 /// 3 = Documentation, scripts, and everything else
-/// 4 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
-/// 5 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
+/// 4 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
+/// 5 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
 fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
-    let relative = path.strip_prefix(base_path).unwrap_or(path);
-    let rel_str = relative.to_string_lossy();
+    let rel = normalized_relative(path, base_path);
+    let parts: Vec<&str> = rel.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        return 3;
+    }
+    let name = parts[parts.len() - 1];
+    let parents = &parts[..parts.len() - 1];
+    let first = parts[0];
 
-    // Check filename for lockfiles first — these are lowest priority
-    if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
-        let lockfile_names = [
-            "Cargo.lock",
-            "package-lock.json",
-            "yarn.lock",
-            "pnpm-lock.yaml",
-            "Gemfile.lock",
-            "poetry.lock",
-            "composer.lock",
-            "go.sum",
-            "bun.lockb",
-            "flake.lock",
-        ];
-        if lockfile_names.contains(&name) {
-            return 5;
-        }
-
-        // Check for config/manifest files + key project docs — highest priority
-        let config_names = [
-            // Package manifests
-            "Cargo.toml",
-            "package.json",
-            "tsconfig.json",
-            "pyproject.toml",
-            "setup.py",
-            "setup.cfg",
-            "go.mod",
-            "Gemfile",
-            // Tool config
-            "context-builder.toml",
-            ".gitignore",
-            // Key project documentation (LLMs need these for context)
-            "README.md",
-            "README",
-            "README.txt",
-            "README.rst",
-            "AGENTS.md",
-            "CLAUDE.md",
-            "GEMINI.md",
-            "COPILOT.md",
-            "CONTRIBUTING.md",
-            "CHANGELOG.md",
-        ];
-        if config_names.contains(&name) {
-            return 0;
-        }
+    // Lockfiles outrank every other basename match, including manifests.
+    if LOCKFILES.contains(&name) {
+        return 5;
+    }
+    if ROOT_MANIFESTS.contains(&name) || PRIORITY_CONFIG_AND_DOCS.contains(&name) {
+        return 0;
+    }
+    // Test markers win over source-root classification (`src/foo_test.go` is a
+    // test, not source) and over the docs/extension fallback.
+    if is_test_path(parents, name) {
+        return 2;
     }
 
-    // Check path prefix for category
-    let first_component = relative
-        .components()
-        .next()
-        .and_then(|c| c.as_os_str().to_str())
-        .unwrap_or("");
-
-    match first_component {
-        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => {
-            // Check sub-components for test directories within source trees.
-            // e.g., src/tests/auth.rs should be cat 2 (tests), not cat 1 (source).
-            let sub_path = rel_str.as_ref();
-            if sub_path.contains("/tests/")
-                || sub_path.contains("/test/")
-                || sub_path.contains("/spec/")
-                || sub_path.contains("/__tests__/")
-                || sub_path.contains("/benches/")
-                || sub_path.contains("/benchmarks/")
-            {
-                2
-            } else {
-                1
-            }
-        }
-        "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
+    match first {
+        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
-        // Build/CI infrastructure — useful context but not core source
+        // Build/CI infrastructure — useful context but not core source.
         ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
-        _ => {
-            // Check extensions for additional heuristics
-            if let Some(ext) = relative.extension().and_then(|e| e.to_str()) {
-                match ext {
-                    "rs" | "go" | "py" | "ts" | "js" | "java" | "c" | "cpp" | "h" | "hpp"
-                    | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
-                        // Source file not in a recognized dir — check if it's a test
-                        // Use path boundaries to avoid false positives (e.g., "contest.rs")
-                        if rel_str.contains("/test/")
-                            || rel_str.contains("/tests/")
-                            || rel_str.contains("/spec/")
-                            || rel_str.contains("/__tests__/")
-                            || rel_str.ends_with("_test.rs")
-                            || rel_str.ends_with("_test.go")
-                            || rel_str.ends_with("_spec.rb")
-                            || rel_str.ends_with(".test.ts")
-                            || rel_str.ends_with(".test.js")
-                            || rel_str.ends_with(".spec.ts")
-                            || rel_str.starts_with("test_")
-                        {
-                            2
-                        } else {
-                            1
-                        }
-                    }
-                    "md" | "txt" | "rst" | "adoc" => 3,
-                    _ => 1, // Unknown extension in root — treat as source
-                }
-            } else {
-                // Check for build-related root files without extensions
-                if let Some(
-                    "Makefile" | "CMakeLists.txt" | "Dockerfile" | "Containerfile" | "Justfile"
-                    | "Taskfile" | "Rakefile" | "Vagrantfile",
-                ) = relative.file_name().and_then(|n| n.to_str())
-                {
-                    4
-                } else {
-                    3 // No extension — docs/other
-                }
-            }
-        }
+        _ => category_from_name(name),
+    }
+}
+
+/// Relative path with `\` folded to `/`, so component checks do not depend on
+/// the OS separator. `Path` on Unix does not split on `\`, and
+/// `to_string_lossy()` keeps the backslashes Windows paths actually use.
+fn normalized_relative(path: &Path, base_path: &Path) -> String {
+    path.strip_prefix(base_path)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn is_test_path(parents: &[&str], name: &str) -> bool {
+    parents.iter().any(|dir| TEST_DIR_NAMES.contains(dir))
+        || (parents.is_empty() && TEST_DIR_NAMES.contains(&name))
+        || is_test_filename(name)
+}
+
+fn is_test_filename(name: &str) -> bool {
+    if TEST_FILE_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+    {
+        return true;
+    }
+    // `test_*.py` and the same `test_*` rule for other source extensions.
+    // The basename is used so this matches at any depth, not only the repo root.
+    name.starts_with("test_")
+        && matches!(
+            file_extension(name),
+            Some(ext) if SOURCE_EXTENSIONS.contains(&ext)
+        )
+}
+
+fn file_extension(name: &str) -> Option<&str> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    if stem.is_empty() { None } else { Some(ext) }
+}
+
+fn is_build_file(name: &str) -> bool {
+    BUILD_FILE_NAMES.contains(&name) || name.eq_ignore_ascii_case("justfile")
+}
+
+fn category_from_name(name: &str) -> u8 {
+    if is_build_file(name) {
+        return 4;
+    }
+    match file_extension(name) {
+        Some("md" | "txt" | "rst" | "adoc") => 3,
+        Some(_) => 1,
+        None => 3,
     }
 }
 
@@ -1052,5 +1130,214 @@ mod tests {
 
         let files = collect_files(base, &[], &[], &[]).unwrap();
         assert!(!files.is_empty());
+    }
+
+    /// Classify `rel` as a relative path. The base is not a prefix, so the
+    /// whole string (including Windows separators) is what the heuristic sees.
+    fn category_of(rel: &str) -> u8 {
+        file_relevance_category(Path::new(rel), Path::new("NOT_A_PREFIX"))
+    }
+
+    #[test]
+    fn cmake_lists_txt_is_a_build_manifest() {
+        // `.txt` used to take the docs branch before the build-file list ran.
+        assert_eq!(category_of("CMakeLists.txt"), 4);
+        assert_eq!(category_of("notes.txt"), 3);
+        for name in [
+            "Makefile",
+            "Dockerfile",
+            "Containerfile",
+            "Taskfile",
+            "Rakefile",
+            "Vagrantfile",
+        ] {
+            assert_eq!(category_of(name), 4, "{name}");
+        }
+    }
+
+    #[test]
+    fn justfile_is_matched_case_insensitively() {
+        for name in ["justfile", "Justfile", "JUSTFILE", "JustFile"] {
+            assert_eq!(category_of(name), 4, "{name}");
+        }
+    }
+
+    #[test]
+    fn windows_style_separators_match_test_directories() {
+        let samples = [
+            r"src\tests\auth.rs",
+            r"src\lib.rs",
+            r"internal\x\x_test.go",
+            r"pkg\fixtures\sample.json",
+            r"src\components\Button.test.tsx",
+            r"app\test_models.py",
+            r"testdata\input.txt",
+        ];
+        for windows in samples {
+            let unix = windows.replace('\\', "/");
+            assert_eq!(
+                category_of(windows),
+                category_of(&unix),
+                "{windows} should classify like {unix}"
+            );
+        }
+        assert_eq!(category_of(r"src\tests\auth.rs"), 2);
+        assert_eq!(category_of(r"src\lib.rs"), 1);
+        assert_eq!(category_of(r"src\contest.rs"), 1);
+
+        // Base stripping still works for normal OS paths.
+        assert_eq!(
+            file_relevance_category(Path::new("/repo/src/tests/auth.rs"), Path::new("/repo")),
+            2
+        );
+        assert_eq!(
+            file_relevance_category(Path::new("/repo/src/lib.rs"), Path::new("/repo")),
+            1
+        );
+    }
+
+    #[test]
+    fn test_suffixes_are_detected_at_any_depth() {
+        let tests = [
+            "src/foo_test.go",
+            "lib/foo_test.go",
+            "crates/foo/foo_test.go",
+            "internal/x/x_test.go",
+            "cmd/tool/foo_test.go",
+            "pkg/y/y_test.go",
+            "src/components/Button.test.ts",
+            "src/components/Button.test.tsx",
+            "src/components/Button.test.js",
+            "src/components/Button.test.jsx",
+            "src/utils.spec.ts",
+            "src/utils.spec.tsx",
+            "src/utils.spec.js",
+            "src/utils.spec.jsx",
+            "mypkg/core_test.py",
+            "src/test_utils.py",
+            "app/test_models.py",
+            "packages/web/src/index.test.ts",
+            // Existing suffixes stay tests inside source roots too.
+            "src/foo_test.rs",
+            "src/my_spec.rb",
+            "test_main.rs",
+            "src/test_Button.tsx",
+            "src/test_widget.jsx",
+        ];
+        for path in tests {
+            assert_eq!(category_of(path), 2, "{path}");
+        }
+
+        let sources = [
+            "src/foo.go",
+            "lib/foo.go",
+            "crates/foo/foo.go",
+            "internal/x/x.go",
+            "cmd/tool/main.go",
+            "pkg/y/y.go",
+            "src/components/Button.tsx",
+            "src/components/Button.ts",
+            "src/components/Button.js",
+            "src/components/Button.jsx",
+            "mypkg/core.py",
+            "app/models.py",
+            "packages/web/src/index.ts",
+            "src/lib.rs",
+            "contest.rs",
+            "src/contest.rs",
+            "latest.rs",
+        ];
+        for path in sources {
+            assert_eq!(category_of(path), 1, "{path}");
+        }
+        // `doc/` is still documentation. Reclassifying that package is out of scope.
+        assert_eq!(category_of("doc/api.go"), 3);
+    }
+
+    #[test]
+    fn testdata_and_fixtures_directories_are_tests() {
+        let tests = [
+            "testdata/input.txt",
+            "fixtures/sample.json",
+            "src/testdata/fixture.txt",
+            "pkg/fixtures/x.go",
+            "lib/fixtures/keep.ts",
+            "internal/x/testdata/input.json",
+        ];
+        for path in tests {
+            assert_eq!(category_of(path), 2, "{path}");
+        }
+        assert_eq!(category_of("src/keep.rs"), 1);
+        assert_eq!(category_of("docs/guide.md"), 3);
+    }
+
+    #[test]
+    fn new_lockfiles_are_category_5() {
+        let added = [
+            "uv.lock",
+            "Pipfile.lock",
+            "bun.lock",
+            "deno.lock",
+            "mix.lock",
+            "pubspec.lock",
+            "npm-shrinkwrap.json",
+            "Package.resolved",
+        ];
+        for name in added {
+            assert!(LOCKFILES.contains(&name), "{name} missing from LOCKFILES");
+            assert_eq!(category_of(name), 5, "{name}");
+            assert_eq!(category_of(&format!("pkg/{name}")), 5, "nested {name}");
+        }
+        for name in LOCKFILES {
+            assert_eq!(category_of(name), 5, "{name}");
+        }
+        // Category numbers stay as the code has them: 4 = CI, 5 = lock.
+        assert_eq!(category_of(".github/workflows/ci.yml"), 4);
+        assert_eq!(category_of("Dockerfile"), 4);
+        assert_eq!(category_of("src/lib.rs"), 1);
+    }
+
+    #[test]
+    fn new_manifests_are_category_0() {
+        // An empty path has no components and ranks as a plain file.
+        assert_eq!(category_of(""), 3);
+        let added = [
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "Package.swift",
+            "composer.json",
+            "deno.json",
+            "mix.exs",
+            "pubspec.yaml",
+            "flake.nix",
+            "requirements.txt",
+            "Pipfile",
+        ];
+        for name in added {
+            assert!(
+                ROOT_MANIFESTS.contains(&name),
+                "{name} missing from ROOT_MANIFESTS"
+            );
+            assert_eq!(category_of(name), 0, "{name}");
+        }
+        for name in ROOT_MANIFESTS {
+            assert_eq!(category_of(name), 0, "{name}");
+            assert!(
+                !LOCKFILES.contains(name),
+                "{name} is in both ROOT_MANIFESTS and LOCKFILES"
+            );
+        }
+        // Same extensions must not all become manifests.
+        assert_eq!(category_of("notes.txt"), 3);
+        assert_eq!(category_of("app.kts"), 1);
+        assert_eq!(category_of("App.swift"), 1);
+        assert_eq!(category_of("app.exs"), 1);
+        assert_eq!(category_of("other.xml"), 1);
+        // Basename matching at any depth is unchanged (not root-only).
+        assert_eq!(category_of("examples/demo/pyproject.toml"), 0);
+        assert_eq!(category_of("packages/web/package.json"), 0);
+        assert_eq!(category_of("docs/README.md"), 0);
+        assert_eq!(category_of("CHANGELOG.md"), 0);
     }
 }
