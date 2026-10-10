@@ -76,15 +76,15 @@ pub fn generate_markdown(
     if !filters.is_empty() {
         writeln!(
             head_buf,
-            "This document contains files from the `{}` directory with extensions: {}",
-            input_dir_name,
+            "This document contains files from the {} directory with extensions: {}",
+            crate::fences::inline_code(&input_dir_name),
             filters.join(", ")
         )?;
     } else {
         writeln!(
             head_buf,
-            "This document contains all files from the `{}` directory, optimized for LLM consumption.",
-            input_dir_name
+            "This document contains all files from the {} directory, optimized for LLM consumption.",
+            crate::fences::inline_code(&input_dir_name)
         )?;
     }
 
@@ -484,7 +484,11 @@ pub fn process_file_with_content_limit(
         .unwrap_or_else(|| "Unknown".to_string());
 
     writeln!(output)?;
-    writeln!(output, "### File: `{}`", relative_path.display())?;
+    writeln!(
+        output,
+        "### File: {}",
+        crate::fences::inline_code(&relative_path.display().to_string())
+    )?;
 
     writeln!(output)?;
 
@@ -1142,14 +1146,20 @@ fn transcode_file_content(file_path: &Path, encoding: &'static Encoding) -> io::
     Ok(decoded.into_owned())
 }
 
-/// Write text content with optional line numbers
-fn write_text_content(
+/// Write text content with optional line numbers.
+///
+/// The fence is at least three backticks and one longer than any backtick run
+/// in `content`, so an inner ` ``` ` line cannot close the block (CommonMark).
+pub(crate) fn write_text_content(
     output: &mut impl Write,
     content: &str,
     language: &str,
     line_numbers: bool,
 ) -> io::Result<()> {
-    writeln!(output, "```{}", language)?;
+    // Line-number prefixes contain no backticks, so the raw content's longest
+    // run is also the longest run of the bytes that land inside the fence.
+    let fence = crate::fences::backtick_fence(content);
+    writeln!(output, "{fence}{language}")?;
 
     if line_numbers {
         for (i, line) in content.lines().enumerate() {
@@ -1162,7 +1172,7 @@ fn write_text_content(
         }
     }
 
-    writeln!(output, "```")?;
+    writeln!(output, "{fence}")?;
     Ok(())
 }
 
@@ -2635,5 +2645,151 @@ mod tests {
             out.contains("big.rs") && out.contains("File content truncated"),
             "expected big.rs to be truncated in place, got:\n{out}"
         );
+    }
+
+    /// Opening fence after `header`, its info string, and the body up to the matching closer.
+    fn section_fence(doc: &str, header: &str) -> (String, String, String) {
+        let idx = doc
+            .find(header)
+            .unwrap_or_else(|| panic!("missing header {header} in:\n{doc}"));
+        let rest = &doc[idx + header.len()..];
+        let mut offset = 0;
+        for line in rest.split_inclusive('\n') {
+            let stripped = line.trim_end_matches(['\n', '\r']);
+            let ticks = stripped.bytes().take_while(|b| *b == b'`').count();
+            if ticks >= 3 && !stripped[ticks..].contains('`') {
+                let fence = "`".repeat(ticks);
+                let info = stripped[ticks..].to_string();
+                let after = &rest[offset + line.len()..];
+                let mut pos = 0;
+                for bline in after.split_inclusive('\n') {
+                    let bstripped = bline.trim_end_matches(['\n', '\r']);
+                    if bstripped == fence {
+                        return (fence, info, after[..pos].to_string());
+                    }
+                    pos += bline.len();
+                }
+                panic!("no closer for {header} in:\n{doc}");
+            }
+            offset += line.len();
+        }
+        panic!("no fence after {header} in:\n{doc}");
+    }
+
+    #[test]
+    fn nested_fences_are_longer_than_the_inner_run_and_preserve_content() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        let triple = "before\n```\nafter\n";
+        let quad = "before\n````\nafter\n";
+        let single = "let x = `a`;\n";
+        let no_nl = "see ``` here";
+
+        fs::write(base.join("triple.md"), triple).unwrap();
+        fs::write(base.join("quad.md"), quad).unwrap();
+        fs::write(base.join("single.rs"), single).unwrap();
+        fs::write(base.join("nonewline.md"), no_nl).unwrap();
+
+        let cases = [
+            ("triple.md", triple, "markdown", 3usize),
+            ("quad.md", quad, "markdown", 4),
+            ("single.rs", single, "rust", 1),
+            // Writer inserts the newline the closer needs; the file bytes are unchanged.
+            ("nonewline.md", no_nl, "markdown", 3),
+        ];
+
+        for (name, original, lang, run) in cases {
+            let mut output = Vec::new();
+            process_file(
+                base,
+                &base.join(name),
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+            let rendered = String::from_utf8(output).unwrap();
+            assert!(
+                crate::fences::unmatched_backtick_fence_len(&rendered).is_none(),
+                "unbalanced fences for {name}:\n{rendered}"
+            );
+
+            let header = format!("### File: `{name}`");
+            let (fence, info, body) = section_fence(&rendered, &header);
+            assert_eq!(info, lang, "{name}");
+            assert!(
+                fence.len() >= 3 && fence.len() == run.max(2) + 1,
+                "{name}: fence {fence} should be one longer than run {run}"
+            );
+            assert!(
+                fence.len() > crate::fences::longest_backtick_run(original),
+                "{name}"
+            );
+            let expected_body = if original.ends_with('\n') {
+                original.to_string()
+            } else {
+                format!("{original}\n")
+            };
+            assert_eq!(body, expected_body, "{name} content was not preserved");
+        }
+    }
+
+    #[test]
+    fn line_numbers_keep_a_fence_longer_than_inner_backticks() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        let original = "before\n```\nafter\n";
+        fs::write(base.join("triple.md"), original).unwrap();
+
+        let mut output = Vec::new();
+        process_file(
+            base,
+            &base.join("triple.md"),
+            &mut output,
+            true,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(crate::fences::unmatched_backtick_fence_len(&rendered).is_none());
+        let (fence, info, body) = section_fence(&rendered, "### File: `triple.md`");
+        assert_eq!(info, "markdown");
+        assert_eq!(fence.len(), 4);
+        assert!(body.contains("   2 | ```"));
+        assert!(body.contains("before"));
+        assert!(body.contains("after"));
+    }
+
+    #[test]
+    fn filename_with_backtick_uses_longer_inline_code() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("weird`name.py"), "print(1)\n").unwrap();
+        fs::write(base.join("`lead.txt"), "x\n").unwrap();
+
+        for (name, header) in [
+            ("weird`name.py", "### File: ``weird`name.py``"),
+            ("`lead.txt", "### File: `` `lead.txt ``"),
+        ] {
+            let mut output = Vec::new();
+            process_file(
+                base,
+                &base.join(name),
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+            let rendered = String::from_utf8(output).unwrap();
+            assert!(
+                rendered.contains(header),
+                "expected {header:?} in:\n{rendered}"
+            );
+            assert!(crate::fences::unmatched_backtick_fence_len(&rendered).is_none());
+        }
     }
 }

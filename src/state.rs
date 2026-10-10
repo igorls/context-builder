@@ -278,15 +278,24 @@ impl ChangeSummary {
         output.push_str("## Change Summary\n\n");
 
         for path in &self.added {
-            output.push_str(&format!("- Added: `{}`\n", path.display()));
+            output.push_str(&format!(
+                "- Added: {}\n",
+                crate::fences::inline_code(&path.display().to_string())
+            ));
         }
 
         for path in &self.removed {
-            output.push_str(&format!("- Removed: `{}`\n", path.display()));
+            output.push_str(&format!(
+                "- Removed: {}\n",
+                crate::fences::inline_code(&path.display().to_string())
+            ));
         }
 
         for path in &self.modified {
-            output.push_str(&format!("- Modified: `{}`\n", path.display()));
+            output.push_str(&format!(
+                "- Modified: {}\n",
+                crate::fences::inline_code(&path.display().to_string())
+            ));
         }
 
         output.push('\n');
@@ -410,6 +419,19 @@ mod tests {
         assert!(markdown.contains("- Added: `new.txt`"));
         assert!(markdown.contains("- Removed: `old.txt`"));
         assert!(markdown.contains("- Modified: `changed.txt`"));
+    }
+
+    #[test]
+    fn test_change_summary_backtick_path() {
+        let summary = ChangeSummary {
+            added: vec![PathBuf::from("weird`name.py")],
+            removed: vec![],
+            modified: vec![PathBuf::from("`lead.txt")],
+            total_changes: 2,
+        };
+        let markdown = summary.to_markdown();
+        assert!(markdown.contains("- Added: ``weird`name.py``"));
+        assert!(markdown.contains("- Modified: `` `lead.txt ``"));
     }
 
     #[test]
