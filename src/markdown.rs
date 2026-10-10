@@ -502,7 +502,7 @@ pub fn process_file_with_content_limit(
     // Enhanced binary file handling with encoding detection and transcoding
     match fs::File::open(file_path) {
         Ok(mut file) => {
-            let mut sniff = [0u8; 8192];
+            let mut sniff = [0u8; BINARY_SNIFF_LEN];
             let n = match file.read(&mut sniff) {
                 Ok(n) => n,
                 Err(e) => {
@@ -526,8 +526,21 @@ pub fn process_file_with_content_limit(
             };
             let slice = &sniff[..n];
 
+            // Classify from the sniff buffer before any encoding guess.
+            // Windows-1252 accepts every byte, so a PDF header or a single NUL
+            // used to be transcoded and written out as text (dogfood B2).
+            if is_binary_content(slice) {
+                warn!(
+                    "Detected binary file {} (null byte or binary signature). Skipping content.",
+                    relative_path.display()
+                );
+                write_binary_placeholder(output, metadata.len())?;
+                return Ok(());
+            }
+
             // Find a valid UTF-8 boundary by backtracking up to 3 bytes.
-            // If the sniff buffer cuts a multi-byte char (e.g., emoji at byte 8191),
+            // If the sniff buffer cuts a multi-byte char (e.g., an emoji in the
+            // last bytes),
             // from_utf8 would falsely classify the file as non-UTF-8.
             let check_len = if n == sniff.len() {
                 // Buffer is full — may have split a multi-byte char at the end
@@ -637,13 +650,7 @@ pub fn process_file_with_content_limit(
                 }
 
                 // Fallback to binary file placeholder
-                writeln!(output, "```text")?;
-                writeln!(
-                    output,
-                    "<Binary file or unsupported encoding: {} bytes>",
-                    metadata.len()
-                )?;
-                writeln!(output, "```")?;
+                write_binary_placeholder(output, metadata.len())?;
                 return Ok(());
             }
 
@@ -966,6 +973,115 @@ fn first_visibility_warning_for(ext: &str) -> bool {
     guard.insert(ext.to_string())
 }
 
+/// Bytes read from the start of a file when deciding text vs binary.
+const BINARY_SNIFF_LEN: usize = 8192;
+
+/// Write the placeholder used for binary files and undecodable encodings.
+fn write_binary_placeholder(output: &mut impl Write, len: u64) -> io::Result<()> {
+    writeln!(output, "```text")?;
+    writeln!(
+        output,
+        "<Binary file or unsupported encoding: {} bytes>",
+        len
+    )?;
+    writeln!(output, "```")?;
+    Ok(())
+}
+
+/// Whether the sniff buffer should be treated as binary.
+///
+/// A NUL byte means binary unless the buffer starts with a UTF-16 or UTF-32
+/// BOM (those encodings store ASCII as NUL-padded code units and are
+/// transcoded). Known binary signatures are binary even when the header is
+/// valid UTF-8 or Windows-1252, which is how PDF-based `.ai` files were
+/// emitted as text.
+pub(crate) fn is_binary_content(bytes: &[u8]) -> bool {
+    if bytes.is_empty() || has_utf16_or_utf32_bom(bytes) {
+        return false;
+    }
+    bytes.contains(&0) || has_binary_magic(bytes)
+}
+
+/// True when `bytes` begins with a UTF-16 or UTF-32 byte-order mark.
+///
+/// UTF-32LE (`FF FE 00 00`) shares its first two bytes with UTF-16LE, so the
+/// two-byte LE/BE marks cover it. UTF-32BE (`00 00 FE FF`) starts with NUL and
+/// has to be matched on its own, before the NUL rule runs.
+fn has_utf16_or_utf32_bom(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xFF, 0xFE])
+        || bytes.starts_with(&[0xFE, 0xFF])
+        || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+}
+
+/// True when `bytes` starts with a known binary file signature.
+///
+/// PDF, PNG, JPEG, GIF, ZIP (and docx/jar/xlsx), gzip, ELF, Mach-O, and
+/// WebAssembly. Also the other common containers whose headers decode as
+/// Windows-1252: bzip2, xz, zstd, 7z, RAR, WebP/WAV/AVI, ISO BMFF (`ftyp`),
+/// Ogg, FLAC, and WOFF/WOFF2.
+///
+/// PE/DOS is not matched on the bare `MZ` prefix. Those two letters start
+/// ordinary text ("MZ is a postal prefix"), and a real executable always
+/// has a NUL in the first 64 bytes of the DOS header, so the NUL rule
+/// already classifies it.
+///
+/// `OggS` and `fLaC` are kept as four-byte ASCII container magics. A UTF-8
+/// file whose first line is plain text starting with either tag is therefore
+/// binary. That trade-off is accepted: real prose does not begin with those
+/// tags, and omitting them would emit Ogg/FLAC headers as text.
+fn has_binary_magic(bytes: &[u8]) -> bool {
+    const SIGNATURES: &[&[u8]] = &[
+        b"%PDF",
+        b"\x89PNG\r\n\x1a\n",
+        b"\xFF\xD8\xFF",
+        b"GIF87a",
+        b"GIF89a",
+        b"PK\x03\x04",
+        b"PK\x05\x06",
+        b"PK\x07\x08",
+        b"\x1F\x8B",
+        b"\x7FELF",
+        b"\xFE\xED\xFA\xCE",
+        b"\xFE\xED\xFA\xCF",
+        b"\xCE\xFA\xED\xFE",
+        b"\xCF\xFA\xED\xFE",
+        b"\xCA\xFE\xBA\xBE",
+        b"\xBE\xBA\xFE\xCA",
+        b"\x00asm",
+        b"\xFD7zXZ\x00",
+        b"7z\xBC\xAF\x27\x1C",
+        b"Rar!\x1A\x07",
+        b"\x28\xB5\x2F\xFD",
+        // ASCII container tags. See the trade-off noted on this function.
+        b"OggS",
+        b"fLaC",
+        b"wOFF",
+        b"wOF2",
+    ];
+
+    if SIGNATURES.iter().any(|sig| bytes.starts_with(sig)) {
+        return true;
+    }
+
+    // bzip2: "BZh" plus a block-size digit 1-9.
+    if let [b'B', b'Z', b'h', level, ..] = bytes
+        && (b'1'..=b'9').contains(level)
+    {
+        return true;
+    }
+
+    // RIFF container with a media form type (WebP, WAV, AVI).
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") {
+        let form = &bytes[8..12];
+        if form == b"WEBP" || form == b"WAVE" || form == b"AVI " {
+            return true;
+        }
+    }
+
+    // ISO BMFF (MP4, MOV, HEIC): 4-byte box size, then "ftyp".
+    bytes.len() >= 8 && &bytes[4..8] == b"ftyp"
+}
+
 /// Detect text encoding using heuristics for common encodings
 fn detect_text_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
     // Try common encodings
@@ -1230,6 +1346,285 @@ mod tests {
             "expected at least opening and closing fences, got {}",
             fence_count
         );
+    }
+
+    /// Render `bytes` through `process_file` the way a normal run would.
+    fn render_bytes(filename: &str, bytes: &[u8]) -> String {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join(filename);
+        fs::write(&file_path, bytes).unwrap();
+
+        let mut output = Vec::new();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("detect"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+        String::from_utf8(output).expect("rendered markdown is UTF-8")
+    }
+
+    fn assert_binary_placeholder(content: &str, len: usize) {
+        assert!(
+            content.contains(&format!(
+                "<Binary file or unsupported encoding: {len} bytes>"
+            )),
+            "expected binary placeholder, got:\n{content}"
+        );
+        assert!(
+            !content.contains('\0'),
+            "binary placeholder output must not contain NUL bytes"
+        );
+    }
+
+    #[test]
+    fn test_multibyte_char_split_by_sniff_boundary_stays_text() {
+        // The 8 KiB sniff buffer can cut a multi-byte char; the file must still
+        // be classified as UTF-8 text, for 2-, 3- and 4-byte sequences, split
+        // at every offset and when the sequence ends exactly on the boundary.
+        for (ch, len) in [("é", 2usize), ("世", 3), ("🌍", 4)] {
+            for start in (8192 - len)..=8192 {
+                let mut text = "a".repeat(start);
+                text.push_str(ch);
+                text.push_str("\ntail marker\n");
+                let content = render_bytes("big.txt", text.as_bytes());
+                assert!(
+                    content.contains("tail marker") && !content.contains("Binary file"),
+                    "{ch} at {start} misclassified"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_pdf_header_is_binary() {
+        // PDF-based `.ai` from dogfood B2 (repro.sh case B4): `%PDF` header,
+        // the binary comment, and an object. No NUL in this prefix, and the
+        // high bytes are valid Windows-1252, so the old sniff wrote the body
+        // out as text.
+        let bytes = b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n1 0 obj <</Type/Catalog>> endobj\n";
+        let content = render_bytes("logo.ai", bytes);
+        assert_binary_placeholder(&content, bytes.len());
+        assert!(
+            !content.contains("%PDF") && !content.contains("Catalog"),
+            "PDF body must not be emitted as text:\n{content}"
+        );
+
+        // A header that is also valid UTF-8 used to take the text fast path.
+        let ascii = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n";
+        let content = render_bytes("ascii.pdf", ascii);
+        assert_binary_placeholder(&content, ascii.len());
+        assert!(
+            !content.contains("endobj"),
+            "ASCII PDF must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_png_header_is_binary() {
+        // Signature only — no NUL — so the old 5% control-character heuristic
+        // decoded it as UTF-16LE mojibake.
+        let bytes = b"\x89PNG\r\n\x1a\nIHDR";
+        let content = render_bytes("logo.png", bytes);
+        assert_binary_placeholder(&content, bytes.len());
+        assert!(
+            !content.contains("IHDR"),
+            "PNG payload must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_embedded_nul_without_bom_is_binary() {
+        // Exact dogfood case. A NUL with no UTF-16/32 BOM is binary, not
+        // UTF-16LE CJK mojibake and not Windows-1252 text.
+        let bytes = b"abc\0def";
+        let content = render_bytes("embedded-nul.bin", bytes);
+        assert_binary_placeholder(&content, bytes.len());
+        assert!(
+            !content.contains("def") && !content.contains('扡'),
+            "NUL payload must not be decoded as text:\n{content}"
+        );
+
+        // One NUL among enough ASCII to slip under the old 5% control-char
+        // threshold, which then transcoded the file as Windows-1252.
+        let mut sparse = vec![b'a'; 400];
+        sparse[200] = 0;
+        sparse.extend_from_slice(b"DROP_ME");
+        let content = render_bytes("sparse-nul.txt", &sparse);
+        assert_binary_placeholder(&content, sparse.len());
+        assert!(
+            !content.contains("DROP_ME"),
+            "sparse NUL file must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_utf16le_bom_still_transcoded_as_text() {
+        // BOM + "Hi". ASCII UTF-16LE contains NULs; those must not trip the
+        // binary rule, and detect-strategy transcoding must still run.
+        let bytes = [0xFF, 0xFE, b'H', 0x00, b'i', 0x00];
+        let content = render_bytes("utf16.txt", &bytes);
+        assert!(
+            content.contains("Hi"),
+            "UTF-16LE with BOM should transcode to text, got:\n{content}"
+        );
+        assert!(
+            !content.contains("<Binary file"),
+            "UTF-16LE with BOM must stay text, got:\n{content}"
+        );
+        assert!(content.contains("```txt"));
+    }
+
+    #[test]
+    fn test_latin1_text_still_transcoded() {
+        // "café au lait" in ISO-8859-1 / Windows-1252. No NUL, no signature.
+        let bytes = b"caf\xe9 au lait\n";
+        let content = render_bytes("latin1.txt", bytes);
+        assert!(
+            content.contains("café au lait"),
+            "Latin-1 text should be transcoded, got:\n{content}"
+        );
+        assert!(
+            !content.contains("<Binary file"),
+            "Latin-1 text must not be treated as binary, got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_binary_sniff_rules() {
+        assert!(!is_binary_content(b""));
+        assert!(!is_binary_content(b"fn main() {}\n"));
+        // Latin-1 é, and Windows-1252 smart quotes, are text.
+        assert!(!is_binary_content(b"caf\xe9"));
+        assert!(!is_binary_content(&[0x93, 0x48, 0x69, 0x94]));
+
+        // NUL without a UTF-16/32 BOM.
+        assert!(is_binary_content(b"abc\0def"));
+        assert!(is_binary_content(&[0xEF, 0xBB, 0xBF, b'a', 0x00]));
+
+        // UTF-16/32 BOMs legitimately contain NULs.
+        assert!(!is_binary_content(&[0xFF, 0xFE, b'A', 0x00]));
+        assert!(!is_binary_content(&[0xFE, 0xFF, 0x00, b'A']));
+        assert!(!is_binary_content(&[
+            0xFF, 0xFE, 0x00, 0x00, b'A', 0x00, 0x00, 0x00
+        ]));
+        assert!(!is_binary_content(&[
+            0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'A'
+        ]));
+
+        let signatures: &[&[u8]] = &[
+            b"%PDF-1.4\n",
+            b"\x89PNG\r\n\x1a\n",
+            b"\xFF\xD8\xFF\xE0",
+            b"GIF87a",
+            b"GIF89a",
+            b"PK\x03\x04",
+            b"PK\x05\x06",
+            b"PK\x07\x08",
+            b"\x1F\x8B\x08",
+            b"\x7FELF",
+            b"\xFE\xED\xFA\xCE",
+            b"\xFE\xED\xFA\xCF",
+            b"\xCE\xFA\xED\xFE",
+            b"\xCF\xFA\xED\xFE",
+            b"\xCA\xFE\xBA\xBE",
+            b"\xBE\xBA\xFE\xCA",
+            b"\x00asm",
+            b"\xFD7zXZ\x00",
+            b"7z\xBC\xAF\x27\x1C",
+            b"Rar!\x1A\x07",
+            b"\x28\xB5\x2F\xFD",
+            b"BZh9",
+            b"OggS",
+            b"fLaC",
+            b"wOFF",
+            b"wOF2",
+        ];
+        for sig in signatures {
+            assert!(
+                is_binary_content(sig),
+                "signature should be binary: {sig:?}"
+            );
+        }
+
+        // Size fields deliberately contain no NUL, so the form-type / ftyp
+        // check is what classifies these — not the NUL rule.
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&[0x10, 0x01, 0x02, 0x03]);
+        webp.extend_from_slice(b"WEBP");
+        assert!(is_binary_content(&webp));
+        assert!(has_binary_magic(b"\x00asm"));
+
+        let mut mp4 = vec![0x01, 0x02, 0x03, 0x04];
+        mp4.extend_from_slice(b"ftypmp42");
+        assert!(is_binary_content(&mp4));
+
+        // "BZh" alone is not bzip2; the block-size digit is required.
+        assert!(!is_binary_content(b"BZh"));
+        assert!(!is_binary_content(b"BZh0"));
+
+        // Bare "MZ" is text. A DOS/PE image is binary because of its NULs.
+        assert!(!is_binary_content(b"MZ is a postal prefix\n"));
+        assert!(!has_binary_magic(b"MZ"));
+        assert!(is_binary_content(&minimal_dos_pe_header()));
+    }
+
+    /// 64-byte DOS header with `e_lfanew` pointing at a following `PE\0\0`.
+    /// The stub is NUL-padded, as every real PE/DOS executable is.
+    fn minimal_dos_pe_header() -> Vec<u8> {
+        let mut header = vec![0u8; 64];
+        header[0] = b'M';
+        header[1] = b'Z';
+        header[0x3C] = 64; // e_lfanew
+        header.extend_from_slice(b"PE\0\0");
+        header
+    }
+
+    #[test]
+    fn test_mz_text_stays_text_and_pe_header_is_binary() {
+        let text = b"MZ is a postal prefix\n";
+        let content = render_bytes("postal.txt", text);
+        assert!(
+            content.contains("MZ is a postal prefix"),
+            "text starting with MZ must be kept, got:\n{content}"
+        );
+        assert!(
+            !content.contains("<Binary file"),
+            "text starting with MZ must not be a binary placeholder, got:\n{content}"
+        );
+
+        let header = minimal_dos_pe_header();
+        let content = render_bytes("program.exe", &header);
+        assert_binary_placeholder(&content, header.len());
+        assert!(
+            !content.contains("PE"),
+            "DOS/PE header must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_ogg_and_flac_ascii_prefixes_are_binary() {
+        // Documented trade-off: `OggS` and `fLaC` are container magics, so a
+        // UTF-8 file whose first line is plain text starting with either tag
+        // is binary. See `has_binary_magic`.
+        for (name, bytes) in [
+            ("note-ogg.txt", &b"OggS this line is plain UTF-8 text\n"[..]),
+            (
+                "note-flac.txt",
+                &b"fLaC this line is plain UTF-8 text\n"[..],
+            ),
+        ] {
+            let content = render_bytes(name, bytes);
+            assert_binary_placeholder(&content, bytes.len());
+            assert!(
+                !content.contains("plain UTF-8 text"),
+                "{name} must follow the OggS/fLaC signature rule, got:\n{content}"
+            );
+        }
     }
 
     #[test]

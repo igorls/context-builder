@@ -162,3 +162,53 @@ pub trait LanguageSupport: Send + Sync {
 
     fn find_truncation_point(&self, source: &str, max_bytes: usize) -> usize;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signature_kind_display_names() {
+        let names = [
+            (SignatureKind::Function, "function"),
+            (SignatureKind::Method, "method"),
+            (SignatureKind::Struct, "struct"),
+            (SignatureKind::Enum, "enum"),
+            (SignatureKind::Trait, "trait"),
+            (SignatureKind::Interface, "interface"),
+            (SignatureKind::Class, "class"),
+            (SignatureKind::Impl, "impl"),
+            (SignatureKind::Module, "module"),
+            (SignatureKind::Constant, "constant"),
+            (SignatureKind::TypeAlias, "type"),
+            (SignatureKind::Macro, "macro"),
+        ];
+        for (kind, name) in names {
+            assert_eq!(kind.to_string(), name);
+        }
+    }
+
+    #[test]
+    fn visibility_parses_case_insensitively_with_all_fallback() {
+        assert_eq!("Public".parse::<Visibility>().unwrap(), Visibility::Public);
+        assert_eq!(
+            "PRIVATE".parse::<Visibility>().unwrap(),
+            Visibility::Private
+        );
+        assert_eq!("anything".parse::<Visibility>().unwrap(), Visibility::All);
+    }
+
+    #[test]
+    fn signature_displays_its_full_text() {
+        let sig = Signature {
+            kind: SignatureKind::Function,
+            name: "f".into(),
+            params: None,
+            return_type: None,
+            visibility: Visibility::Public,
+            line_number: 1,
+            full_signature: "pub fn f()".into(),
+        };
+        assert_eq!(sig.to_string(), "pub fn f()");
+    }
+}

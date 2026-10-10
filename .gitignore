@@ -19,7 +19,21 @@ Thumbs.db
 *.log
 
 samples/
+
+# Generated context-builder markdown. Do not commit these.
+# - /output.md is the CLI default. /context.md is this repo's config base name.
+# - docs/*.md covers the configured output folder at depth 1 only
+#   (docs/context_YYYYMMDDHHMMSS.md). Hand-written files under docs/research/,
+#   docs/agent-harness/, and other subdirectories stay tracked.
+# - The unanchored pattern is the UTC-second suffix the tool appends:
+#   <stem>_YYYYMMDDHHMMSS.md, in any directory.
+# - docs/research/context-files/ is the old dump directory.
+/output.md
+/context.md
 docs/*.md
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].md
+docs/research/context-files/
+docs/research/babysitter_review_context.md
 
 .context-builder
 check_coverage.ps1
