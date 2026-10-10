@@ -234,6 +234,32 @@ mod tests {
     }
 
     #[test]
+    fn output_flag_value_source_distinguishes_explicit_from_default() {
+        use clap::CommandFactory;
+
+        // The resolver keys off this id. `-o output.md` must count as explicit
+        // even though the string equals the clap default.
+        let explicit = Args::command().get_matches_from(["context-builder", "-o", "wanted.md"]);
+        assert_eq!(
+            explicit.value_source("output"),
+            Some(clap::parser::ValueSource::CommandLine)
+        );
+
+        let explicit_default =
+            Args::command().get_matches_from(["context-builder", "-o", "output.md"]);
+        assert_eq!(
+            explicit_default.value_source("output"),
+            Some(clap::parser::ValueSource::CommandLine)
+        );
+
+        let omitted = Args::command().get_matches_from(["context-builder", "-d", "proj"]);
+        assert_eq!(
+            omitted.value_source("output"),
+            Some(clap::parser::ValueSource::DefaultValue)
+        );
+    }
+
+    #[test]
     fn filter_help_documents_ripgrep_types() {
         use clap::CommandFactory;
         // `--help` renders the long help, which carries the ripgrep-type note.

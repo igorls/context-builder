@@ -938,14 +938,19 @@ pub fn run() -> io::Result<()> {
     env_logger::init();
     // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
     // value-bearing flags were *explicitly* passed or left at their clap default.
-    // `--encoding o200k_base` carries the same value as the default, so the value
-    // alone can't reveal an intent to override a non-default config (see resolver).
+    // `--encoding o200k_base` and `-o output.md` carry the same value as the
+    // default, so the value alone can't reveal an intent to override a
+    // non-default config (see resolver).
     let matches = Args::command().get_matches();
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
         visibility: matches.value_source("visibility")
             == Some(clap::parser::ValueSource::CommandLine),
         encoding: matches.value_source("encoding") == Some(clap::parser::ValueSource::CommandLine),
+        // `-o output.md` carries the same string as the default, so the value
+        // alone can't tell an explicit path from an omitted flag. An explicit
+        // `-o` is used verbatim (no output_folder / timestamp rewrite).
+        output: matches.value_source("output") == Some(clap::parser::ValueSource::CommandLine),
     };
     let args = Args::from_arg_matches(&matches)
         .expect("arguments were already validated by get_matches()");
