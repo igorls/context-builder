@@ -223,7 +223,8 @@ pub fn collect_files_ext(
         "dist",        // Common build output
         "build",       // Common build output
         ".gradle",     // Gradle cache
-        ".cargo",      // Cargo registry cache
+                       // `.cargo` is deliberately not listed: it is hidden (skipped by default),
+                       // and with `--hidden` a project's `.cargo/config.toml` is real config.
     ];
     for dir in &default_ignores {
         // No slash in pattern → matches at any depth (not root-anchored)
@@ -907,5 +908,22 @@ mod tests {
             !hidden.iter().any(|p| p == ".git" || p.starts_with(".git/")),
             "VCS metadata must stay out with --hidden: {hidden:?}"
         );
+    }
+
+    #[test]
+    fn hidden_includes_cargo_config() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join(".cargo")).unwrap();
+        fs::write(base.join(".cargo/config.toml"), "[build]\n").unwrap();
+        fs::write(base.join("main.rs"), "fn main() {}").unwrap();
+
+        let hidden = to_rel_paths(collect_files_ext(base, &[], &[], &[], true).unwrap(), base);
+        assert!(
+            hidden.contains(&".cargo/config.toml".to_string()),
+            "{hidden:?}"
+        );
+        let visible = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(!visible.iter().any(|p| p.starts_with(".cargo")));
     }
 }

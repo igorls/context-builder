@@ -350,6 +350,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
+            // The `## Skipped` section is part of the generated report.
+            total_tokens += skipped_section_tokens(encoding, &skipped)?;
             let file_tokens: usize = files
                 .iter()
                 .map(|entry| {
@@ -672,6 +674,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 }
 
 /// Print context window overflow warnings with actionable recommendations.
+/// Tokens in the `## Skipped` section (zero when nothing was skipped).
+fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Result<usize> {
+    let mut buf = Vec::new();
+    content_filter::write_skipped_section(&mut buf, skipped)?;
+    Ok(estimate_tokens(encoding, &String::from_utf8_lossy(&buf)))
+}
+
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
 /// exceeds 128K tokens — beyond this size, context quality degrades
 /// significantly for most LLM use cases.
@@ -1209,6 +1218,18 @@ mod tests {
         }
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn skipped_section_counts_toward_token_estimate() {
+        let encoding = Encoding::default();
+        assert_eq!(skipped_section_tokens(encoding, &[]).unwrap(), 0);
+        let skipped = vec![SkippedFile {
+            path: "assets/logo.png".to_string(),
+            reason: content_filter::SkipReason::Asset,
+            detail: "image",
+        }];
+        assert!(skipped_section_tokens(encoding, &skipped).unwrap() > 0);
     }
 
     #[test]
