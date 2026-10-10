@@ -155,28 +155,16 @@ where
 /// The baseline is the **raw content** of the selected files (`ProjectState`
 /// stores each file's bytes via `read_to_string`; the diff compares those). The
 /// inputs that change that baseline are the file-selection options: `filter`,
-/// `ignore`, `max_file_size`, `hidden`, and `include_secrets`. Everything else
-/// is pure *rendering* — `line_numbers`, `signatures`, `structure`, `truncate`,
-/// `visibility`, `max_tokens`, `encoding`/`encoding_strategy`,
-/// `diff_context_lines`, `diff_only`, `timestamped_output`, `output_folder` —
-/// and does **not** affect the captured content. Such options are deliberately
-/// EXCLUDED: including them would reset the diff baseline whenever a user
-/// toggles one (e.g. adding `--signatures`), silently hiding real content
-/// changes on that run. (The project *path* is keyed separately in `cache.rs`,
-/// so it isn't part of this fingerprint.)
-/// only inputs that change that baseline are the file-selection options:
-/// `filter` and `ignore`. Everything else is pure *rendering* — `line_numbers`,
+/// `ignore`, `include_lockfiles`, `max_file_size`, `hidden`, and
+/// `include_secrets`. Everything else is pure *rendering* — `line_numbers`,
 /// `file_metadata`, `signatures`, `structure`, `truncate`, `visibility`,
 /// `max_tokens`, `encoding`/`encoding_strategy`, `diff_context_lines`,
-/// `diff_only`, `timestamped_output`, `output_folder` — and does **not** affect the captured
-/// `filter`, `ignore`, and `include_lockfiles`. Everything else is pure *rendering* — `line_numbers`,
-/// `signatures`, `structure`, `truncate`, `visibility`, `max_tokens`,
-/// `encoding`/`encoding_strategy`, `diff_context_lines`, `diff_only`,
-/// `timestamped_output`, `output_folder` — and does **not** affect the captured
-/// content. Such options are deliberately EXCLUDED: including them would reset
-/// the diff baseline whenever a user toggles one (e.g. adding `--signatures`),
-/// silently hiding real content changes on that run. (The project *path* is
-/// keyed separately in `cache.rs`, so it isn't part of this fingerprint.)
+/// `diff_only`, `timestamped_output`, `output_folder` — and does **not** affect
+/// the captured content. Such options are deliberately EXCLUDED: including them
+/// would reset the diff baseline whenever a user toggles one (e.g. adding
+/// `--signatures`), silently hiding real content changes on that run. (The
+/// project *path* is keyed separately in `cache.rs`, so it isn't part of this
+/// fingerprint.)
 pub(crate) fn config_fingerprint(config: &Config) -> String {
     let mut s = String::new();
     if let Some(ref filters) = config.filter {
@@ -202,8 +190,11 @@ pub(crate) fn config_fingerprint(config: &Config) -> String {
     } else {
         '0'
     });
-    // Only the opt-in changes the file set. The default (skip lockfiles)
-    // keeps the previous fingerprint so existing diff baselines stay valid.
+    // Selection version: bumped when the default file selection changes
+    // (v0.11: lockfiles skipped by default), so baselines cached under the
+    // previous default are not diffed against the new selection.
+    s.push_str("|sel2");
+    // The opt-in adds lockfiles to the file set; the default (skip) adds nothing.
     if config.include_lockfiles == Some(true) {
         s.push_str("|lockfiles");
     }
@@ -496,6 +487,13 @@ invalid_toml [
             config_fingerprint(&c),
             base_h,
             "include_lockfiles changes which files are captured, so it must change the fingerprint"
+        );
+        // The selection-version marker must make the default differ from the
+        // pre-v0.11 fingerprint (which was the hash of "|" for an empty config).
+        let legacy = format!("{:x}", xxhash_rust::xxh3::xxh3_64(b"|"));
+        assert_ne!(
+            base_h, legacy,
+            "default selection changed; baseline must reset"
         );
         let mut c = base.clone();
         c.include_lockfiles = Some(false);

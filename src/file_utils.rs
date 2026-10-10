@@ -191,6 +191,10 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
         // Build/CI infrastructure — useful context but not core source.
         ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
+        // A nested README stays with the rest of its directory rather than
+        // falling to the Markdown/docs category (`apps/web/README.md` sorts
+        // with `apps/web/package.json`, ahead of it via `directory_lead_rank`).
+        _ if !parents.is_empty() && is_readme_name(name) => 1,
         _ => category_from_name(name),
     }
 }
@@ -1813,6 +1817,10 @@ mod tests {
         assert_eq!(category_of("examples/demo/pyproject.toml"), 3);
         assert_eq!(category_of("packages/web/package.json"), 1);
         assert_eq!(category_of("docs/README.md"), 3);
+        // Nested READMEs outside docs-like dirs rank with their directory.
+        assert_eq!(category_of("apps/web/README.md"), 1);
+        assert_eq!(category_of("apps/web/package.json"), 1);
+        assert_eq!(category_of("apps/web/index.ts"), 1);
         assert_eq!(category_of("README.md"), 0);
     }
 
