@@ -122,7 +122,8 @@ context-builder -d /path/to/project -f rs,toml -i docs,assets -y -o context.md
 ```
 
 - `-f rs,toml` includes only Rust and TOML files
-- `-i docs,assets` excludes directories by name
+- `-i docs,assets` excludes both directories (comma-separated, same as repeated `-i`)
+- Patterns are gitignore-style: names (`docs`), paths (`crates/core`), and globs (`'*.lock'`, quoted so the shell does not expand them)
 
 ### 3. AST Signatures Mode (minimal tokens)
 
@@ -206,7 +207,7 @@ These behaviors require no configuration:
 | `-d <PATH>` | Input directory | **Always use absolute paths** for reliability |
 | `-o <FILE>` | Output path | Write to project `docs/` or `/tmp/` |
 | `-f <EXT>` | Filter by extension | Comma-separated: `-f rs,toml,md` |
-| `-i <NAME>` | Ignore dirs/files | Comma-separated: `-i tests,docs,assets` |
+| `-i <PATTERN>` | Ignore paths or gitignore globs | Comma-separated (`-i docs,assets`) or repeated (`-i '*.lock' -i crates/core`) |
 | `--max-tokens <N>` | Token budget cap | Use `100000` for most models, `200000` for Gemini |
 | `--token-count` | Dry-run token estimate | Run first to check if filtering is needed |
 | `-y` | Skip all prompts | **Use only with explicit, scoped project paths** |

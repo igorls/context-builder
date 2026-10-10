@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **`--ignore` accepts comma-separated values (B12)**
+  - `-i docs,assets` ignores both names, matching `--filter`. Repeated `-i` flags still append.
+  - `--help` and the README document that `--ignore` takes gitignore-style globs and paths (`*.lock`, `crates/core`). The help example no longer suggests `--ignore lock`, which matched nothing useful.
+  - The >128K-token warning suggests `--filter` extensions detected in that run instead of a hardcoded `--filter rs,toml`, and its `--ignore docs,assets` example is a command the flag actually honors.
 - **File inclusion**
   - `.gitignore` and `.ignore` files inside the `-d` tree apply even when that tree has no checkout. Ignore files above `-d` apply only when a `.git` directory or file exists at the walk root or an ancestor (a real repository, including worktrees). Otherwise parent ignore files are not read
   - Directories containing a `CACHEDIR.TAG` file are skipped. `target` is a default ignore only at the walk root (`/target`); a nested source directory such as `src/target/` is kept. Nested Cargo `target/` directories are still skipped via `CACHEDIR.TAG`
