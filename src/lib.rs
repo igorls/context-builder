@@ -738,33 +738,32 @@ fn is_suggestable_filter_ext(ext: &str) -> bool {
 /// Copy-pasteable commands for the >128K warning. Every flag here is one the
 /// CLI actually honors (`--ignore docs,assets` included).
 fn context_window_suggestions(paths: &[&Path]) -> Vec<String> {
-    let mut lines = vec![advice_line(
-        "--max-tokens 100000",
-        "Cap output to a token budget",
-    )];
-    if let Some(exts) = suggested_filter_exts(paths) {
-        lines.push(advice_line(
-            &format!("--filter {exts}"),
-            "Include only these file types",
-        ));
-    }
-    lines.push(advice_line(
-        "--ignore docs,assets",
-        "Exclude directories by name",
-    ));
-    lines.push(advice_line(
-        "--token-count",
-        "Preview size without generating",
-    ));
-    lines
+    let filter = suggested_filter_exts(paths).map(|exts| format!("--filter {exts}"));
+    let advice: [(Option<String>, &str); 4] = [
+        (
+            Some("--max-tokens 100000".into()),
+            "Cap output to a token budget",
+        ),
+        (filter, "Include only these file types"),
+        (
+            Some("--ignore docs,assets".into()),
+            "Exclude directories by name",
+        ),
+        (
+            Some("--token-count".into()),
+            "Preview size without generating",
+        ),
+    ];
+    advice
+        .into_iter()
+        .filter_map(|(flag, description)| flag.map(|flag| advice_line(&flag, description)))
+        .collect()
 }
 
+/// `flag` padded to a column, or followed by two spaces when it is too long.
 fn advice_line(flag: &str, description: &str) -> String {
-    if flag.len() >= 24 {
-        format!("{flag}  {description}")
-    } else {
-        format!("{flag:<24}{description}")
-    }
+    let pad = if flag.len() >= 24 { 2 } else { 24 - flag.len() };
+    format!("{flag}{}{description}", " ".repeat(pad))
 }
 
 /// Generate markdown document with diff annotations
@@ -1773,6 +1772,18 @@ mod tests {
             Path::new("d.go"),
         ];
         assert_eq!(suggested_filter_exts(&skipped).as_deref(), Some("go"));
+    }
+
+    #[test]
+    fn advice_line_pads_to_a_column_or_uses_two_spaces() {
+        assert_eq!(
+            advice_line("--token-count", "x"),
+            "--token-count           x"
+        );
+        assert_eq!(
+            advice_line("--filter go,md,something,long", "x"),
+            "--filter go,md,something,long  x"
+        );
     }
 
     #[test]
