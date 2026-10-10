@@ -3,7 +3,7 @@
 **Version reviewed**: context-builder v0.8.2
 **Date**: 2026-02-16
 **Models**: 6
-**Context file**: `deep_think_context_v3_full.md` (692KB, ~170K tokens)
+**Context file**: `deep_think_context_v3_full.md` (generated dump, removed from the repo; was 692KB, ~170K tokens)
 **Prompt**: `deep_think_prompt_v3_multimodel.md` (5-part structured review)
 
 ## Methodology
@@ -165,5 +165,5 @@ Sorted by combined priority and effort:
 
 ## Appendix B: Context & Prompt
 
-- **Context file**: [deep_think_context_v3_full.md](context-files/deep_think_context_v3_full.md) (692KB, ~170K tokens)
+- **Context file**: `deep_think_context_v3_full.md` (generated dump, removed from the repo; was 692KB, ~170K tokens)
 - **Prompt template**: [deep_think_prompt_v3_multimodel.md](prompts/deep_think_prompt_v3_multimodel.md)
