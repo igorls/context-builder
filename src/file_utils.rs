@@ -1299,6 +1299,8 @@ mod tests {
 
     #[test]
     fn new_manifests_are_category_0() {
+        // An empty path has no components and ranks as a plain file.
+        assert_eq!(category_of(""), 3);
         let added = [
             "pom.xml",
             "build.gradle",
