@@ -87,8 +87,8 @@ const TEST_DIR_NAMES: &[&str] = &[
 
 /// Source extensions for which a `test_*` basename is a test module.
 const SOURCE_EXTENSIONS: &[&str] = &[
-    "rs", "go", "py", "ts", "js", "java", "c", "cpp", "h", "hpp", "rb", "swift", "kt", "scala",
-    "ex", "exs", "zig", "hs",
+    "rs", "go", "py", "ts", "tsx", "js", "jsx", "java", "c", "cpp", "h", "hpp", "rb", "swift",
+    "kt", "scala", "ex", "exs", "zig", "hs",
 ];
 
 /// Build and CI filenames matched by exact basename.
@@ -1006,6 +1006,8 @@ mod tests {
             "src/foo_test.rs",
             "src/my_spec.rb",
             "test_main.rs",
+            "src/test_Button.tsx",
+            "src/test_widget.jsx",
         ];
         for path in tests {
             assert_eq!(category_of(path), 2, "{path}");
