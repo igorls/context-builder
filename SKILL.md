@@ -39,8 +39,8 @@ Verify: `context-builder --version` (expected: `0.10.0`)
 - **Review before sharing** — the output may contain API keys, secrets, or credentials embedded in source files; always review or use `.gitignore` patterns to exclude sensitive files
 
 **Built-in protections** (always active, no configuration needed):
-- Excludes `.git/`, `node_modules/`, and 19 other heavy/sensitive directories at any depth
-- Respects `.gitignore` rules when a `.git` directory is present
+- Excludes `.git/`, `node_modules/`, and 18 other heavy/sensitive directories at any depth. `target/` is excluded only at the walk root; nested cache directories are skipped when they contain a `CACHEDIR.TAG` file
+- Respects `.gitignore` inside the directory even when no `.git` is present. Ignore files above the directory apply only when a `.git` directory or file exists at the directory or an ancestor
 - Binary files are auto-detected and skipped via UTF-8 sniffing
 - Output file and cache directory are auto-excluded to prevent self-ingestion
 
@@ -122,7 +122,8 @@ context-builder -d /path/to/project -f rs,toml -i docs,assets -y -o context.md
 ```
 
 - `-f rs,toml` includes only Rust and TOML files
-- `-i docs,assets` excludes directories by name
+- `-i docs,assets` excludes both directories (comma-separated, same as repeated `-i`)
+- Patterns are gitignore-style: names (`docs`), paths (`crates/core`), and globs (`'*.lock'`, quoted so the shell does not expand them)
 
 ### 3. AST Signatures Mode (minimal tokens)
 
@@ -193,9 +194,9 @@ These behaviors require no configuration:
 
 | Feature | Behavior |
 |---------|----------|
-| **Auto-ignore** | `node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, and 12 more heavy dirs are excluded at any depth |
-| **Self-exclusion** | Output file, cache dir, and `context-builder.toml` are auto-excluded |
-| **.gitignore** | Respected automatically when `.git` directory exists |
+| **Auto-ignore** | `node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, and 13 more heavy dirs are excluded at any depth. `target` is excluded only at the project root. Directories containing a `CACHEDIR.TAG` file are skipped |
+| **Self-exclusion** | The resolved output path (not every file named `output.md`), earlier reports with this tool's header, the cache dir, and `context-builder.toml` are auto-excluded |
+| **.gitignore** | Files inside the directory are respected even when it is not a git checkout. Parent ignore files apply only when a `.git` directory or file exists at the directory or an ancestor |
 | **Binary detection** | Binary files are skipped via UTF-8 sniffing |
 | **Asset / size / secret skips** | Images (incl. SVG), fonts, media, archives, PDFs, compiled objects, wasm, weights, `*.min.js`, and `*.map` are omitted; files over 256 KiB are omitted (`--max-file-size 0` disables); `id_rsa`, `*.pem`, `credentials*.json`, `.env` (not `.env.example`) are omitted. See README "Default skips" |
 | **File ordering** | Config/docs first → source (entry points before helpers) → tests → build/CI → lockfiles |
@@ -207,7 +208,7 @@ These behaviors require no configuration:
 | `-d <PATH>` | Input directory | **Always use absolute paths** for reliability |
 | `-o <FILE>` | Output path | Write to project `docs/` or `/tmp/` |
 | `-f <EXT>` | Filter by extension | Comma-separated: `-f rs,toml,md` |
-| `-i <NAME>` | Ignore dirs/files | Comma-separated: `-i tests,docs,assets` |
+| `-i <PATTERN>` | Ignore paths or gitignore globs | Comma-separated (`-i docs,assets`) or repeated (`-i '*.lock' -i crates/core`) |
 | `--max-tokens <N>` | Token budget cap | Use `100000` for most models, `200000` for Gemini |
 | `--token-count` | Dry-run token estimate | Run first to check if filtering is needed |
 | `-y` | Skip all prompts | **Use only with explicit, scoped project paths** |

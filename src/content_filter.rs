@@ -434,7 +434,12 @@ pub fn write_skipped_section(out: &mut dyn Write, skipped: &[SkippedFile]) -> io
     }
     writeln!(out, "## Skipped\n")?;
     for item in skipped {
-        writeln!(out, "- `{}` — {}", item.path, item.reason.label())?;
+        writeln!(
+            out,
+            "- {} — {}",
+            crate::fences::inline_code(&item.path),
+            item.reason.label()
+        )?;
     }
     writeln!(out)?;
     Ok(())
@@ -1171,5 +1176,18 @@ mod tests {
         assert!(empty.is_empty());
         assert!(summary_line(&[]).is_none());
         assert!(report_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn skipped_list_uses_adaptive_inline_code_for_backticks() {
+        let skipped = vec![SkippedFile {
+            path: "weird`name.svg".into(),
+            reason: SkipReason::Asset,
+            detail: "image",
+        }];
+        let mut buf = Vec::new();
+        write_skipped_section(&mut buf, &skipped).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        assert!(text.contains("- ``weird`name.svg`` — asset\n"), "{text}");
     }
 }

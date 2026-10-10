@@ -20,9 +20,6 @@ use context_builder::{Prompter, run_with_args};
 struct TestPrompter;
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(true)
-    }
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(true)
     }
@@ -100,6 +97,7 @@ fn test_deterministic_output_multiple_runs() {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         },
         Config::default(),
         &prompter,
@@ -131,6 +129,7 @@ fn test_deterministic_output_multiple_runs() {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         },
         Config::default(),
         &prompter,
@@ -286,6 +285,7 @@ fn test_deterministic_file_tree_order() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -358,6 +358,7 @@ fn test_cache_collision_prevention() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -390,6 +391,7 @@ fn test_cache_collision_prevention() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -463,6 +465,7 @@ fn test_custom_ignores_performance() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -526,6 +529,7 @@ fn test_configuration_affects_cache_key() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let args2 = Args {
@@ -549,6 +553,7 @@ fn test_configuration_affects_cache_key() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -622,6 +627,7 @@ auto_diff = true
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;

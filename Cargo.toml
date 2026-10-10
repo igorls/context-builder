@@ -13,12 +13,18 @@ repository = "https://github.com/igorls/context-builder"
 license = "MIT"
 keywords = ["cli", "markdown", "documentation", "llm", "context"]
 categories = ["command-line-utilities", "development-tools"]
-# Keep the published crate lean: exclude the 16 MB test fixture, research dumps,
-# demo media, CI config, and packaging manifests — none are needed to build or
-# use the crate. (src, benches, scripts, tests, README, LICENSE, CHANGELOG stay.)
+# Keep the published crate lean. None of these are needed to build or use the
+# crate. (src, benches, scripts, tests, README, LICENSE, CHANGELOG stay.)
+# /docs covers docs/research (notes and any regenerated dumps) and demo media.
+# /.context-builder is the on-disk cache; listed here so it stays out of the
+# crate even when packaging outside a git checkout (gitignore already skips it).
+# /output.md and /context.md are generated output names, not project source.
 exclude = [
     "/test.md",
+    "/output.md",
+    "/context.md",
     "/docs",
+    "/.context-builder",
     "/winget",
     "/.github",
     "/.agent",
@@ -101,6 +107,10 @@ tree-sitter-all = [
 criterion = { version = "0.8.2", features = ["html_reports"] }
 pretty_assertions = "1.4.1"
 serial_test = "3.0"
+
+# PTY tests for the overwrite prompt (Unix only; the crate is unused on Windows).
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
 
 [[bench]]
 name = "context_bench"

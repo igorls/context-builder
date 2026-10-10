@@ -50,13 +50,13 @@ It's a command-line utility that recursively processes directories and creates c
   Processes thousands of files in seconds by leveraging all available CPU cores.
 
 - 🧠 **Smart & Efficient File Discovery:**
-  Respects `.gitignore` and custom ignore patterns out-of-the-box using optimized, parallel directory traversal. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) even without a `.git` directory.
+  Respects `.gitignore` and custom ignore patterns out-of-the-box. Ignore files inside the directory apply even when it is not a git checkout; ignore files in parent directories apply only when a `.git` directory or file exists at that directory or an ancestor. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) at any depth even without a `.git` directory. `target` is excluded only at the directory root, and any directory that contains a `CACHEDIR.TAG` file (such as Cargo's `target/`) is skipped.
 
 - 📊 **Relevance-Based File Ordering:**
   Files appear in LLM-optimized order: config & project docs first, then source code (entry points before helpers), tests, documentation, build/CI files, and lockfiles last. This helps LLMs build a mental model faster.
 
 - 💰 **Context Budgeting (`--max-tokens`):**
-  Cap token output to fit your model's context window. Warns when output exceeds 128K tokens with actionable suggestions.
+  Cap token output to fit your model's context window. When output exceeds about 128K tokens, a non-blocking warning is printed to stderr — nothing is asked.
 
 - 💾 **Memory-Efficient Streaming:**
   Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
@@ -144,11 +144,17 @@ context-builder -d /path/to/project -o documentation.md
 ### Advanced Options
 
 ```bash
-# Filter by file extensions (e.g., only Rust and TOML files)
+# Filter by ripgrep file type, not only an exact extension.
+# `toml` also matches Cargo.lock; `md` also matches .markdown and .mdx.
+# A leading '.' or '*.' is stripped and the value is lowercased, so
+# `-f .rs`, `-f '*.rs'`, and `-f RS` all mean `rs`.
 context-builder -f rs -f toml
 
-# Ignore specific folders/files by name
-context-builder -i target -i node_modules -i .git
+# Ignore paths or gitignore-style globs.
+# Comma-separated values and repeated flags both work.
+# A pattern can be a name (docs), a path (crates/core), or a glob (*.lock).
+# Quote globs so your shell does not expand them.
+context-builder -i docs,assets -i '*.lock' -i crates/core
 
 # Cap output to a token budget (prevents context overflow)
 context-builder --max-tokens 100000
@@ -162,10 +168,13 @@ context-builder --token-count
 # Add line numbers to all code blocks
 context-builder --line-numbers
 
+# Opt in to per-file Size and Modified lines (off by default)
+context-builder --file-metadata
+
 # Stream the document to stdout and pipe it straight into an LLM tool
 context-builder -f rs -o - | llm
 
-# Skip all confirmation prompts (auto-answer yes)
+# Overwrite an existing output file without asking (`-y` does not gate large runs)
 context-builder --yes
 
 # Output only diffs (requires auto-diff & timestamped output)
@@ -232,14 +241,19 @@ diff_only = false
 # Number of context lines to show around changes in diffs (default: 3)
 diff_context_lines = 5
 
-# File extensions to include
+# File types to include (ripgrep types: `toml` also matches Cargo.lock)
 filter = ["rs", "toml", "md"]
 
-# Folders or file names to ignore
-ignore = ["target", "node_modules", ".git"]
+# Paths or gitignore-style globs to ignore
+# (names like "docs", paths like "crates/core", globs like "*.lock")
+ignore = ["target", "node_modules", "*.lock", "crates/core"]
 
 # Add line numbers to code blocks
 line_numbers = true
+
+# Per-file Size and Modified lines under each file header (off by default).
+# They cost tokens and change the document whenever a file's mtime changes.
+file_metadata = false
 
 # Preview mode: only show file tree without generating output
 preview = false
@@ -252,7 +266,8 @@ token_count = false
 encoding = "o200k_base"
 
 
-# Automatically answer yes to all prompts
+# Overwrite an existing output file without asking.
+# The >100-file confirmation was removed in v0.11.0; this flag is still accepted.
 
 yes = false
 
@@ -298,13 +313,14 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 
 - `-d, --input <PATH>` - Directory path to process (default: current directory).
 - `-o, --output <FILE>` - Output file path (default: `output.md`). Use `-` to stream the document to **stdout** (e.g. `context-builder -o - | llm`); progress messages then go to stderr so the pipe stays clean.
-- `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
-- `-i, --ignore <NAME>` - Folder or file names to ignore (can be used multiple times).
+- `-f, --filter <EXT>` - File types to include (can be used multiple times). These are ripgrep file types, not exact extensions: `toml` also matches `Cargo.lock`, and `md` also matches `.markdown` and `.mdx`. A leading `.` or `*.` is stripped and the value is lowercased (`.rs`, `*.rs`, and `RS` all mean `rs`).
+- `-i, --ignore <PATTERN>` - Paths or gitignore-style globs to ignore. Use a comma-separated list (`-i docs,assets`) or repeat the flag (`-i '*.lock' -i crates/core`). A pattern can be a file or directory name (`docs`), a path relative to the project (`crates/core`), or a glob (`*.lock`). Quote globs so the shell does not expand them. Commas always separate patterns on the command line, so a pattern that contains a comma (e.g. `report,old.md`) must go in the `ignore = [...]` list of `context-builder.toml` instead.
 - `--max-tokens <N>` - Maximum token budget for the output. Files that exceed the remaining budget are truncated in place (per the `--truncate` mode); further files are omitted with a notice.
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
-- `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
+- `--file-metadata` - Include per-file `- Size:` and `- Modified:` lines under each file header. **Off by default** (breaking change in v0.11.0): those lines cost tokens and change the output whenever a file's modification time changes, even if the bytes did not. Set `file_metadata = true` in `context-builder.toml` for the same effect. An explicit `--file-metadata` overrides `file_metadata = false`.
+- `-y, --yes` - Overwrite an existing output file without asking. The confirmation that used to run before processing more than 100 files was removed in v0.11.0; `-y` is still accepted so existing scripts keep working, and it only affects the overwrite prompt.
 - `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
 - `--signatures` - Replace full file content with extracted function/class signatures *(requires tree-sitter)*.

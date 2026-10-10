@@ -21,9 +21,6 @@ use context_builder::{Prompter, run_with_args};
 struct TestPrompter;
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(true)
-    }
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(true)
     }
@@ -93,6 +90,7 @@ fn test_auto_diff_workflow_basic() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
     let prompter = TestPrompter;
 
@@ -256,6 +254,7 @@ fn test_auto_diff_added_and_removed_files() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -424,6 +423,7 @@ diff_only = true
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -576,6 +576,7 @@ fn test_cache_invalidation_on_config_change() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -735,6 +736,7 @@ fn test_concurrent_cache_access() {
                     max_file_size: "256K".to_string(),
                     hidden: false,
                     include_secrets: false,
+                    file_metadata: false,
                 };
 
                 let prompter = TestPrompter;
@@ -794,6 +796,7 @@ fn test_corrupted_cache_recovery() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = TestPrompter;
@@ -969,6 +972,7 @@ diff_only = true
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();

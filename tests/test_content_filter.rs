@@ -15,9 +15,6 @@ use context_builder::{Prompter, run_with_args};
 struct YesPrompter;
 
 impl Prompter for YesPrompter {
-    fn confirm_processing(&self, _: usize) -> std::io::Result<bool> {
-        Ok(true)
-    }
     fn confirm_overwrite(&self, _: &str) -> std::io::Result<bool> {
         Ok(true)
     }
@@ -53,6 +50,7 @@ fn args(input: &Path, output: &Path) -> Args {
         max_file_size: "256K".into(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     }
 }
 

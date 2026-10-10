@@ -2,7 +2,7 @@ use clap::{CommandFactory, FromArgMatches};
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 pub mod cache;
@@ -11,6 +11,7 @@ pub mod config;
 pub mod config_resolver;
 pub mod content_filter;
 pub mod diff;
+pub mod fences;
 pub mod file_utils;
 pub mod languages;
 pub mod markdown;
@@ -28,7 +29,7 @@ use content_filter::{ContentPolicy, SkippedFile};
 use diff::render_per_file_diffs;
 #[cfg(test)]
 use file_utils::collect_files;
-use file_utils::{collect_files_ext, confirm_overwrite, confirm_processing};
+use file_utils::{collect_files_ext, confirm_overwrite};
 use markdown::generate_markdown;
 use state::{ProjectState, StateComparison};
 use token_count::{Encoding, count_file_tokens, count_tree_tokens, estimate_tokens};
@@ -53,19 +54,105 @@ impl Default for DiffConfig {
 }
 
 pub trait Prompter {
-    fn confirm_processing(&self, file_count: usize) -> io::Result<bool>;
     fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool>;
 }
 
 pub struct DefaultPrompter;
 
 impl Prompter for DefaultPrompter {
-    fn confirm_processing(&self, file_count: usize) -> io::Result<bool> {
-        confirm_processing(file_count)
-    }
     fn confirm_overwrite(&self, file_path: &str) -> io::Result<bool> {
         confirm_overwrite(file_path)
     }
+}
+
+/// Ignore patterns for this run's output file, anchored to its path relative
+/// to `base_path`.
+///
+/// A bare basename such as `output.md` matches at every depth in the ignore
+/// crate, which hides a user's `docs/output.md`. Patterns here start with
+/// `/` so they match only the resolved output (and, when timestamped output
+/// is on, the sibling `stem_*.ext` family in that same directory).
+///
+/// Returns nothing when the output is stdout (`-`) or lives outside the tree.
+fn output_auto_ignores(base_path: &Path, output: &str, config: &Config) -> Vec<String> {
+    if output == "-" {
+        return Vec::new();
+    }
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            log::warn!("could not read the working directory to anchor the output ignore: {e}");
+            return Vec::new();
+        }
+    };
+    let abs_base = normalize_lexically(&join_absolute(&cwd, base_path));
+    let abs_output = normalize_lexically(&join_absolute(&cwd, Path::new(output)));
+    let Ok(rel_output) = abs_output.strip_prefix(&abs_base) else {
+        return Vec::new();
+    };
+    if rel_output.as_os_str().is_empty() {
+        return Vec::new();
+    }
+
+    let rel = rel_output.to_string_lossy().replace('\\', "/");
+    let mut patterns = vec![format!("/{rel}")];
+    if config.timestamped_output == Some(true)
+        && let Some(pattern) = timestamped_output_glob(rel_output, Path::new(output), config)
+    {
+        patterns.push(pattern);
+    }
+    patterns
+}
+
+/// Anchored glob covering timestamped siblings of the resolved output file
+/// (`/docs/context_*.md`, `/context_*.md`). The stem comes from
+/// `config.output` when set, matching the name before the timestamp suffix.
+fn timestamped_output_glob(
+    rel_output: &Path,
+    output_path: &Path,
+    config: &Config,
+) -> Option<String> {
+    let parent = rel_output.parent()?;
+    let stem = output_path.file_stem().and_then(|s| s.to_str())?;
+    let ext = output_path.extension().and_then(|s| s.to_str())?;
+    let base_stem = if let Some(ref cfg_output) = config.output {
+        Path::new(cfg_output)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(stem)
+            .to_string()
+    } else {
+        stem.to_string()
+    };
+    let parent_str = parent.to_string_lossy().replace('\\', "/");
+    if parent_str.is_empty() || parent_str == "." {
+        Some(format!("/{base_stem}_*.{ext}"))
+    } else {
+        Some(format!("/{parent_str}/{base_stem}_*.{ext}"))
+    }
+}
+
+fn join_absolute(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+/// Collapse `.` and `..` without touching the filesystem.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
@@ -143,7 +230,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !prompter.confirm_overwrite(&final_args.output)?
     {
         if !silent {
-            println!("Operation cancelled.");
+            eprintln!("Operation cancelled.");
         }
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -151,73 +238,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         ));
     }
 
-    // Compute auto-ignore patterns to exclude the tool's own output and cache
+    // Compute auto-ignore patterns to exclude the tool's own output and cache.
+    // The output pattern is anchored to the resolved path (see `output_auto_ignores`).
     let mut auto_ignores: Vec<String> = vec![".context-builder".to_string()];
-
-    // Exclude the resolved output file (or its timestamped glob pattern)
-    let output_path = Path::new(&final_args.output);
-    if let Ok(rel_output) = output_path.strip_prefix(base_path) {
-        // Output is inside the project — exclude it
-        if config.timestamped_output == Some(true) {
-            // Timestamped outputs: create a glob like "docs/context_*.md"
-            if let (Some(parent), Some(stem), Some(ext)) = (
-                rel_output.parent(),
-                output_path.file_stem().and_then(|s| s.to_str()),
-                output_path.extension().and_then(|s| s.to_str()),
-            ) {
-                // Strip the timestamp suffix to get the base stem
-                // Timestamped names look like "context_20260214175028.md"
-                // The stem from config is the part before the timestamp
-                let base_stem = if let Some(ref cfg_output) = config.output {
-                    Path::new(cfg_output)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(stem)
-                        .to_string()
-                } else {
-                    stem.to_string()
-                };
-                let glob = if parent == Path::new("") {
-                    format!("{}_*.{}", base_stem, ext)
-                } else {
-                    format!("{}/{}_*.{}", parent.display(), base_stem, ext)
-                };
-                auto_ignores.push(glob);
-            }
-        } else {
-            // Non-timestamped: exclude the exact output file
-            auto_ignores.push(rel_output.to_string_lossy().to_string());
-        }
-    } else {
-        // Output might be a relative path not under base_path — try using it directly
-        let output_str = final_args.output.clone();
-        if config.timestamped_output == Some(true) {
-            if let (Some(stem), Some(ext)) = (
-                output_path.file_stem().and_then(|s| s.to_str()),
-                output_path.extension().and_then(|s| s.to_str()),
-            ) {
-                let base_stem = if let Some(ref cfg_output) = config.output {
-                    Path::new(cfg_output)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(stem)
-                        .to_string()
-                } else {
-                    stem.to_string()
-                };
-                if let Some(parent) = output_path.parent() {
-                    let parent_str = parent.to_string_lossy();
-                    if parent_str.is_empty() || parent_str == "." {
-                        auto_ignores.push(format!("{}_*.{}", base_stem, ext));
-                    } else {
-                        auto_ignores.push(format!("{}/{}_*.{}", parent_str, base_stem, ext));
-                    }
-                }
-            }
-        } else {
-            auto_ignores.push(output_str);
-        }
-    }
+    auto_ignores.extend(output_auto_ignores(base_path, &final_args.output, &config));
 
     // Also exclude context output files within the output_folder (not the folder itself,
     // which would silently hide all user content in that directory)
@@ -239,6 +263,26 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     );
     let (files, skipped) = content_filter::partition(files, base_path, &policy);
     content_filter::report_skips(&skipped, silent);
+    // Nothing matched: warn on stderr so `-o -` pipes stay clean, and still
+    // write the (empty) document. Name the filters when any were given.
+    if !silent && files.is_empty() && skipped.is_empty() {
+        if final_args.filter.is_empty() {
+            eprintln!("Warning: No files matched; check .gitignore, --ignore, and --filter");
+        } else {
+            let quoted = final_args
+                .filter
+                .iter()
+                .map(|f| format!("'{f}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let noun = if final_args.filter.len() == 1 {
+                "filter"
+            } else {
+                "filters"
+            };
+            eprintln!("Warning: no files matched {noun} {quoted}.");
+        }
+    }
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
         eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
@@ -314,17 +358,19 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 structure: final_args.structure,
                 truncate: final_args.truncate.clone(),
                 visibility: final_args.visibility.clone(),
+                file_metadata: final_args.file_metadata,
             };
             let enc_strategy = config.encoding_strategy.as_deref();
             println!("\n# Token Count Estimation\n");
             let mut total_tokens = 0;
-            total_tokens += estimate_tokens(encoding, "# Directory Structure Report\n\n");
+            total_tokens +=
+                estimate_tokens(encoding, &format!("{}\n\n", markdown::REPORT_TITLE_LINE));
             if !final_args.filter.is_empty() {
                 total_tokens += estimate_tokens(
                     encoding,
                     &format!(
-                        "This document contains files from the `{}` directory with extensions: {} \n",
-                        final_args.input,
+                        "This document contains files from the {} directory with extensions: {} \n",
+                        fences::inline_code(&final_args.input),
                         final_args.filter.join(", ")
                     ),
                 );
@@ -332,8 +378,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 total_tokens += estimate_tokens(
                     encoding,
                     &format!(
-                        "This document contains all files from the `{}` directory, optimized for LLM consumption.\n",
-                        final_args.input
+                        "This document contains all files from the {} directory, optimized for LLM consumption.\n",
+                        fences::inline_code(&final_args.input)
                     ),
                 );
             }
@@ -346,7 +392,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     ),
                 );
             }
-            total_tokens += estimate_tokens(encoding, "Content hash: 0000000000000000\n\n");
+            total_tokens += estimate_tokens(
+                encoding,
+                &format!("{}0000000000000000\n\n", markdown::CONTENT_HASH_PREFIX),
+            );
             total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
@@ -373,20 +422,6 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         return Ok(());
     }
 
-    // In pipe mode (`-o -`) there is no interactive terminal to answer a prompt,
-    // and `confirm_processing` would `print!` to stdout — corrupting the piped
-    // document and blocking on stdin. Skip the >100-file confirmation and proceed,
-    // exactly as `--yes` would.
-    if !final_args.yes && !to_stdout && !prompter.confirm_processing(files.len())? {
-        if !silent {
-            println!("Operation cancelled.");
-        }
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "Operation cancelled by user",
-        ));
-    }
-
     // NOTE: config-driven flags (line_numbers, diff_only) are already merged
     // by config_resolver.rs with proper CLI-takes-precedence semantics.
     // Do NOT re-apply them here as that would silently overwrite CLI flags.
@@ -407,9 +442,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         // file. `filter`, `ignore`, `max_file_size`, `hidden`, and
         // `include_secrets` decide which files form the diff baseline. Rendering
         // options (signatures/structure/truncate/visibility/max_tokens/
-        // line_numbers/encoding) deliberately do NOT feed the fingerprint — they
+        // line_numbers/file_metadata/encoding) deliberately do NOT feed the fingerprint — they
         // don't change the captured raw content — so propagating them here would
-        // only risk spurious baseline resets (see `config_fingerprint`).
+        // only risk spurious baseline resets (see `config_fingerprint`). The per-file
+        // content hash stored in the cache is the file bytes only, so an mtime-only
+        // change is not a diff.
         let mut effective_config = config.clone();
         if !final_args.filter.is_empty() {
             effective_config.filter = Some(final_args.filter.clone());
@@ -526,6 +563,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             structure: final_args.structure,
             truncate: final_args.truncate.clone(),
             visibility: final_args.visibility.clone(),
+            file_metadata: final_args.file_metadata,
         };
 
         // 4. Generate markdown with diff annotations
@@ -551,14 +589,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 }
                 final_doc.truncate(truncate_at);
 
-                // Close any open markdown code fence to prevent LLMs from
-                // interpreting the truncation notice as part of a code block.
-                // Count unmatched ``` fences — if odd, we're inside a block.
-                let fence_count = final_doc.matches("\n```").count()
-                    + if final_doc.starts_with("```") { 1 } else { 0 };
-                if fence_count % 2 != 0 {
-                    final_doc.push_str("\n```\n");
-                }
+                // Close any open code fence so the truncation notice is not
+                // swallowed by the block. The closer matches the opening
+                // fence's length — a fixed ``` would not close a longer fence
+                // chosen because the file itself contains ```.
+                fences::close_unmatched_backtick_fence(&mut final_doc);
 
                 final_doc.push_str("\n---\n\n");
                 final_doc.push_str(&format!(
@@ -615,10 +650,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 );
             }
             println!("Processing time: {:.2?}", duration);
-
-            // Warn about context window overflow
-            let output_bytes = final_doc.len();
-            print_context_window_warning(output_bytes, final_args.max_tokens);
+        }
+        if !silent {
+            // Non-blocking. File count is not a cost proxy; this estimate is.
+            // Stderr so `-o -` stays a clean document.
+            print_context_window_warning(final_doc.len(), final_args.max_tokens, &files);
         }
         return Ok(());
     }
@@ -630,6 +666,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         structure: final_args.structure,
         truncate: final_args.truncate.clone(),
         visibility: final_args.visibility.clone(),
+        file_metadata: final_args.file_metadata,
     };
 
     // Graceful degradation: warn if tree-sitter flags are used without the feature
@@ -642,7 +679,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
     }
 
-    generate_markdown(
+    let output_bytes = generate_markdown(
         &final_args.output,
         &final_args.input,
         &final_args.filter,
@@ -662,12 +699,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent && !to_stdout {
         println!("Documentation created successfully: {}", final_args.output);
         println!("Processing time: {:.2?}", duration);
-
-        // Warn about context window overflow
-        let output_bytes = fs::metadata(&final_args.output)
-            .map(|m| m.len() as usize)
-            .unwrap_or(0);
-        print_context_window_warning(output_bytes, final_args.max_tokens);
+    }
+    if !silent {
+        // Non-blocking. File count is not a cost proxy; this estimate is.
+        // Stderr so `-o -` stays a clean document.
+        print_context_window_warning(output_bytes, final_args.max_tokens, &files);
     }
 
     Ok(())
@@ -684,10 +720,17 @@ fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Re
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
 /// exceeds 128K tokens — beyond this size, context quality degrades
 /// significantly for most LLM use cases.
-fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) {
+///
+/// Filter advice uses the extensions present in `files`.
+fn print_context_window_warning(
+    output_bytes: usize,
+    max_tokens: Option<usize>,
+    files: &[ignore::DirEntry],
+) {
     let estimated_tokens = output_bytes / 4;
 
-    println!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+    // Stderr only: this notice must never mix into a captured or piped document.
+    eprintln!("Estimated tokens: ~{}K", estimated_tokens / 1000);
 
     // If the user already set --max-tokens, they're managing their budget
     if max_tokens.is_some() {
@@ -700,6 +743,8 @@ fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) 
         return;
     }
 
+    let paths: Vec<&Path> = files.iter().map(|entry| entry.path()).collect();
+
     eprintln!();
     eprintln!(
         "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
@@ -707,11 +752,73 @@ fn print_context_window_warning(output_bytes: usize, max_tokens: Option<usize>) 
     );
     eprintln!("   Large contexts degrade response quality. Consider narrowing the scope:");
     eprintln!();
-    eprintln!("   • --max-tokens 100000    Cap output to a token budget");
-    eprintln!("   • --filter rs,toml       Include only specific file types");
-    eprintln!("   • --ignore docs,assets   Exclude directories by name");
-    eprintln!("   • --token-count          Preview size without generating");
+    for line in context_window_suggestions(&paths) {
+        eprintln!("   • {line}");
+    }
     eprintln!();
+}
+
+/// `--filter` extensions to suggest for this run: the most common extensions
+/// among `paths` (at most two), in a form `--filter` accepts.
+///
+/// Only extensions that are valid `ignore` file-type names are included, so
+/// the printed command does not panic on an unrecognized type. Ties break
+/// alphabetically so the suggestion is stable.
+fn suggested_filter_exts(paths: &[&Path]) -> Option<String> {
+    use std::collections::HashMap;
+
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    let exts = paths
+        .iter()
+        .filter_map(|path| path.extension().and_then(|ext| ext.to_str()))
+        .filter(|ext| is_suggestable_filter_ext(ext));
+    for ext in exts {
+        *counts.entry(ext).or_insert(0) += 1;
+    }
+    if counts.is_empty() {
+        return None;
+    }
+
+    let mut ranked: Vec<(&str, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let joined = ranked
+        .into_iter()
+        .take(2)
+        .map(|(ext, _)| ext)
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(joined)
+}
+
+/// File-type names `TypesBuilder::add` accepts: non-empty ASCII alphanumeric,
+/// and not the reserved name `all` (which selects every type).
+fn is_suggestable_filter_ext(ext: &str) -> bool {
+    ext != "all" && !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Copy-pasteable commands for the >128K warning. Every flag here is one the
+/// CLI actually honors (`--ignore docs,assets` included).
+fn context_window_suggestions(paths: &[&Path]) -> Vec<String> {
+    let mut lines: Vec<String> = ADVICE.iter().map(|(f, d)| advice_line(f, d)).collect();
+    if let Some(exts) = suggested_filter_exts(paths) {
+        lines.insert(1, advice_line(&format!("--filter {exts}"), FILTER_ADVICE));
+    }
+    lines
+}
+
+const FILTER_ADVICE: &str = "Include only these file types";
+
+/// The fixed suggestions; the `--filter` line is inserted after the first.
+const ADVICE: [(&str, &str); 3] = [
+    ("--max-tokens 100000", "Cap output to a token budget"),
+    ("--ignore docs,assets", "Exclude directories by name"),
+    ("--token-count", "Preview size without generating"),
+];
+
+/// `flag` padded to a column, or followed by two spaces when it is too long.
+fn advice_line(flag: &str, description: &str) -> String {
+    let pad = if flag.len() >= 24 { 2 } else { 24 - flag.len() };
+    format!("{flag}{}{description}", " ".repeat(pad))
 }
 
 /// Generate markdown document with diff annotations
@@ -729,7 +836,8 @@ fn generate_markdown_with_diff(
     let mut output = String::new();
 
     // Header
-    output.push_str("# Directory Structure Report\n\n");
+    output.push_str(markdown::REPORT_TITLE_LINE);
+    output.push_str("\n\n");
 
     // Basic project info
     output.push_str(&format!(
@@ -763,7 +871,10 @@ fn generate_markdown_with_diff(
             if diff_config.diff_only && !added_files.is_empty() {
                 output.push_str("## Added Files\n\n");
                 for added in added_files {
-                    output.push_str(&format!("### File: `{}`\n\n", added.path));
+                    output.push_str(&format!(
+                        "### File: {}\n\n",
+                        fences::inline_code(&added.path)
+                    ));
                     output.push_str("_Status: Added_\n\n");
                     // Reconstruct content from + lines.
                     let mut lines: Vec<String> = Vec::new();
@@ -777,18 +888,19 @@ fn generate_markdown_with_diff(
                             lines.push(rest.to_string());
                         }
                     }
-                    output.push_str("```text\n");
+                    let mut body = String::new();
                     if args.line_numbers {
                         for (idx, l) in lines.iter().enumerate() {
-                            output.push_str(&format!("{:>4} | {}\n", idx + 1, l));
+                            body.push_str(&format!("{:>4} | {}\n", idx + 1, l));
                         }
                     } else {
-                        for l in lines {
-                            output.push_str(&l);
-                            output.push('\n');
+                        for l in &lines {
+                            body.push_str(l);
+                            body.push('\n');
                         }
                     }
-                    output.push_str("```\n\n");
+                    output.push_str(&fences::fenced_block("text", &body));
+                    output.push('\n');
                 }
             }
 
@@ -827,9 +939,17 @@ fn generate_markdown_with_diff(
         // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
         for path in sorted_paths {
             if let Some(file_state) = current_state.files.get(path) {
-                output.push_str(&format!("### File: `{}`\n\n", path.display()));
-                output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-                output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+                output.push_str(&format!(
+                    "### File: {}\n\n",
+                    fences::inline_code(&path.display().to_string())
+                ));
+                // Same opt-in as the standard renderer. Off by default so an
+                // mtime-only change does not rewrite the document. The cache
+                // compares content hashes (file bytes), not mtime.
+                if args.file_metadata {
+                    output.push_str(&format!("- Size: {} bytes\n", file_state.size));
+                    output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+                }
 
                 // Determine language from file extension (canonical map —
                 // same fence language as the main rendering path)
@@ -841,20 +961,17 @@ fn generate_markdown_with_diff(
                     ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
 
                 if !signatures_only {
-                    output.push_str(&format!("```{}\n", language));
-
-                    if args.line_numbers {
-                        for (i, line) in file_state.content.lines().enumerate() {
-                            output.push_str(&format!("{:>4} | {}\n", i + 1, line));
-                        }
-                    } else {
-                        output.push_str(&file_state.content);
-                        if !file_state.content.ends_with('\n') {
-                            output.push('\n');
-                        }
-                    }
-
-                    output.push_str("```\n");
+                    // `output` is a String (`fmt::Write`); the shared writer speaks `io::Write`.
+                    let mut rendered = Vec::new();
+                    markdown::write_text_content(
+                        &mut rendered,
+                        &file_state.content,
+                        language,
+                        args.line_numbers,
+                    )?;
+                    let rendered = std::str::from_utf8(&rendered)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    output.push_str(rendered);
                 }
 
                 // Tree-sitter enrichment (same as standard path)
@@ -881,8 +998,9 @@ pub fn run() -> io::Result<()> {
     env_logger::init();
     // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
     // value-bearing flags were *explicitly* passed or left at their clap default.
-    // `--encoding o200k_base` carries the same value as the default, so the value
-    // alone can't reveal an intent to override a non-default config (see resolver).
+    // `--encoding o200k_base` and `-o output.md` carry the same value as the
+    // default, so the value alone can't reveal an intent to override a
+    // non-default config (see resolver).
     let matches = Args::command().get_matches();
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
@@ -891,6 +1009,10 @@ pub fn run() -> io::Result<()> {
         encoding: matches.value_source("encoding") == Some(clap::parser::ValueSource::CommandLine),
         max_file_size: matches.value_source("max_file_size")
             == Some(clap::parser::ValueSource::CommandLine),
+        // `-o output.md` carries the same string as the default, so the value
+        // alone can't tell an explicit path from an omitted flag. An explicit
+        // `-o` is used verbatim (no output_folder / timestamp rewrite).
+        output: matches.value_source("output") == Some(clap::parser::ValueSource::CommandLine),
     };
     let args = Args::from_arg_matches(&matches)
         .expect("arguments were already validated by get_matches()");
@@ -944,6 +1066,7 @@ pub fn run() -> io::Result<()> {
         filter: resolution.config.filter,
         ignore: resolution.config.ignore,
         line_numbers: resolution.config.line_numbers,
+        file_metadata: resolution.config.file_metadata,
         preview: resolution.config.preview,
         token_count: resolution.config.token_count,
         yes: resolution.config.yes,
@@ -1050,7 +1173,7 @@ diff_only = false
 # File extensions to include (no leading dot, e.g. "rs", "toml")
 filter = {}
 
-# File / directory names to ignore (exact name matches)
+# Paths or gitignore-style globs to ignore (names, paths like "crates/core", globs like "*.lock")
 ignore = ["docs", "target", ".git", "node_modules"]
 
 # Add line numbers to code blocks
@@ -1065,6 +1188,11 @@ line_numbers = false
 # Include likely-secret files (id_rsa, *.pem, .env, credentials*.json, …). Default: false
 # Dotfile secrets also need hidden = true.
 # include_secrets = false
+
+# Per-file Size and Modified lines under each file header.
+# Off by default: they cost tokens and change the document when mtime changes.
+# Set to true, or pass --file-metadata, to opt in.
+file_metadata = false
 "#,
         filter_string
     );
@@ -1088,27 +1216,60 @@ mod tests {
 
     // Mock prompter for testing
     struct MockPrompter {
-        confirm_processing_response: bool,
         confirm_overwrite_response: bool,
     }
 
     impl MockPrompter {
-        fn new(processing: bool, overwrite: bool) -> Self {
+        fn new(overwrite: bool) -> Self {
             Self {
-                confirm_processing_response: processing,
                 confirm_overwrite_response: overwrite,
             }
         }
     }
 
     impl Prompter for MockPrompter {
-        fn confirm_processing(&self, _file_count: usize) -> Result<bool> {
-            Ok(self.confirm_processing_response)
-        }
-
         fn confirm_overwrite(&self, _file_path: &str) -> Result<bool> {
             Ok(self.confirm_overwrite_response)
         }
+    }
+
+    /// Run the pipeline in-process on `dir` with the given CLI flags (no config file).
+    fn run_in_process(dir: &Path, extra: &[&str]) -> io::Result<()> {
+        use clap::Parser;
+        let mut argv = vec![
+            "context-builder".to_string(),
+            "-d".to_string(),
+            dir.to_string_lossy().into_owned(),
+        ];
+        argv.extend(extra.iter().map(|s| s.to_string()));
+        let args = Args::parse_from(argv);
+        run_with_args(args, Config::default(), &MockPrompter::new(true))
+    }
+
+    #[test]
+    fn empty_walk_and_unmatched_filters_still_succeed() {
+        let dir = tempdir().unwrap();
+        let out = dir.path().join("empty.md");
+        // Nothing to collect: warns on stderr and still writes the document.
+        run_in_process(dir.path(), &["-o", &out.to_string_lossy(), "-y"]).unwrap();
+        assert!(out.exists());
+
+        fs::write(dir.path().join("a.txt"), "a").unwrap();
+        for filters in [vec!["-f", "rs"], vec!["-f", "rs,go"]] {
+            let mut flags = vec!["-o", "unmatched.md", "-y"];
+            let out2 = dir.path().join("unmatched.md");
+            let out2 = out2.to_string_lossy().into_owned();
+            flags[1] = &out2;
+            flags.extend(filters);
+            run_in_process(dir.path(), &flags).unwrap();
+        }
+    }
+
+    #[test]
+    fn output_to_stdout_pipe_mode_succeeds() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "a").unwrap();
+        run_in_process(dir.path(), &["-o", "-"]).unwrap();
     }
 
     #[test]
@@ -1129,16 +1290,6 @@ mod tests {
         assert_eq!(config.context_lines, 5);
         assert!(config.enabled);
         assert!(config.diff_only);
-    }
-
-    #[test]
-    fn test_default_prompter() {
-        let prompter = DefaultPrompter;
-
-        // Test small file count (should not prompt)
-        let result = prompter.confirm_processing(50);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 
     #[test]
@@ -1164,9 +1315,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         let result = run_with_args(args, config, &prompter);
         assert!(result.is_err());
@@ -1204,9 +1356,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         // Set CB_SILENT to avoid console output during test
         unsafe {
@@ -1261,9 +1414,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1304,9 +1458,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1350,9 +1505,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, false); // Deny overwrite
+        let prompter = MockPrompter::new(false); // Deny overwrite
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1367,19 +1523,21 @@ mod tests {
     }
 
     #[test]
-    fn test_run_with_args_user_cancels_processing() {
+    fn test_run_with_args_many_files_does_not_prompt() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path();
+        let output_path = temp_dir.path().join("out.md");
 
-        // Create many test files to trigger processing confirmation
+        // More than 100 files used to ask for confirmation. It must proceed
+        // without `--yes` and without consulting a processing prompt.
         for i in 0..105 {
             fs::write(base_path.join(format!("file{}.txt", i)), "content").unwrap();
         }
 
         let args = Args {
             input: base_path.to_string_lossy().to_string(),
-            output: "test.md".to_string(),
-            filter: vec!["rs".to_string()],
+            output: output_path.to_string_lossy().to_string(),
+            filter: vec![],
             ignore: vec![],
             line_numbers: false,
             preview: false,
@@ -1397,9 +1555,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(false, true); // Deny processing
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1409,8 +1568,8 @@ mod tests {
             std::env::remove_var("CB_SILENT");
         }
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert!(result.is_ok(), "a large file set must not ask to continue");
+        assert!(output_path.exists(), "output should be written");
     }
 
     #[test]
@@ -1443,9 +1602,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1495,9 +1655,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1546,9 +1707,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1596,13 +1758,14 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
             diff_context_lines: Some(5),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1649,9 +1812,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1699,6 +1863,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig::default();
@@ -1718,6 +1883,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -1738,6 +1904,93 @@ mod tests {
     }
 
     #[test]
+    fn test_context_window_suggestions_follow_detected_extensions() {
+        let go = [
+            Path::new("cmd/root.go"),
+            Path::new("cmd/main.go"),
+            Path::new("README.md"),
+        ];
+        let lines = context_window_suggestions(&go);
+        let text = lines.join("\n");
+        assert!(
+            text.contains("--filter go,md"),
+            "a Go repo should be told to filter its own types, got:\n{text}"
+        );
+        assert!(text.contains("--ignore docs,assets"), "{text}");
+        assert!(text.contains("--max-tokens 100000"), "{text}");
+        assert!(text.contains("--token-count"), "{text}");
+        assert!(
+            !text.contains("rs,toml"),
+            "advice must not hardcode a Rust filter: {text}"
+        );
+        assert!(
+            !text.contains("--ignore lock"),
+            "advice must not suggest a no-op ignore: {text}"
+        );
+
+        let python = [
+            Path::new("src/app.py"),
+            Path::new("src/util.py"),
+            Path::new("tests/test_app.py"),
+        ];
+        let py_lines = context_window_suggestions(&python);
+        assert!(
+            py_lines.iter().any(|line| line.contains("--filter py")),
+            "{py_lines:?}"
+        );
+        assert!(
+            !py_lines.iter().any(|line| line.contains("rs,toml")),
+            "{py_lines:?}"
+        );
+
+        // Equal counts break ties alphabetically, so the suggestion is stable.
+        let tied = [Path::new("a.py"), Path::new("b.rs")];
+        assert_eq!(suggested_filter_exts(&tied).as_deref(), Some("py,rs"));
+
+        // Underscores and the reserved name `all` are not valid --filter type names.
+        let skipped = [
+            Path::new("vendor/lib.a_b"),
+            Path::new("secret.all"),
+            Path::new("c.go"),
+            Path::new("d.go"),
+        ];
+        assert_eq!(suggested_filter_exts(&skipped).as_deref(), Some("go"));
+    }
+
+    #[test]
+    fn advice_line_pads_to_a_column_or_uses_two_spaces() {
+        assert_eq!(
+            advice_line("--token-count", "x"),
+            "--token-count           x"
+        );
+        assert_eq!(
+            advice_line("--filter go,md,something,long", "x"),
+            "--filter go,md,something,long  x"
+        );
+    }
+
+    #[test]
+    fn test_context_window_suggestions_omit_filter_without_extensions() {
+        let paths = [Path::new("Makefile"), Path::new("LICENSE")];
+        let lines = context_window_suggestions(&paths);
+        assert!(
+            !lines.iter().any(|line| line.contains("--filter")),
+            "no extensions means no --filter command to suggest: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("--ignore docs,assets"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("--max-tokens 100000"))
+        );
+        assert!(lines.iter().any(|line| line.contains("--token-count")));
+    }
+
+    #[test]
     fn test_context_window_warning_under_limit() {
         let original = std::env::var("CB_SILENT");
         unsafe {
@@ -1745,7 +1998,7 @@ mod tests {
         }
 
         let output_bytes = 100_000;
-        print_context_window_warning(output_bytes * 4, None);
+        print_context_window_warning(output_bytes * 4, None, &[]);
 
         unsafe {
             std::env::remove_var("CB_SILENT");
@@ -1760,21 +2013,21 @@ mod tests {
     #[test]
     fn test_context_window_warning_over_limit() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, None);
+        print_context_window_warning(output_bytes * 4, None, &[]);
     }
 
     #[test]
     fn test_context_window_warning_with_max_tokens() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, Some(100_000));
+        print_context_window_warning(output_bytes * 4, Some(100_000), &[]);
     }
 
     #[test]
     fn test_print_context_window_warning_various_sizes() {
-        print_context_window_warning(50_000, None);
-        print_context_window_warning(200_000, None);
-        print_context_window_warning(500_000, None);
-        print_context_window_warning(1_000_000, None);
+        print_context_window_warning(50_000, None, &[]);
+        print_context_window_warning(200_000, None, &[]);
+        print_context_window_warning(500_000, None, &[]);
+        print_context_window_warning(1_000_000, None, &[]);
     }
 
     #[test]
@@ -1807,9 +2060,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1851,9 +2105,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1895,12 +2150,13 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1943,12 +2199,13 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -1979,6 +2236,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2020,12 +2278,13 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2069,12 +2328,13 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config {
             auto_diff: Some(true),
             ..Default::default()
         };
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2104,6 +2364,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2153,6 +2414,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2176,6 +2438,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let previous = state.clone();
@@ -2236,6 +2499,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2261,6 +2525,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -2377,7 +2642,7 @@ mod tests {
     #[test]
     fn test_print_context_window_warning_exact_limit() {
         let output_bytes = 128_000 * 4;
-        print_context_window_warning(output_bytes, None);
+        print_context_window_warning(output_bytes, None, &[]);
     }
 
     #[test]
@@ -2410,9 +2675,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2455,9 +2721,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2501,9 +2768,10 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config::default();
-        let prompter = MockPrompter::new(true, true);
+        let prompter = MockPrompter::new(true);
 
         unsafe {
             std::env::set_var("CB_SILENT", "1");
@@ -2545,6 +2813,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config1 = Config {
             auto_diff: Some(true),
@@ -2555,7 +2824,7 @@ mod tests {
         unsafe {
             std::env::set_var("CB_SILENT", "1");
         }
-        let _ = run_with_args(args1, config1.clone(), &MockPrompter::new(true, true));
+        let _ = run_with_args(args1, config1.clone(), &MockPrompter::new(true));
 
         let args2 = Args {
             input: base_path.to_string_lossy().to_string(),
@@ -2578,6 +2847,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config2 = Config {
             auto_diff: Some(true),
@@ -2585,7 +2855,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = run_with_args(args2, config2, &MockPrompter::new(true, true));
+        let result = run_with_args(args2, config2, &MockPrompter::new(true));
         unsafe {
             std::env::remove_var("CB_SILENT");
         }
@@ -2630,6 +2900,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2653,6 +2924,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -2708,6 +2980,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let diff_config = DiffConfig {
@@ -2731,6 +3004,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = generate_markdown_with_diff(
@@ -2747,5 +3021,187 @@ mod tests {
 
         let content = result.unwrap();
         assert!(content.contains("test.rs"));
+    }
+
+    fn section_fence(doc: &str, header: &str) -> (String, String, String) {
+        let idx = doc
+            .find(header)
+            .unwrap_or_else(|| panic!("missing header {header} in:\n{doc}"));
+        let rest = &doc[idx + header.len()..];
+        let mut offset = 0;
+        for line in rest.split_inclusive('\n') {
+            let stripped = line.trim_end_matches(['\n', '\r']);
+            let ticks = stripped.bytes().take_while(|b| *b == b'`').count();
+            if ticks >= 3 && !stripped[ticks..].contains('`') {
+                let fence = "`".repeat(ticks);
+                let info = stripped[ticks..].to_string();
+                let after = &rest[offset + line.len()..];
+                let mut pos = 0;
+                for bline in after.split_inclusive('\n') {
+                    let bstripped = bline.trim_end_matches(['\n', '\r']);
+                    if bstripped == fence {
+                        return (fence, info, after[..pos].to_string());
+                    }
+                    pos += bline.len();
+                }
+                panic!("no closer for {header} in:\n{doc}");
+            }
+            offset += line.len();
+        }
+        panic!("no fence after {header} in:\n{doc}");
+    }
+
+    #[test]
+    fn auto_diff_content_fence_outgrows_inner_backticks() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let triple = "before\n```\nafter\n";
+        let quad = "before\n````\nafter\n";
+        fs::write(base_path.join("triple.md"), triple).unwrap();
+        fs::write(base_path.join("quad.md"), quad).unwrap();
+        fs::write(base_path.join("weird`name.py"), "print(1)\n").unwrap();
+
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: false,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+            file_metadata: false,
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
+        };
+        let diff_config = DiffConfig::default();
+        let sorted_paths: Vec<PathBuf> = files
+            .iter()
+            .map(|e| {
+                e.path()
+                    .strip_prefix(base_path)
+                    .unwrap_or(e.path())
+                    .to_path_buf()
+            })
+            .collect();
+
+        let doc = generate_markdown_with_diff(
+            &state,
+            None,
+            &args,
+            &file_tree,
+            &diff_config,
+            &sorted_paths,
+            &markdown::TreeSitterConfig::default(),
+            &[],
+        )
+        .unwrap();
+
+        assert!(
+            fences::unmatched_backtick_fence_len(&doc).is_none(),
+            "{doc}"
+        );
+        assert!(doc.contains("### File: ``weird`name.py``"), "{doc}");
+
+        let (fence, info, body) = section_fence(&doc, "### File: `triple.md`");
+        assert_eq!(info, "markdown");
+        assert_eq!(fence.len(), 4);
+        assert_eq!(body, triple);
+
+        let (fence, info, body) = section_fence(&doc, "### File: `quad.md`");
+        assert_eq!(info, "markdown");
+        assert_eq!(fence.len(), 5);
+        assert_eq!(body, quad);
+    }
+
+    #[test]
+    fn auto_diff_added_file_fence_outgrows_inner_backticks() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path();
+        let files = collect_files(base_path, &[], &[], &[]).unwrap();
+        let file_tree = build_file_tree(&files, base_path);
+        let config = Config::default();
+        let state = ProjectState::from_files(&files, base_path, &config, false).unwrap();
+
+        let mut previous = std::collections::HashMap::new();
+        let mut current = std::collections::HashMap::new();
+        previous.insert("old.md".to_string(), "gone\n".to_string());
+        current.insert("README.md".to_string(), "before\n```\nafter\n".to_string());
+        let file_diffs = diff::diff_file_contents(&previous, &current, true, None);
+        let summary = state::ChangeSummary {
+            added: vec![PathBuf::from("README.md")],
+            removed: vec![PathBuf::from("old.md")],
+            modified: vec![],
+            total_changes: 2,
+        };
+        let comparison = StateComparison {
+            file_diffs,
+            summary,
+        };
+
+        let args = Args {
+            input: base_path.to_string_lossy().to_string(),
+            output: "test.md".to_string(),
+            filter: vec![],
+            ignore: vec![],
+            line_numbers: false,
+            preview: false,
+            token_count: false,
+            yes: true,
+            diff_only: true,
+            clear_cache: false,
+            encoding: "o200k_base".to_string(),
+            init: false,
+            max_tokens: None,
+            signatures: false,
+            structure: false,
+            truncate: "smart".to_string(),
+            visibility: "all".to_string(),
+            file_metadata: false,
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
+        };
+
+        let doc = generate_markdown_with_diff(
+            &state,
+            Some(&comparison),
+            &args,
+            &file_tree,
+            &DiffConfig {
+                context_lines: 3,
+                enabled: true,
+                diff_only: true,
+            },
+            &[],
+            &markdown::TreeSitterConfig::default(),
+            &[],
+        )
+        .unwrap();
+
+        assert!(
+            fences::unmatched_backtick_fence_len(&doc).is_none(),
+            "{doc}"
+        );
+        assert!(doc.contains("- Added: `README.md`"));
+        let (fence, info, body) = section_fence(&doc, "### File: `README.md`");
+        assert_eq!(info, "text");
+        assert_eq!(fence.len(), 4, "{doc}");
+        assert_eq!(body, "before\n```\nafter\n");
     }
 }

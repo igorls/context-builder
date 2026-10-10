@@ -233,19 +233,22 @@ impl FileState {
     /// Create a file state from a file path
     pub fn from_path(path: &Path) -> std::io::Result<Self> {
         use std::fs;
-        use std::io::ErrorKind;
 
         let metadata = fs::metadata(path)?;
 
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(e) if e.kind() == ErrorKind::InvalidData => {
-                // Handle binary files gracefully
-                log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
-                format!("<Binary file - {} bytes>", metadata.len())
-            }
-            Err(e) => return Err(e),
+        let bytes = fs::read(path)?;
+        // Same text-vs-binary decision as the main renderer (NUL bytes and
+        // known magic numbers), so auto-diff never snapshots binary data as text.
+        let sniff = &bytes[..bytes.len().min(8192)];
+        let text = if crate::markdown::is_binary_content(sniff) {
+            None
+        } else {
+            String::from_utf8(bytes).ok()
         };
+        let content = text.unwrap_or_else(|| {
+            log::warn!("Skipping binary file in auto-diff mode: {}", path.display());
+            format!("<Binary file - {} bytes>", metadata.len())
+        });
 
         // Compute content hash using stable xxh3
         let content_hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(content.as_bytes()));
@@ -275,15 +278,24 @@ impl ChangeSummary {
         output.push_str("## Change Summary\n\n");
 
         for path in &self.added {
-            output.push_str(&format!("- Added: `{}`\n", path.display()));
+            output.push_str(&format!(
+                "- Added: {}\n",
+                crate::fences::inline_code(&path.display().to_string())
+            ));
         }
 
         for path in &self.removed {
-            output.push_str(&format!("- Removed: `{}`\n", path.display()));
+            output.push_str(&format!(
+                "- Removed: {}\n",
+                crate::fences::inline_code(&path.display().to_string())
+            ));
         }
 
         for path in &self.modified {
-            output.push_str(&format!("- Modified: `{}`\n", path.display()));
+            output.push_str(&format!(
+                "- Modified: {}\n",
+                crate::fences::inline_code(&path.display().to_string())
+            ));
         }
 
         output.push('\n');
@@ -410,6 +422,19 @@ mod tests {
     }
 
     #[test]
+    fn test_change_summary_backtick_path() {
+        let summary = ChangeSummary {
+            added: vec![PathBuf::from("weird`name.py")],
+            removed: vec![],
+            modified: vec![PathBuf::from("`lead.txt")],
+            total_changes: 2,
+        };
+        let markdown = summary.to_markdown();
+        assert!(markdown.contains("- Added: ``weird`name.py``"));
+        assert!(markdown.contains("- Modified: `` `lead.txt ``"));
+    }
+
+    #[test]
     fn test_binary_file_handling() {
         let temp_dir = tempdir().unwrap();
         let binary_file = temp_dir.path().join("test.bin");
@@ -426,6 +451,31 @@ mod tests {
         assert!(file_state.content.contains("8 bytes"));
         assert_eq!(file_state.size, 8);
         assert!(!file_state.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_binary_magic_with_valid_utf8_header_is_placeholder() {
+        let temp_dir = tempdir().unwrap();
+        let pdf_like = temp_dir.path().join("doc.ai");
+        // Valid UTF-8 and no NUL, but a PDF signature.
+        fs::write(&pdf_like, b"%PDF-1.5\n%\xc3\xa9\xc3\xa9 stream data").unwrap();
+        let file_state = FileState::from_path(&pdf_like).unwrap();
+        assert!(file_state.content.contains("Binary file"));
+
+        // Not valid UTF-8 and no NUL or magic number: still not text.
+        let latin1 = temp_dir.path().join("latin1.txt");
+        fs::write(&latin1, [0xC3u8, 0x28, b'a']).unwrap();
+        assert!(
+            FileState::from_path(&latin1)
+                .unwrap()
+                .content
+                .contains("Binary file")
+        );
+
+        let text = temp_dir.path().join("note.txt");
+        fs::write(&text, "MZ is a postal prefix\n").unwrap();
+        let text_state = FileState::from_path(&text).unwrap();
+        assert_eq!(text_state.content, "MZ is a postal prefix\n");
     }
 
     #[test]
@@ -820,6 +870,50 @@ mod tests {
         let hash2 = ProjectState::compute_config_hash(&config2);
 
         assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn content_hash_and_diff_ignore_mtime() {
+        // The auto-diff cache compares `content_hash` (file bytes). An mtime-only
+        // change must not look like an edit, whether or not Size/Modified lines
+        // are rendered.
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        fs::write(&path, "same bytes").unwrap();
+        let first = FileState::from_path(&path).unwrap();
+
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(10_000);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let second = FileState::from_path(&path).unwrap();
+
+        assert_ne!(first.modified, second.modified);
+        assert_eq!(first.content, second.content);
+        assert_eq!(first.content_hash, second.content_hash);
+
+        let state_of = |file: FileState, timestamp: &str| ProjectState {
+            timestamp: timestamp.to_string(),
+            config_hash: "hash".to_string(),
+            files: BTreeMap::from([(PathBuf::from("test.txt"), file)]),
+            metadata: ProjectMetadata {
+                project_name: "test".to_string(),
+                file_count: 1,
+                filters: vec![],
+                ignores: vec![],
+                line_numbers: false,
+            },
+        };
+
+        let before = state_of(first, "t1");
+        let after = state_of(second, "t2");
+        assert!(!after.has_changes(&before));
+        let comparison = after.compare_with(&before, None);
+        assert!(!comparison.summary.has_changes());
+        assert!(comparison.summary.modified.is_empty());
     }
 
     // Helper function to create a mock DirEntry for testing

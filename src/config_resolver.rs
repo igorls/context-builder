@@ -19,6 +19,7 @@ pub struct ResolvedConfig {
     pub filter: Vec<String>,
     pub ignore: Vec<String>,
     pub line_numbers: bool,
+    pub file_metadata: bool,
     pub preview: bool,
     pub token_count: bool,
     pub yes: bool,
@@ -51,16 +52,18 @@ pub struct ConfigResolution {
 /// Which value-bearing CLI flags the user explicitly passed (as opposed to
 /// leaving at their clap default). These flags carry a default *value*, so the
 /// value alone can't tell us whether the user typed e.g. `--encoding o200k_base`
-/// to override a non-default config or simply omitted the flag. `run()` fills
-/// this from clap's `ValueSource`; `Default` (all `false`) means "treat the
-/// value as a default", which preserves the value-based precedence for callers
-/// (e.g. tests) that build `Args` directly.
+/// or `-o output.md` to override a non-default config or simply omitted the
+/// flag. `run()` fills this from clap's `ValueSource`; `Default` (all `false`)
+/// means "treat the value as a default", which preserves the value-based
+/// precedence for callers (e.g. tests) that build `Args` directly.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExplicitCli {
     pub truncate: bool,
     pub visibility: bool,
     pub encoding: bool,
     pub max_file_size: bool,
+    /// `-o` / `--output` was present on the command line.
+    pub output: bool,
 }
 
 /// Resolves final configuration by merging CLI arguments with config file values.
@@ -72,7 +75,10 @@ pub struct ExplicitCli {
 /// 3. CLI default values
 ///
 /// Special handling:
-/// - `output` field supports timestamping and output folder resolution
+/// - An explicit `-o` / `--output` (including `-` for stdout) is used verbatim.
+///   `output_folder` and `timestamped_output` apply only when `-o` was omitted.
+/// - A relative `output_folder` is resolved against the project root (`-d`),
+///   not the process working directory. An absolute `output_folder` is kept.
 /// - Boolean flags respect explicit CLI usage vs defaults
 /// - Arrays (filter, ignore) use CLI if non-empty, otherwise config file
 pub fn resolve_final_config(
@@ -84,8 +90,8 @@ pub fn resolve_final_config(
 
     // Start with CLI defaults, then apply config file, then explicit CLI overrides
     let final_config = if let Some(config) = config {
-        apply_config_to_args(&mut args, &config, &mut warnings);
-        resolve_output_path(&mut args, &config, &mut warnings);
+        apply_config_to_args(&mut args, &config, explicit, &mut warnings);
+        resolve_output_path(&mut args, &config, explicit, &mut warnings);
         config
     } else {
         Config::default()
@@ -101,6 +107,7 @@ pub fn resolve_final_config(
         filter: args.filter,
         ignore: args.ignore,
         line_numbers: args.line_numbers,
+        file_metadata: args.file_metadata,
         preview: args.preview,
         token_count: args.token_count,
         yes: args.yes,
@@ -173,9 +180,16 @@ fn resolve_max_file_size(
 }
 
 /// Apply configuration file values to CLI arguments based on precedence rules
-fn apply_config_to_args(args: &mut Args, config: &Config, warnings: &mut Vec<String>) {
-    // Output: only apply config if CLI is using default value
-    if args.output == "output.md"
+fn apply_config_to_args(
+    args: &mut Args,
+    config: &Config,
+    explicit: ExplicitCli,
+    warnings: &mut Vec<String>,
+) {
+    // Output name: config applies only when `-o` was omitted and the value is
+    // still the clap default. An explicit `-o output.md` stays `output.md`.
+    if !explicit.output
+        && args.output == "output.md"
         && let Some(ref output) = config.output
     {
         args.output = output.clone();
@@ -202,6 +216,15 @@ fn apply_config_to_args(args: &mut Args, config: &Config, warnings: &mut Vec<Str
         && let Some(line_numbers) = config.line_numbers
     {
         args.line_numbers = line_numbers;
+    }
+
+    // file_metadata: same boolean rule as line_numbers. `--file-metadata`
+    // (true) always wins; a config value applies only when the flag is omitted
+    // (the clap default is false, so it cannot express an explicit "off").
+    if !args.file_metadata
+        && let Some(file_metadata) = config.file_metadata
+    {
+        args.file_metadata = file_metadata;
     }
 
     if !args.preview
@@ -241,21 +264,34 @@ fn apply_config_to_args(args: &mut Args, config: &Config, warnings: &mut Vec<Str
     }
 }
 
-/// Resolve output path including timestamping and output folder logic
-fn resolve_output_path(args: &mut Args, config: &Config, warnings: &mut Vec<String>) {
-    // `-` means stdout: never fold in an output folder or a timestamp.
-    if args.output == "-" {
+/// Resolve output path including timestamping and output folder logic.
+///
+/// An explicit `-o` (and stdout `-`) is returned unchanged. `output_folder` and
+/// `timestamped_output` run only for the default output path. A relative
+/// `output_folder` is anchored at the project root (`args.input`, the `-d`
+/// directory the config was loaded from), so `cd /tmp && context-builder -d
+/// /repo` writes `/repo/docs/…` rather than `/tmp/docs/…`.
+fn resolve_output_path(
+    args: &mut Args,
+    config: &Config,
+    explicit: ExplicitCli,
+    warnings: &mut Vec<String>,
+) {
+    // `-` means stdout. An explicit `-o` path is used verbatim — do not fold in
+    // an output folder or a timestamp, and do not warn about a folder we are
+    // not going to use.
+    if args.output == "-" || explicit.output {
         return;
     }
 
-    let mut output_folder_path: Option<PathBuf> = None;
+    let project_root = Path::new(&args.input);
+    let anchored_folder = config
+        .output_folder
+        .as_ref()
+        .map(|folder| anchor_output_folder(folder, project_root));
 
-    // Apply output folder first
-    if let Some(ref output_folder) = config.output_folder {
-        let mut path = PathBuf::from(output_folder);
-        path.push(&args.output);
-        args.output = path.to_string_lossy().to_string();
-        output_folder_path = Some(PathBuf::from(output_folder));
+    if let Some(ref folder) = anchored_folder {
+        args.output = folder.join(&args.output).to_string_lossy().to_string();
     }
 
     // Apply timestamping if enabled
@@ -272,26 +308,37 @@ fn resolve_output_path(args: &mut Args, config: &Config, warnings: &mut Vec<Stri
 
         let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
 
-        if let Some(output_folder) = output_folder_path {
-            args.output = output_folder
-                .join(new_filename)
-                .to_string_lossy()
-                .to_string();
+        let new_output = if let Some(ref folder) = anchored_folder {
+            folder.join(new_filename).to_string_lossy().to_string()
         } else {
-            let new_path = path.with_file_name(new_filename);
-            args.output = new_path.to_string_lossy().to_string();
-        }
+            path.with_file_name(new_filename)
+                .to_string_lossy()
+                .to_string()
+        };
+        args.output = new_output;
     }
 
-    // Validate output folder exists if specified
-    if let Some(ref output_folder) = config.output_folder {
-        let folder_path = Path::new(output_folder);
-        if !folder_path.exists() {
-            warnings.push(format!(
-                "Output folder '{}' does not exist. It will be created if possible.",
-                output_folder
-            ));
-        }
+    // Validate output folder exists if specified (check the path we will write to)
+    if let Some(ref folder) = anchored_folder
+        && !folder.exists()
+    {
+        warnings.push(format!(
+            "Output folder '{}' does not exist. It will be created if possible.",
+            folder.display()
+        ));
+    }
+}
+
+/// Resolve `output_folder` against the project root.
+///
+/// Absolute folders are kept. Relative folders are joined onto `project_root`
+/// (the `-d` directory), not left for `File::create` to interpret against cwd.
+fn anchor_output_folder(output_folder: &str, project_root: &Path) -> PathBuf {
+    let folder = PathBuf::from(output_folder);
+    if folder.is_absolute() {
+        folder
+    } else {
+        project_root.join(folder)
     }
 }
 
@@ -322,6 +369,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let config = Config {
@@ -363,6 +411,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let config = Config {
@@ -370,6 +419,7 @@ mod tests {
             filter: Some(vec!["rs".to_string(), "toml".to_string()]),
             ignore: Some(vec!["target".to_string()]),
             line_numbers: Some(true),
+            file_metadata: Some(true),
             preview: Some(true),
             token_count: Some(true),
             yes: Some(true),
@@ -386,6 +436,7 @@ mod tests {
         );
         assert_eq!(resolution.config.ignore, vec!["target".to_string()]);
         assert!(resolution.config.line_numbers);
+        assert!(resolution.config.file_metadata);
         assert!(resolution.config.preview);
         assert!(resolution.config.token_count);
         assert!(resolution.config.yes);
@@ -415,6 +466,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let config = Config {
@@ -453,6 +505,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let config = Config {
@@ -462,8 +515,12 @@ mod tests {
 
         let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
-        assert!(resolution.config.output.contains("docs"));
-        assert!(resolution.config.output.ends_with("test.md"));
+        // Relative output_folder is anchored at the project root (`-d` / input),
+        // not left as a cwd-relative `docs/test.md`.
+        assert_eq!(
+            PathBuf::from(&resolution.config.output),
+            Path::new("src").join("docs").join("test.md")
+        );
     }
 
     #[test]
@@ -489,6 +546,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let config = Config {
@@ -499,9 +557,12 @@ mod tests {
 
         let resolution = resolve_final_config(args, Some(config), ExplicitCli::default());
 
-        assert!(resolution.config.output.contains("docs"));
-        assert!(resolution.config.output.contains("test_"));
-        assert!(resolution.config.output.ends_with(".md"));
+        let out = PathBuf::from(&resolution.config.output);
+        let expected_dir = Path::new("src").join("docs");
+        assert_eq!(out.parent(), Some(expected_dir.as_path()));
+        let name = out.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert!(name.starts_with("test_"), "{name}");
+        assert!(name.ends_with(".md"), "{name}");
     }
 
     #[test]
@@ -527,6 +588,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let config = Config {
@@ -563,6 +625,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let config = Config {
@@ -601,6 +664,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
 
         let resolution = resolve_final_config(args.clone(), None, ExplicitCli::default());
@@ -610,6 +674,8 @@ mod tests {
         assert_eq!(resolution.config.filter, args.filter);
         assert_eq!(resolution.config.ignore, args.ignore);
         assert_eq!(resolution.config.line_numbers, args.line_numbers);
+        assert_eq!(resolution.config.file_metadata, args.file_metadata);
+        assert!(!resolution.config.file_metadata);
         assert_eq!(resolution.config.preview, args.preview);
         assert_eq!(resolution.config.token_count, args.token_count);
         assert_eq!(resolution.config.yes, args.yes);
@@ -646,6 +712,7 @@ mod tests {
             max_file_size: "256K".to_string(),
             hidden: false,
             include_secrets: false,
+            file_metadata: false,
         };
         let config = Config {
             encoding: Some("cl100k_base".to_string()),
@@ -670,6 +737,7 @@ mod tests {
                 visibility: true,
                 encoding: true,
                 max_file_size: false,
+                output: false,
             },
         );
         assert_eq!(explicit.config.encoding, "o200k_base");
@@ -677,11 +745,10 @@ mod tests {
         assert_eq!(explicit.config.visibility, "all");
     }
 
-    #[test]
-    fn content_filter_config_precedence() {
-        let make_args = |size: &str, hidden: bool, secrets: bool| Args {
-            input: ".".to_string(),
-            output: "output.md".to_string(),
+    fn bare_args(input: &str, output: &str) -> Args {
+        Args {
+            input: input.to_string(),
+            output: output.to_string(),
             filter: vec![],
             ignore: vec![],
             line_numbers: false,
@@ -697,9 +764,176 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
-            max_file_size: size.to_string(),
-            hidden,
-            include_secrets: secrets,
+            max_file_size: "256K".to_string(),
+            hidden: false,
+            include_secrets: false,
+            file_metadata: false,
+        }
+    }
+
+    fn folder_and_timestamp_config() -> Config {
+        Config {
+            output: Some("context.md".to_string()),
+            output_folder: Some("docs".to_string()),
+            timestamped_output: Some(true),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn explicit_output_is_verbatim_absolute_and_relative() {
+        // B3: an explicit `-o` is not folded into output_folder or timestamped.
+        let project = std::env::temp_dir().join("cb-b3-project");
+        let wanted = std::env::temp_dir().join("wanted.md");
+        let config = folder_and_timestamp_config();
+
+        let absolute = resolve_final_config(
+            bare_args(&project.to_string_lossy(), &wanted.to_string_lossy()),
+            Some(config.clone()),
+            ExplicitCli {
+                output: true,
+                ..ExplicitCli::default()
+            },
+        );
+        assert_eq!(
+            PathBuf::from(&absolute.config.output),
+            wanted,
+            "absolute -o must be kept verbatim"
+        );
+        assert!(
+            absolute.warnings.is_empty(),
+            "unused output_folder must not warn: {:?}",
+            absolute.warnings
+        );
+
+        let relative = resolve_final_config(
+            bare_args(&project.to_string_lossy(), "rel-wanted.md"),
+            Some(config),
+            ExplicitCli {
+                output: true,
+                ..ExplicitCli::default()
+            },
+        );
+        assert_eq!(relative.config.output, "rel-wanted.md");
+        assert!(relative.warnings.is_empty());
+    }
+
+    #[test]
+    fn explicit_default_output_name_is_not_rewritten() {
+        // `-o output.md` carries the clap default string, but was typed by the
+        // user. Config output name, folder, and timestamp must not apply.
+        let resolution = resolve_final_config(
+            bare_args("proj", "output.md"),
+            Some(folder_and_timestamp_config()),
+            ExplicitCli {
+                output: true,
+                ..ExplicitCli::default()
+            },
+        );
+        assert_eq!(resolution.config.output, "output.md");
+        assert!(resolution.warnings.is_empty());
+    }
+
+    #[test]
+    fn explicit_stdout_stays_stdout_with_folder_and_timestamp() {
+        let resolution = resolve_final_config(
+            bare_args("proj", "-"),
+            Some(folder_and_timestamp_config()),
+            ExplicitCli {
+                output: true,
+                ..ExplicitCli::default()
+            },
+        );
+        assert_eq!(resolution.config.output, "-");
+    }
+
+    #[test]
+    fn omitted_output_anchors_folder_at_project_root() {
+        // B20: with no `-o`, relative output_folder is <project>/docs, and
+        // timestamped_output still renames the config output stem.
+        let project = std::env::temp_dir().join("cb-b20-project");
+        let resolution = resolve_final_config(
+            bare_args(&project.to_string_lossy(), "output.md"),
+            Some(folder_and_timestamp_config()),
+            ExplicitCli::default(),
+        );
+        let out = PathBuf::from(&resolution.config.output);
+        let expected_dir = project.join("docs");
+        assert_eq!(out.parent(), Some(expected_dir.as_path()));
+        let name = out.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert!(
+            name.starts_with("context_") && name.ends_with(".md"),
+            "{name}"
+        );
+        assert!(!name.contains("output.md"));
+    }
+
+    #[test]
+    fn absolute_output_folder_is_not_rerooted() {
+        let project = std::env::temp_dir().join("cb-b20-project");
+        let folder = std::env::temp_dir().join("cb-abs-out");
+        let config = Config {
+            output_folder: Some(folder.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let resolution = resolve_final_config(
+            bare_args(&project.to_string_lossy(), "output.md"),
+            Some(config),
+            ExplicitCli::default(),
+        );
+        assert_eq!(
+            PathBuf::from(&resolution.config.output),
+            folder.join("output.md")
+        );
+    }
+
+    #[test]
+    fn relative_project_root_anchors_output_folder() {
+        // `cd elsewhere && context-builder -d ../proj` (no `-o`).
+        let resolution = resolve_final_config(
+            bare_args("../proj", "output.md"),
+            Some(Config {
+                output_folder: Some("docs".to_string()),
+                ..Default::default()
+            }),
+            ExplicitCli::default(),
+        );
+        assert_eq!(
+            PathBuf::from(&resolution.config.output),
+            Path::new("../proj").join("docs").join("output.md")
+        );
+    }
+
+    #[test]
+    fn file_metadata_cli_overrides_config_false() {
+        // `--file-metadata` is an opt-in bool (default false). Passing it wins
+        // over `file_metadata = false`. Omitting it lets the config key apply.
+        let mut args = bare_args(".", "output.md");
+        args.file_metadata = true;
+        let config_off = Config {
+            file_metadata: Some(false),
+            ..Default::default()
+        };
+        let on = resolve_final_config(args.clone(), Some(config_off), ExplicitCli::default());
+        assert!(on.config.file_metadata);
+
+        args.file_metadata = false;
+        let config_on = Config {
+            file_metadata: Some(true),
+            ..Default::default()
+        };
+        let from_config = resolve_final_config(args, Some(config_on), ExplicitCli::default());
+        assert!(from_config.config.file_metadata);
+    }
+
+    #[test]
+    fn content_filter_config_precedence() {
+        let make_args = |size: &str, hidden: bool, secrets: bool| {
+            let mut args = bare_args(".", "output.md");
+            args.max_file_size = size.to_string();
+            args.hidden = hidden;
+            args.include_secrets = secrets;
+            args
         };
         let config = Config {
             max_file_size: Some("1M".to_string()),

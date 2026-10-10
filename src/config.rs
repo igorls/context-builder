@@ -19,6 +19,7 @@ use crate::content_filter::{self, DEFAULT_MAX_FILE_SIZE_BYTES};
 /// filter = ["rs", "toml"]
 /// ignore = ["target", ".git"]
 /// line_numbers = false
+/// file_metadata = false   # Per-file Size/Modified lines (off by default)
 /// diff_context_lines = 5
 /// # max_file_size = "256K"   # "0" disables; also accepts an integer byte count
 /// # hidden = false           # include dotfiles (not .git); secrets stay skipped
@@ -33,11 +34,17 @@ pub struct Config {
     /// File extensions to include (no leading dot, e.g. `rs`, `toml`)
     pub filter: Option<Vec<String>>,
 
-    /// File / directory names to ignore (exact name matches)
+    /// Paths or gitignore-style globs to ignore (names like `docs`, paths like
+    /// `crates/core`, globs like `*.lock`). Same patterns as `--ignore`.
     pub ignore: Option<Vec<String>>,
 
     /// Add line numbers to code blocks
     pub line_numbers: Option<bool>,
+
+    /// Emit per-file `- Size:` and `- Modified:` lines under each file header.
+    /// Off by default (`None` / `false`). `--file-metadata` on the CLI overrides
+    /// a config value of `false`; when the flag is omitted, this key applies.
+    pub file_metadata: Option<bool>,
 
     /// Preview only the file tree (no file output)
     pub preview: Option<bool>,
@@ -51,7 +58,10 @@ pub struct Config {
     /// If true, append a UTC timestamp to the output file name (before extension)
     pub timestamped_output: Option<bool>,
 
-    /// Assume "yes" for overwrite / processing confirmations
+    /// Assume "yes" for the overwrite prompt.
+    ///
+    /// Still accepted after the >100-file confirmation was removed in v0.11.0.
+    /// It does not change processing; there is no processing prompt to skip.
     pub yes: Option<bool>,
 
     /// Enable automatic diff generation (requires `timestamped_output = true`)
@@ -146,6 +156,15 @@ where
 /// toggles one (e.g. adding `--signatures`), silently hiding real content
 /// changes on that run. (The project *path* is keyed separately in `cache.rs`,
 /// so it isn't part of this fingerprint.)
+/// only inputs that change that baseline are the file-selection options:
+/// `filter` and `ignore`. Everything else is pure *rendering* — `line_numbers`,
+/// `file_metadata`, `signatures`, `structure`, `truncate`, `visibility`,
+/// `max_tokens`, `encoding`/`encoding_strategy`, `diff_context_lines`,
+/// `diff_only`, `timestamped_output`, `output_folder` — and does **not** affect the captured
+/// content. Such options are deliberately EXCLUDED: including them would reset
+/// the diff baseline whenever a user toggles one (e.g. adding `--signatures`),
+/// silently hiding real content changes on that run. (The project *path* is
+/// keyed separately in `cache.rs`, so it isn't part of this fingerprint.)
 pub(crate) fn config_fingerprint(config: &Config) -> String {
     let mut s = String::new();
     if let Some(ref filters) = config.filter {
@@ -374,6 +393,7 @@ invalid_toml [
         assert!(config.filter.is_none());
         assert!(config.ignore.is_none());
         assert!(config.line_numbers.is_none());
+        assert!(config.file_metadata.is_none());
         assert!(config.preview.is_none());
         assert!(config.token_count.is_none());
         assert!(config.output_folder.is_none());
@@ -457,6 +477,7 @@ invalid_toml [
         type Mutate = fn(&mut Config);
         let render_only: Vec<(&str, Mutate)> = vec![
             ("line_numbers", |c| c.line_numbers = Some(true)),
+            ("file_metadata", |c| c.file_metadata = Some(true)),
             ("signatures", |c| c.signatures = Some(true)),
             ("structure", |c| c.structure = Some(true)),
             ("truncate", |c| c.truncate = Some("byte".to_string())),

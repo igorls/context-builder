@@ -12,23 +12,15 @@ use context_builder::{Prompter, cli::Args, run_with_args};
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-        }
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -119,9 +111,10 @@ fn test_binary_files_dont_crash_autodiff() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // First run - should create initial state without crashing
     let result1 = run_with_args(args.clone(), config.clone(), &prompter);
@@ -206,9 +199,10 @@ fn test_mixed_text_and_binary_files_autodiff() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Initial run
     let result1 = run_with_args(args.clone(), config.clone(), &prompter);
@@ -277,9 +271,10 @@ fn test_large_binary_file_autodiff() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Should handle large binary files without memory issues or crashes
     let result = run_with_args(args, config, &prompter);

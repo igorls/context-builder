@@ -1,138 +1,226 @@
 use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
-use std::fs;
-use std::io::{self, Write};
+use std::fs::{self, File};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
+
+use crate::markdown::{CONTENT_HASH_PREFIX, REPORT_TITLE_LINE};
+
+/// Bytes of each file examined when looking for a previous context-builder
+/// report. The signature is the header (`REPORT_TITLE_LINE` plus a
+/// `CONTENT_HASH_PREFIX` line), which is written before the file tree.
+const CONTEXT_OUTPUT_PREFIX_LEN: usize = 8 * 1024;
+
+/// Cargo and other tools drop this file in cache directories (see
+/// <https://bford.info/cachedir/>). `target/` contains one.
+const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
+/// Basenames of generated dependency lockfiles (category 5).
+///
+/// A lockfile is a resolved dependency snapshot, such as `Cargo.lock`,
+/// `package-lock.json`, or `uv.lock`. It is not a project manifest
+/// ([`ROOT_MANIFESTS`]). Matched by exact basename at any depth.
+pub const LOCKFILES: &[&str] = &[
+    "Cargo.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Gemfile.lock",
+    "poetry.lock",
+    "composer.lock",
+    "go.sum",
+    "bun.lockb",
+    "flake.lock",
+    "uv.lock",
+    "Pipfile.lock",
+    "bun.lock",
+    "deno.lock",
+    "mix.lock",
+    "pubspec.lock",
+    "npm-shrinkwrap.json",
+    "Package.resolved",
+];
+
+/// Basenames of root project manifests (category 0).
+///
+/// A manifest defines a project or package: metadata, dependency
+/// declarations, and the build entry. Examples: `Cargo.toml`, `package.json`,
+/// `pyproject.toml`, `pom.xml`. Not lockfiles ([`LOCKFILES`]), READMEs,
+/// changelogs, or tool-only config. Matched by exact basename at any depth.
+pub const ROOT_MANIFESTS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "tsconfig.json",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "go.mod",
+    "Gemfile",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Package.swift",
+    "composer.json",
+    "deno.json",
+    "mix.exs",
+    "pubspec.yaml",
+    "flake.nix",
+    "requirements.txt",
+    "Pipfile",
+];
+
+/// Tool config and key project docs that stay category 0, but are not manifests.
+const PRIORITY_CONFIG_AND_DOCS: &[&str] = &[
+    "context-builder.toml",
+    ".gitignore",
+    "README.md",
+    "README",
+    "README.txt",
+    "README.rst",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "COPILOT.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+];
+
+/// Directory names that mark tests or benchmarks, at any depth.
+const TEST_DIR_NAMES: &[&str] = &[
+    "tests",
+    "test",
+    "spec",
+    "__tests__",
+    "benches",
+    "benchmarks",
+    "testdata",
+    "fixtures",
+];
+
+/// Source extensions for which a `test_*` basename is a test module.
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "go", "py", "ts", "tsx", "js", "jsx", "java", "c", "cpp", "h", "hpp", "rb", "swift",
+    "kt", "scala", "ex", "exs", "zig", "hs",
+];
+
+/// Build and CI filenames matched by exact basename.
+///
+/// `CMakeLists.txt` is included even though it has a `.txt` extension, so the
+/// extension fallback cannot classify it as prose. `justfile` is matched
+/// separately and case-insensitively.
+const BUILD_FILE_NAMES: &[&str] = &[
+    "Makefile",
+    "CMakeLists.txt",
+    "Dockerfile",
+    "Containerfile",
+    "Taskfile",
+    "Rakefile",
+    "Vagrantfile",
+];
+
+/// Test-module filename suffixes, matched against the basename at any depth.
+const TEST_FILE_SUFFIXES: &[&str] = &[
+    "_test.rs",
+    "_test.go",
+    "_test.py",
+    "_spec.rb",
+    ".test.ts",
+    ".test.tsx",
+    ".test.js",
+    ".test.jsx",
+    ".spec.ts",
+    ".spec.tsx",
+    ".spec.js",
+    ".spec.jsx",
+];
 
 /// Returns a numeric category for file relevance ordering.
 /// Lower numbers appear first in output. Categories:
 /// 0 = Project config + key docs (Cargo.toml, README.md, AGENTS.md, etc.)
 /// 1 = Source code (src/, lib/) — entry points sorted first within category
-/// 2 = Tests and benchmarks (tests/, benches/, test/, spec/)
+/// 2 = Tests and benchmarks (tests/, benches/, test/, spec/, testdata/, fixtures/)
 /// 3 = Documentation, scripts, and everything else
-/// 4 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
-/// 5 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
+/// 4 = Build/CI infrastructure (.github/, .circleci/, Dockerfile, etc.)
+/// 5 = Generated/lock files (Cargo.lock, package-lock.json, etc.)
 fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
-    let relative = path.strip_prefix(base_path).unwrap_or(path);
-    let rel_str = relative.to_string_lossy();
+    let rel = normalized_relative(path, base_path);
+    let parts: Vec<&str> = rel.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        return 3;
+    }
+    let name = parts[parts.len() - 1];
+    let parents = &parts[..parts.len() - 1];
+    let first = parts[0];
 
-    // Check filename for lockfiles first — these are lowest priority
-    if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
-        let lockfile_names = [
-            "Cargo.lock",
-            "package-lock.json",
-            "yarn.lock",
-            "pnpm-lock.yaml",
-            "Gemfile.lock",
-            "poetry.lock",
-            "composer.lock",
-            "go.sum",
-            "bun.lockb",
-            "flake.lock",
-        ];
-        if lockfile_names.contains(&name) {
-            return 5;
-        }
-
-        // Check for config/manifest files + key project docs — highest priority
-        let config_names = [
-            // Package manifests
-            "Cargo.toml",
-            "package.json",
-            "tsconfig.json",
-            "pyproject.toml",
-            "setup.py",
-            "setup.cfg",
-            "go.mod",
-            "Gemfile",
-            // Tool config
-            "context-builder.toml",
-            ".gitignore",
-            // Key project documentation (LLMs need these for context)
-            "README.md",
-            "README",
-            "README.txt",
-            "README.rst",
-            "AGENTS.md",
-            "CLAUDE.md",
-            "GEMINI.md",
-            "COPILOT.md",
-            "CONTRIBUTING.md",
-            "CHANGELOG.md",
-        ];
-        if config_names.contains(&name) {
-            return 0;
-        }
+    // Lockfiles outrank every other basename match, including manifests.
+    if LOCKFILES.contains(&name) {
+        return 5;
+    }
+    if ROOT_MANIFESTS.contains(&name) || PRIORITY_CONFIG_AND_DOCS.contains(&name) {
+        return 0;
+    }
+    // Test markers win over source-root classification (`src/foo_test.go` is a
+    // test, not source) and over the docs/extension fallback.
+    if is_test_path(parents, name) {
+        return 2;
     }
 
-    // Check path prefix for category
-    let first_component = relative
-        .components()
-        .next()
-        .and_then(|c| c.as_os_str().to_str())
-        .unwrap_or("");
-
-    match first_component {
-        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => {
-            // Check sub-components for test directories within source trees.
-            // e.g., src/tests/auth.rs should be cat 2 (tests), not cat 1 (source).
-            let sub_path = rel_str.as_ref();
-            if sub_path.contains("/tests/")
-                || sub_path.contains("/test/")
-                || sub_path.contains("/spec/")
-                || sub_path.contains("/__tests__/")
-                || sub_path.contains("/benches/")
-                || sub_path.contains("/benchmarks/")
-            {
-                2
-            } else {
-                1
-            }
-        }
-        "tests" | "test" | "spec" | "benches" | "benchmarks" | "__tests__" => 2,
+    match first {
+        "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
-        // Build/CI infrastructure — useful context but not core source
+        // Build/CI infrastructure — useful context but not core source.
         ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
-        _ => {
-            // Check extensions for additional heuristics
-            if let Some(ext) = relative.extension().and_then(|e| e.to_str()) {
-                match ext {
-                    "rs" | "go" | "py" | "ts" | "js" | "java" | "c" | "cpp" | "h" | "hpp"
-                    | "rb" | "swift" | "kt" | "scala" | "ex" | "exs" | "zig" | "hs" => {
-                        // Source file not in a recognized dir — check if it's a test
-                        // Use path boundaries to avoid false positives (e.g., "contest.rs")
-                        if rel_str.contains("/test/")
-                            || rel_str.contains("/tests/")
-                            || rel_str.contains("/spec/")
-                            || rel_str.contains("/__tests__/")
-                            || rel_str.ends_with("_test.rs")
-                            || rel_str.ends_with("_test.go")
-                            || rel_str.ends_with("_spec.rb")
-                            || rel_str.ends_with(".test.ts")
-                            || rel_str.ends_with(".test.js")
-                            || rel_str.ends_with(".spec.ts")
-                            || rel_str.starts_with("test_")
-                        {
-                            2
-                        } else {
-                            1
-                        }
-                    }
-                    "md" | "txt" | "rst" | "adoc" => 3,
-                    _ => 1, // Unknown extension in root — treat as source
-                }
-            } else {
-                // Check for build-related root files without extensions
-                if let Some(
-                    "Makefile" | "CMakeLists.txt" | "Dockerfile" | "Containerfile" | "Justfile"
-                    | "Taskfile" | "Rakefile" | "Vagrantfile",
-                ) = relative.file_name().and_then(|n| n.to_str())
-                {
-                    4
-                } else {
-                    3 // No extension — docs/other
-                }
-            }
-        }
+        _ => category_from_name(name),
+    }
+}
+
+/// Relative path with `\` folded to `/`, so component checks do not depend on
+/// the OS separator. `Path` on Unix does not split on `\`, and
+/// `to_string_lossy()` keeps the backslashes Windows paths actually use.
+fn normalized_relative(path: &Path, base_path: &Path) -> String {
+    path.strip_prefix(base_path)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn is_test_path(parents: &[&str], name: &str) -> bool {
+    parents.iter().any(|dir| TEST_DIR_NAMES.contains(dir))
+        || (parents.is_empty() && TEST_DIR_NAMES.contains(&name))
+        || is_test_filename(name)
+}
+
+fn is_test_filename(name: &str) -> bool {
+    if TEST_FILE_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+    {
+        return true;
+    }
+    // `test_*.py` and the same `test_*` rule for other source extensions.
+    // The basename is used so this matches at any depth, not only the repo root.
+    name.starts_with("test_")
+        && matches!(
+            file_extension(name),
+            Some(ext) if SOURCE_EXTENSIONS.contains(&ext)
+        )
+}
+
+fn file_extension(name: &str) -> Option<&str> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    if stem.is_empty() { None } else { Some(ext) }
+}
+
+fn is_build_file(name: &str) -> bool {
+    BUILD_FILE_NAMES.contains(&name) || name.eq_ignore_ascii_case("justfile")
+}
+
+fn category_from_name(name: &str) -> u8 {
+    if is_build_file(name) {
+        return 4;
+    }
+    match file_extension(name) {
+        Some("md" | "txt" | "rst" | "adoc") => 3,
+        Some(_) => 1,
+        None => 3,
     }
 }
 
@@ -150,7 +238,90 @@ fn file_entry_point_priority(path: &Path) -> u8 {
     }
 }
 
+/// Strip one leading `*.` or `.`, then lowercase.
+///
+/// `.rs`, `*.rs`, and `RS` all become `rs`. Names that are already ripgrep
+/// types (`toml`, `md`, `rust`) are left as those type names so their
+/// built-in globs still apply.
+fn normalize_filter(filter: &str) -> String {
+    let stripped = if let Some(rest) = filter.strip_prefix("*.") {
+        rest
+    } else if let Some(rest) = filter.strip_prefix('.') {
+        rest
+    } else {
+        filter
+    };
+    stripped.to_ascii_lowercase()
+}
+
+/// Ripgrep type names are non-empty and alphanumeric. `all` is alphanumeric
+/// but reserved by `TypesBuilder::add` (it means "every defined type").
+fn is_legal_type_name(name: &str) -> bool {
+    !name.is_empty() && name != "all" && name.chars().all(|c| c.is_alphanumeric())
+}
+
+fn unrecognized_filter_error(original: &str, normalized: &str) -> io::Error {
+    let shown = if original == normalized {
+        format!("'{original}'")
+    } else {
+        format!("'{original}' (normalized to '{normalized}')")
+    };
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "Unrecognized file type filter {shown}. Filters are ripgrep file types \
+             (for example, rust, toml, md) or plain extensions (for example, rs). \
+             A leading '.' or '*.' is stripped and the value is lowercased; \
+             what remains must be letters and digits only."
+        ),
+    )
+}
+
+/// Apply `--filter` values as ripgrep file types.
+///
+/// Known types keep their built-in globs (`toml` still matches `Cargo.lock`).
+/// A name that is not a known type is registered as `*.{name}` when that name
+/// is a legal type name. Anything that still cannot be registered is returned
+/// as an error — `TypesBuilder::build` is never unwrapped.
+fn configure_file_type_filters(walker: &mut WalkBuilder, filters: &[String]) -> io::Result<()> {
+    if filters.is_empty() {
+        return Ok(());
+    }
+
+    let mut type_builder = ignore::types::TypesBuilder::new();
+    type_builder.add_defaults();
+    for filter in filters {
+        let name = normalize_filter(filter);
+        // `all` selects every default type. It is not a legal `add` name.
+        if name == "all" {
+            type_builder.select("all");
+            continue;
+        }
+        if !is_legal_type_name(&name) {
+            return Err(unrecognized_filter_error(filter, &name));
+        }
+        // Appending `*.{name}` extends an existing ripgrep type and creates a
+        // custom extension type otherwise. The previous code did this too;
+        // the `Result` used to be discarded, which is what made `build` panic.
+        let glob = format!("*.{name}");
+        type_builder
+            .add(&name, &glob)
+            .map_err(|_| unrecognized_filter_error(filter, &name))?;
+        type_builder.select(&name);
+    }
+
+    let types = type_builder
+        .build()
+        .map_err(|_| unrecognized_filter_error("(combined)", "(combined)"))?;
+    walker.types(types);
+    Ok(())
+}
+
 /// Collects all files to be processed using `ignore` crate for efficient traversal.
+///
+/// `filters` are ripgrep file types or extensions. A leading `.` or `*.` is
+/// stripped and the value is lowercased. A filter that still is not a legal
+/// type name returns an error instead of panicking.
 ///
 /// `auto_ignores` are runtime-computed exclusion patterns (e.g., the tool's own
 /// output file or cache directory). They are processed identically to user ignores
@@ -186,16 +357,36 @@ pub fn collect_files_ext(
     if include_hidden {
         // `hidden(false)` means "do not ignore hidden files".
         walker.hidden(false);
-        walker.filter_entry(|entry| !is_vcs_metadata_dir(entry));
     }
+    // A `.git` directory or gitdir file at the walk root or any ancestor is a
+    // real checkout. Keep the crate defaults (`require_git(true)`,
+    // `parents(true)`): parent ignore files inside that repo apply, and ignore
+    // files above the repository do not.
+    //
+    // With no checkout, `require_git(false)` alone would still read every
+    // ancestor `.gitignore` (a `$HOME` dotfiles pattern of `*` and `!*/`
+    // then hides every file). `parents(false)` limits `.gitignore` and
+    // `.ignore` to files inside the walk root, which is the B6 fix.
+    if git_link_in_ancestors(base_path) {
+        walker.require_git(true);
+        walker.parents(true);
+    } else {
+        walker.require_git(false);
+        walker.parents(false);
+    }
+    // Skip cache directories (Cargo's `target/` ships a CACHEDIR.TAG) without
+    // descending into them. The root itself is never filtered out by the walker.
+    // One predicate: `filter_entry` replaces any earlier filter, so the cache-dir
+    // skip and the VCS-metadata prune (needed with `--hidden`) must share it.
+    walker.filter_entry(|entry| !directory_has_cachedir_tag(entry) && !is_vcs_metadata_dir(entry));
 
     // Build overrides for custom ignore patterns
     let mut override_builder = OverrideBuilder::new(base_path);
 
-    // Hardcoded auto-ignores for common heavy directories that should NEVER be
-    // included, even when there's no .git directory (so .gitignore isn't read).
-    // Without these, projects missing .git can produce million-line outputs
-    // from dependency trees.
+    // Hardcoded auto-ignores for common heavy directories. `.gitignore` is
+    // applied even without a `.git` directory, but many trees never list
+    // these names. Without the defaults, dependency folders can dominate
+    // the output.
     //
     // IMPORTANT: These are added FIRST so that user ignores can override them.
     // The ignore crate uses "last-match-wins" semantics, so a user can whitelist
@@ -232,6 +423,12 @@ pub fn collect_files_ext(
         if let Err(e) = override_builder.add(&pattern) {
             log::warn!("Skipping invalid default-ignore '{}': {}", dir, e);
         }
+    }
+    // `target` is anchored to the walk root. An unanchored name would hide a
+    // real source directory such as `src/target/`. Cargo build output at any
+    // depth still carries a CACHEDIR.TAG and is skipped above.
+    if let Err(e) = override_builder.add("!/target") {
+        log::warn!("Skipping invalid default-ignore '/target': {}", e);
     }
 
     // User-specified ignore patterns (added AFTER defaults so they can override)
@@ -270,22 +467,13 @@ pub fn collect_files_ext(
         )
     })?;
     walker.overrides(overrides);
-
-    if !filters.is_empty() {
-        let mut type_builder = ignore::types::TypesBuilder::new();
-        type_builder.add_defaults();
-        for filter in filters {
-            let _ = type_builder.add(filter, &format!("*.{}", filter));
-            type_builder.select(filter);
-        }
-        let types = type_builder.build().unwrap();
-        walker.types(types);
-    }
+    configure_file_type_filters(&mut walker, filters)?;
 
     let mut files: Vec<DirEntry> = walker
         .build()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+        .filter(|e| !is_prior_context_output(e.path()))
         .collect();
 
     // Sort files by relevance category, then entry-point priority, then alphabetically.
@@ -321,35 +509,153 @@ fn is_vcs_metadata_dir(entry: &DirEntry) -> bool {
     )
 }
 
-/// Asks for user confirmation if the number of files is large.
-pub fn confirm_processing(file_count: usize) -> io::Result<bool> {
-    if file_count > 100 {
-        print!(
-            "Warning: You're about to process {} files. This might take a while. Continue? [y/N] ",
-            file_count
-        );
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            return Ok(false);
+/// True when `entry` is a directory that contains a `CACHEDIR.TAG` file.
+fn directory_has_cachedir_tag(entry: &DirEntry) -> bool {
+    entry.file_type().is_some_and(|ft| ft.is_dir()) && entry.path().join(CACHEDIR_TAG).is_file()
+}
+
+/// True when the walk root or one of its ancestors contains a `.git` directory
+/// or file (worktrees and submodules use a gitdir file).
+///
+/// Relative roots are resolved against the current directory first. A relative
+/// `-d .` otherwise has no real ancestors, so a repository above the process
+/// cwd would be missed.
+fn git_link_in_ancestors(base_path: &Path) -> bool {
+    let mut current = absolute_walk_root(base_path);
+    loop {
+        if is_git_link(&current.join(".git")) {
+            return true;
+        }
+        if !current.pop() {
+            return false;
         }
     }
-    Ok(true)
+}
+
+fn is_git_link(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_dir() || meta.is_file())
+}
+
+fn absolute_walk_root(base_path: &Path) -> PathBuf {
+    let joined = if base_path.is_absolute() {
+        base_path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(base_path),
+            Err(_) => base_path.to_path_buf(),
+        }
+    };
+    let normalized = normalize_lexically(&joined);
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+/// Collapse `.` and `..` without touching the filesystem.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// True when `path` is a previous context-builder report.
+///
+/// The tool writes [`REPORT_TITLE_LINE`] as the first line and a
+/// `Content hash:` line of 16 lowercase hex digits in the header
+/// (see `markdown.rs`). Only [`CONTEXT_OUTPUT_PREFIX_LEN`] bytes are read.
+fn is_prior_context_output(path: &Path) -> bool {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let mut buf = [0u8; CONTEXT_OUTPUT_PREFIX_LEN];
+    let n = match file.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    if !header_is_context_builder_output(&buf[..n]) {
+        return false;
+    }
+    log::debug!("skipping prior report: {}", path.display());
+    true
+}
+
+fn header_is_context_builder_output(prefix: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(prefix);
+    let mut lines = text.lines();
+    if lines.next() != Some(REPORT_TITLE_LINE) {
+        return false;
+    }
+    let rest: Vec<&str> = lines.collect();
+    if rest.iter().any(|l| is_content_hash_line(l)) {
+        return true;
+    }
+    // The auto-diff renderer (lib.rs) writes the title followed directly by
+    // `**Project:**` and `**Generated:**` lines and has no content hash.
+    let mut meta = rest.iter().filter(|l| !l.is_empty());
+    matches!(
+        (meta.next(), meta.next()),
+        (Some(p), Some(g)) if p.starts_with("**Project:** ") && g.starts_with("**Generated:** ")
+    )
+}
+
+/// The header line `markdown.rs` writes: `Content hash: ` plus 16 lowercase hex digits.
+fn is_content_hash_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix(CONTENT_HASH_PREFIX) else {
+        return false;
+    };
+    rest.len() == 16 && rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// True when a person can answer a `[y/N]` prompt on stdin.
+///
+/// Pipes, redirects, and `/dev/null` are not terminals (`std::io::IsTerminal`).
+/// Non-interactive callers proceed without prompting, the same way `--yes` and
+/// `-o -` already do. The check lives here — not in `run_with_args` — so tests
+/// that inject their own `Prompter` still control confirmations.
+fn stdin_is_terminal() -> bool {
+    can_prompt(io::stdin().is_terminal(), io::stderr().is_terminal())
+}
+
+/// A prompt needs a person on both ends: stdin to answer and stderr (where
+/// prompts are written) to see the question. With stderr redirected, e.g.
+/// `2>build.log`, the question would be invisible and the run would hang.
+fn can_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
+    stdin_tty && stderr_tty
+}
+
+/// Writes `prompt` to stderr and returns whether the answer was `y`/`Y`.
+///
+/// Prompts must not go to stdout: `-o -` and any caller capturing stdout would
+/// otherwise treat the question as document content.
+fn prompt_yes(prompt: &str) -> io::Result<bool> {
+    eprint!("{prompt}");
+    io::stderr().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim().eq_ignore_ascii_case("y"))
 }
 
 /// Asks for user confirmation to overwrite an existing file.
+///
+/// When stdin is not a terminal the prompt is skipped and the file is overwritten.
 pub fn confirm_overwrite(file_path: &str) -> io::Result<bool> {
-    print!("The file '{}' already exists. Overwrite? [y/N] ", file_path);
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    if input.trim().eq_ignore_ascii_case("y") {
-        Ok(true)
-    } else {
-        Ok(false)
+    if !stdin_is_terminal() {
+        return Ok(true);
     }
+    prompt_yes(&format!(
+        "The file '{file_path}' already exists. Overwrite? [y/N] "
+    ))
 }
 
 pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
@@ -378,6 +684,17 @@ pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn can_prompt_requires_stdin_and_stderr_terminals() {
+        assert!(can_prompt(true, true));
+        assert!(
+            !can_prompt(true, false),
+            "stderr redirected: prompt invisible"
+        );
+        assert!(!can_prompt(false, true));
+        assert!(!can_prompt(false, false));
+    }
+
     use super::*;
     use std::fs;
     use std::path::Path;
@@ -497,6 +814,113 @@ mod tests {
     }
 
     #[test]
+    fn collect_files_normalizes_dotted_glob_and_case_filters() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src").join("a.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("README.md"), "# readme").unwrap();
+
+        for filter in [".rs", "*.rs", "RS", "Rs", ".RS", "*.RS"] {
+            let files = collect_files(base, &[filter.to_string()], &[], &[])
+                .unwrap_or_else(|e| panic!("filter {filter:?} should not error: {e}"));
+            let relative_paths = to_rel_paths(files, base);
+            assert!(
+                relative_paths.contains(&"src/a.rs".to_string()),
+                "filter {filter:?} should include src/a.rs, got {relative_paths:?}"
+            );
+            assert!(
+                !relative_paths.contains(&"README.md".to_string()),
+                "filter {filter:?} should exclude README.md, got {relative_paths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_files_unrecognized_filter_is_an_error() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("a.rs"), "fn main() {}").unwrap();
+
+        for filter in ["d.ts", "c++", "tar.gz", "*.d.ts", ".c++"] {
+            let err = collect_files(base, &[filter.to_string()], &[], &[])
+                .expect_err("unrecognized filter must return an error, not panic");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(filter),
+                "error for {filter:?} should name the filter, got {msg}"
+            );
+            assert!(
+                msg.contains("Unrecognized file type filter"),
+                "error for {filter:?} should be user-facing, got {msg}"
+            );
+            assert!(
+                !msg.contains("UnrecognizedFileType"),
+                "error for {filter:?} should not leak the ignore-crate panic payload, got {msg}"
+            );
+        }
+
+        // A later bad filter must not be dropped or panic after a valid one.
+        let err = collect_files(base, &["rs".to_string(), "tar.gz".to_string()], &[], &[])
+            .expect_err("mixed filters should still error");
+        assert!(err.to_string().contains("tar.gz"));
+    }
+
+    #[test]
+    fn collect_files_keeps_ripgrep_type_expansion() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
+        fs::write(base.join("Cargo.lock"), "# lock\n").unwrap();
+        fs::write(base.join("notes.mdx"), "# notes\n").unwrap();
+        fs::write(base.join("skip.txt"), "nope\n").unwrap();
+        fs::write(base.join("notes.unknownext"), "x\n").unwrap();
+
+        for filter in ["toml", "TOML", ".toml", "*.toml"] {
+            let files = collect_files(base, &[filter.to_string()], &[], &[])
+                .unwrap_or_else(|e| panic!("filter {filter:?} should keep the toml type: {e}"));
+            let relative_paths = to_rel_paths(files, base);
+            assert!(
+                relative_paths.contains(&"Cargo.toml".to_string()),
+                "{filter:?}: {relative_paths:?}"
+            );
+            assert!(
+                relative_paths.contains(&"Cargo.lock".to_string()),
+                "{filter:?} should still expand to the ripgrep toml type: {relative_paths:?}"
+            );
+            assert!(!relative_paths.contains(&"skip.txt".to_string()));
+        }
+
+        // `all` is ripgrep's "every defined type" name. Lowercasing must not
+        // turn it into an unrecognized filter.
+        for filter in ["all", "ALL"] {
+            let files = collect_files(base, &[filter.to_string()], &[], &[])
+                .unwrap_or_else(|e| panic!("filter {filter:?} should select known types: {e}"));
+            let relative_paths = to_rel_paths(files, base);
+            assert!(
+                relative_paths.contains(&"Cargo.toml".to_string()),
+                "{filter:?}: {relative_paths:?}"
+            );
+            assert!(
+                relative_paths.contains(&"notes.mdx".to_string()),
+                "{filter:?}: {relative_paths:?}"
+            );
+            assert!(
+                !relative_paths.contains(&"notes.unknownext".to_string()),
+                "{filter:?} should not include extensions outside the default types: {relative_paths:?}"
+            );
+        }
+
+        let md_files = collect_files(base, &["md".to_string()], &[], &[]).unwrap();
+        let md_paths = to_rel_paths(md_files, base);
+        assert!(
+            md_paths.contains(&"notes.mdx".to_string()),
+            "md should keep the ripgrep markdown globs, got {md_paths:?}"
+        );
+        assert!(!md_paths.contains(&"Cargo.lock".to_string()));
+    }
+
+    #[test]
     fn collect_files_ignores_config_file() {
         let dir = tempdir().unwrap();
         let base = dir.path();
@@ -512,14 +936,6 @@ mod tests {
 
         assert!(!relative_paths.contains(&"context-builder.toml".to_string()));
         assert!(relative_paths.contains(&"other.toml".to_string()));
-    }
-
-    #[test]
-    fn confirm_processing_small_count() {
-        // Test that small file counts don't require confirmation
-        let result = confirm_processing(50);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 
     #[test]
@@ -579,32 +995,8 @@ mod tests {
     }
 
     #[test]
-    fn test_confirm_processing_requires_user_interaction() {
-        // This test verifies the function signature and basic logic for large file counts
-        // The actual user interaction cannot be tested in unit tests
-
-        // For file counts <= 100, should return Ok(true) without prompting
-        // This is already tested implicitly by the fact that small counts don't prompt
-
-        // For file counts > 100, the function would prompt user input
-        // We can't easily test this without mocking stdin, but we can verify
-        // that the function exists and has the expected signature
-        use std::io::Cursor;
-
-        // Create a mock stdin that simulates user typing "y"
-        let input = b"y\n";
-        let _ = Cursor::new(input);
-
-        // We can't easily override stdin in a unit test without complex setup,
-        // so we'll just verify the function exists and handles small counts
-        let result = confirm_processing(50);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[test]
     fn test_confirm_overwrite_function_exists() {
-        // Similar to confirm_processing, this function requires user interaction
+        // This function requires user interaction
         // We can verify it exists and has the expected signature
 
         // For testing purposes, we know this function prompts for user input
@@ -881,6 +1273,172 @@ mod tests {
     }
 
     #[test]
+    fn no_git_honors_gitignore_cachedir_tag_and_target() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(base.join("keep.txt"), "keep").unwrap();
+        fs::write(base.join(".gitignore"), "secret.log\ngenerated/\n").unwrap();
+        fs::write(base.join("secret.log"), "hidden").unwrap();
+        fs::create_dir_all(base.join("generated")).unwrap();
+        fs::write(base.join("generated/junk.txt"), "junk").unwrap();
+
+        // Root `target/` with no tag. The default ignore is anchored at the
+        // walk root, so this directory is still excluded.
+        fs::create_dir_all(base.join("target/debug")).unwrap();
+        fs::write(base.join("target/debug/x.d"), "dep").unwrap();
+
+        // Nested source directory named `target`, no tag — must be kept.
+        fs::create_dir_all(base.join("src/target")).unwrap();
+        fs::write(base.join("src/target/notes.rs"), "fn notes() {}").unwrap();
+
+        // Nested Cargo output: the tag skips it even though the name is not
+        // anchored past the walk root.
+        fs::create_dir_all(base.join("pkg/target")).unwrap();
+        fs::write(
+            base.join("pkg/target/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(base.join("pkg/target/out.txt"), "artifact").unwrap();
+
+        // Cache dir that is not named `target` — only the tag should exclude it.
+        fs::create_dir_all(base.join("my-cache")).unwrap();
+        fs::write(
+            base.join("my-cache/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(base.join("my-cache/blob.txt"), "blob").unwrap();
+
+        // Nested `.gitignore` still applies when there is no checkout.
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("sub/.gitignore"), "nested-secret.txt\n").unwrap();
+        fs::write(base.join("sub/nested-secret.txt"), "nope").unwrap();
+        fs::write(base.join("sub/ok.txt"), "yes").unwrap();
+
+        let rel = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(rel.contains(&"src/main.rs".to_string()));
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(rel.contains(&"src/target/notes.rs".to_string()));
+        assert!(rel.contains(&"sub/ok.txt".to_string()));
+        assert!(!rel.iter().any(|p| p.contains("secret.log")));
+        assert!(!rel.iter().any(|p| p.contains("generated/")));
+        assert!(
+            !rel.iter()
+                .any(|p| p == "target" || p.starts_with("target/"))
+        );
+        assert!(!rel.iter().any(|p| p.contains("pkg/target")));
+        assert!(!rel.iter().any(|p| p.contains("my-cache/")));
+        assert!(!rel.iter().any(|p| p.contains("nested-secret.txt")));
+    }
+
+    #[test]
+    fn parent_gitignore_without_git_keeps_tree_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "*\n!*/\n").unwrap();
+        let proj = dir.path().join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(proj.join("keep.txt"), "keep").unwrap();
+        fs::write(proj.join(".gitignore"), "secret.txt\n").unwrap();
+        fs::write(proj.join("secret.txt"), "nope").unwrap();
+
+        let rel = to_rel_paths(collect_files(&proj, &[], &[], &[]).unwrap(), &proj);
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(!rel.iter().any(|p| p == "secret.txt"));
+    }
+
+    #[test]
+    fn repo_root_gitignore_applies_inside_nested_project() {
+        let dir = tempdir().unwrap();
+        // Dotfiles pattern above the repository must not apply.
+        fs::write(dir.path().join(".gitignore"), "*\n!*/\n").unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(repo.join(".gitignore"), "secret.txt\n").unwrap();
+        let proj = repo.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(proj.join("keep.txt"), "keep").unwrap();
+        fs::write(proj.join("secret.txt"), "nope").unwrap();
+
+        let rel = to_rel_paths(collect_files(&proj, &[], &[], &[]).unwrap(), &proj);
+        assert!(
+            rel.contains(&"keep.txt".to_string()),
+            "parent dotfiles gitignore hid the tree: {rel:?}"
+        );
+        assert!(
+            !rel.iter().any(|p| p == "secret.txt"),
+            "repo-root .gitignore was not applied: {rel:?}"
+        );
+    }
+
+    /// Classify `rel` as a relative path. The base is not a prefix, so the
+    /// whole string (including Windows separators) is what the heuristic sees.
+    fn category_of(rel: &str) -> u8 {
+        file_relevance_category(Path::new(rel), Path::new("NOT_A_PREFIX"))
+    }
+
+    #[test]
+    fn cmake_lists_txt_is_a_build_manifest() {
+        // `.txt` used to take the docs branch before the build-file list ran.
+        assert_eq!(category_of("CMakeLists.txt"), 4);
+        assert_eq!(category_of("notes.txt"), 3);
+        for name in [
+            "Makefile",
+            "Dockerfile",
+            "Containerfile",
+            "Taskfile",
+            "Rakefile",
+            "Vagrantfile",
+        ] {
+            assert_eq!(category_of(name), 4, "{name}");
+        }
+    }
+
+    #[test]
+    fn justfile_is_matched_case_insensitively() {
+        for name in ["justfile", "Justfile", "JUSTFILE", "JustFile"] {
+            assert_eq!(category_of(name), 4, "{name}");
+        }
+    }
+
+    #[test]
+    fn windows_style_separators_match_test_directories() {
+        let samples = [
+            r"src\tests\auth.rs",
+            r"src\lib.rs",
+            r"internal\x\x_test.go",
+            r"pkg\fixtures\sample.json",
+            r"src\components\Button.test.tsx",
+            r"app\test_models.py",
+            r"testdata\input.txt",
+        ];
+        for windows in samples {
+            let unix = windows.replace('\\', "/");
+            assert_eq!(
+                category_of(windows),
+                category_of(&unix),
+                "{windows} should classify like {unix}"
+            );
+        }
+        assert_eq!(category_of(r"src\tests\auth.rs"), 2);
+        assert_eq!(category_of(r"src\lib.rs"), 1);
+        assert_eq!(category_of(r"src\contest.rs"), 1);
+
+        // Base stripping still works for normal OS paths.
+        assert_eq!(
+            file_relevance_category(Path::new("/repo/src/tests/auth.rs"), Path::new("/repo")),
+            2
+        );
+        assert_eq!(
+            file_relevance_category(Path::new("/repo/src/lib.rs"), Path::new("/repo")),
+            1
+        );
+    }
+
+    #[test]
     fn hidden_files_stay_out_unless_requested_and_git_metadata_stays_out() {
         let dir = tempdir().unwrap();
         let base = dir.path();
@@ -911,6 +1469,243 @@ mod tests {
     }
 
     #[test]
+    fn gitdir_file_counts_as_a_repo() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "*\n!*/\n").unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(".git"), "gitdir: /somewhere\n").unwrap();
+        fs::write(repo.join(".gitignore"), "secret.txt\n").unwrap();
+        let proj = repo.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(proj.join("keep.txt"), "keep").unwrap();
+        fs::write(proj.join("secret.txt"), "nope").unwrap();
+
+        let rel = to_rel_paths(collect_files(&proj, &[], &[], &[]).unwrap(), &proj);
+        assert!(rel.contains(&"keep.txt".to_string()), "{rel:?}");
+        assert!(!rel.iter().any(|p| p == "secret.txt"), "{rel:?}");
+    }
+
+    #[test]
+    fn skips_prior_report_header_but_not_near_misses() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("keep.txt"), "hello").unwrap();
+        fs::write(
+            base.join("old.md"),
+            "# Directory Structure Report\n\nThis document contains all files from the `proj` directory, optimized for LLM consumption.\nContent hash: 0123456789abcdef\n\n## File Tree Structure\n",
+        )
+        .unwrap();
+        // Title without the hash line the tool writes.
+        fs::write(
+            base.join("notes.md"),
+            "# Directory Structure Report\n\nJust a heading.\n",
+        )
+        .unwrap();
+        // Hash line, but not the report title.
+        fs::write(base.join("other.md"), "Content hash: 0123456789abcdef\n").unwrap();
+        // Title plus a hash line that is not 16 lowercase hex digits.
+        fs::write(
+            base.join("almost.md"),
+            "# Directory Structure Report\n\nContent hash: not-a-real-hash\n",
+        )
+        .unwrap();
+
+        let rel = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(rel.contains(&"notes.md".to_string()));
+        assert!(rel.contains(&"other.md".to_string()));
+        assert!(rel.contains(&"almost.md".to_string()));
+        assert!(!rel.contains(&"old.md".to_string()));
+    }
+
+    #[test]
+    fn skips_prior_auto_diff_report_but_not_near_misses() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("keep.txt"), "hello").unwrap();
+        fs::write(
+            base.join("auto.md"),
+            "# Directory Structure Report\n\n**Project:** proj\n**Generated:** 2026-01-01 00:00:00 UTC\n\n## File Tree Structure\n",
+        )
+        .unwrap();
+        // Title and Project line, but no Generated line.
+        fs::write(
+            base.join("near.md"),
+            "# Directory Structure Report\n\n**Project:** proj\nSome prose.\n",
+        )
+        .unwrap();
+
+        let rel = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
+        assert!(rel.contains(&"keep.txt".to_string()));
+        assert!(rel.contains(&"near.md".to_string()));
+        assert!(!rel.contains(&"auto.md".to_string()));
+    }
+
+    #[test]
+    fn anchored_auto_ignore_keeps_nested_same_basename() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("docs")).unwrap();
+        fs::write(base.join("output.md"), "# user notes at the root\n").unwrap();
+        fs::write(base.join("docs/output.md"), "real doc\n").unwrap();
+        fs::write(base.join("keep.txt"), "k").unwrap();
+
+        let rel = to_rel_paths(
+            collect_files(base, &[], &[], &["/output.md".to_string()]).unwrap(),
+            base,
+        );
+        assert!(!rel.contains(&"output.md".to_string()));
+        assert!(rel.contains(&"docs/output.md".to_string()));
+        assert!(rel.contains(&"keep.txt".to_string()));
+    }
+
+    #[test]
+    fn test_suffixes_are_detected_at_any_depth() {
+        let tests = [
+            "src/foo_test.go",
+            "lib/foo_test.go",
+            "crates/foo/foo_test.go",
+            "internal/x/x_test.go",
+            "cmd/tool/foo_test.go",
+            "pkg/y/y_test.go",
+            "src/components/Button.test.ts",
+            "src/components/Button.test.tsx",
+            "src/components/Button.test.js",
+            "src/components/Button.test.jsx",
+            "src/utils.spec.ts",
+            "src/utils.spec.tsx",
+            "src/utils.spec.js",
+            "src/utils.spec.jsx",
+            "mypkg/core_test.py",
+            "src/test_utils.py",
+            "app/test_models.py",
+            "packages/web/src/index.test.ts",
+            // Existing suffixes stay tests inside source roots too.
+            "src/foo_test.rs",
+            "src/my_spec.rb",
+            "test_main.rs",
+            "src/test_Button.tsx",
+            "src/test_widget.jsx",
+        ];
+        for path in tests {
+            assert_eq!(category_of(path), 2, "{path}");
+        }
+
+        let sources = [
+            "src/foo.go",
+            "lib/foo.go",
+            "crates/foo/foo.go",
+            "internal/x/x.go",
+            "cmd/tool/main.go",
+            "pkg/y/y.go",
+            "src/components/Button.tsx",
+            "src/components/Button.ts",
+            "src/components/Button.js",
+            "src/components/Button.jsx",
+            "mypkg/core.py",
+            "app/models.py",
+            "packages/web/src/index.ts",
+            "src/lib.rs",
+            "contest.rs",
+            "src/contest.rs",
+            "latest.rs",
+        ];
+        for path in sources {
+            assert_eq!(category_of(path), 1, "{path}");
+        }
+        // `doc/` is still documentation. Reclassifying that package is out of scope.
+        assert_eq!(category_of("doc/api.go"), 3);
+    }
+
+    #[test]
+    fn testdata_and_fixtures_directories_are_tests() {
+        let tests = [
+            "testdata/input.txt",
+            "fixtures/sample.json",
+            "src/testdata/fixture.txt",
+            "pkg/fixtures/x.go",
+            "lib/fixtures/keep.ts",
+            "internal/x/testdata/input.json",
+        ];
+        for path in tests {
+            assert_eq!(category_of(path), 2, "{path}");
+        }
+        assert_eq!(category_of("src/keep.rs"), 1);
+        assert_eq!(category_of("docs/guide.md"), 3);
+    }
+
+    #[test]
+    fn new_lockfiles_are_category_5() {
+        let added = [
+            "uv.lock",
+            "Pipfile.lock",
+            "bun.lock",
+            "deno.lock",
+            "mix.lock",
+            "pubspec.lock",
+            "npm-shrinkwrap.json",
+            "Package.resolved",
+        ];
+        for name in added {
+            assert!(LOCKFILES.contains(&name), "{name} missing from LOCKFILES");
+            assert_eq!(category_of(name), 5, "{name}");
+            assert_eq!(category_of(&format!("pkg/{name}")), 5, "nested {name}");
+        }
+        for name in LOCKFILES {
+            assert_eq!(category_of(name), 5, "{name}");
+        }
+        // Category numbers stay as the code has them: 4 = CI, 5 = lock.
+        assert_eq!(category_of(".github/workflows/ci.yml"), 4);
+        assert_eq!(category_of("Dockerfile"), 4);
+        assert_eq!(category_of("src/lib.rs"), 1);
+    }
+
+    #[test]
+    fn new_manifests_are_category_0() {
+        // An empty path has no components and ranks as a plain file.
+        assert_eq!(category_of(""), 3);
+        let added = [
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "Package.swift",
+            "composer.json",
+            "deno.json",
+            "mix.exs",
+            "pubspec.yaml",
+            "flake.nix",
+            "requirements.txt",
+            "Pipfile",
+        ];
+        for name in added {
+            assert!(
+                ROOT_MANIFESTS.contains(&name),
+                "{name} missing from ROOT_MANIFESTS"
+            );
+            assert_eq!(category_of(name), 0, "{name}");
+        }
+        for name in ROOT_MANIFESTS {
+            assert_eq!(category_of(name), 0, "{name}");
+            assert!(
+                !LOCKFILES.contains(name),
+                "{name} is in both ROOT_MANIFESTS and LOCKFILES"
+            );
+        }
+        // Same extensions must not all become manifests.
+        assert_eq!(category_of("notes.txt"), 3);
+        assert_eq!(category_of("app.kts"), 1);
+        assert_eq!(category_of("App.swift"), 1);
+        assert_eq!(category_of("app.exs"), 1);
+        assert_eq!(category_of("other.xml"), 1);
+        // Basename matching at any depth is unchanged (not root-only).
+        assert_eq!(category_of("examples/demo/pyproject.toml"), 0);
+        assert_eq!(category_of("packages/web/package.json"), 0);
+        assert_eq!(category_of("docs/README.md"), 0);
+        assert_eq!(category_of("CHANGELOG.md"), 0);
+    }
+
+    #[test]
     fn hidden_includes_cargo_config() {
         let dir = tempdir().unwrap();
         let base = dir.path();
@@ -925,5 +1720,32 @@ mod tests {
         );
         let visible = to_rel_paths(collect_files(base, &[], &[], &[]).unwrap(), base);
         assert!(!visible.iter().any(|p| p.starts_with(".cargo")));
+    }
+
+    #[test]
+    fn hidden_walk_prunes_vcs_metadata_and_cachedir_tag_together() {
+        // `filter_entry` replaces earlier filters, so both predicates must live
+        // in the single closure: --hidden must not re-admit a tagged cache dir,
+        // and the tag skip must not re-admit `.git`.
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join(".git/objects")).unwrap();
+        fs::write(base.join(".git/config"), "[core]\n").unwrap();
+        fs::create_dir_all(base.join(".github")).unwrap();
+        fs::write(base.join(".github/ci.yml"), "name: ci\n").unwrap();
+        fs::create_dir_all(base.join("pkg/target")).unwrap();
+        fs::write(
+            base.join("pkg/target/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(base.join("pkg/target/out.txt"), "artifact").unwrap();
+        fs::write(base.join("keep.txt"), "keep").unwrap();
+
+        let rel = to_rel_paths(collect_files_ext(base, &[], &[], &[], true).unwrap(), base);
+        assert!(rel.contains(&"keep.txt".to_string()), "{rel:?}");
+        assert!(rel.contains(&".github/ci.yml".to_string()), "{rel:?}");
+        assert!(!rel.iter().any(|p| p.starts_with(".git/")), "{rel:?}");
+        assert!(!rel.iter().any(|p| p.contains("pkg/target")), "{rel:?}");
     }
 }

@@ -133,3 +133,15 @@ pub fn supported_extensions() -> Vec<&'static str> {
 pub fn supported_extensions() -> Vec<&'static str> {
     Vec::new()
 }
+
+#[cfg(all(test, feature = "tree-sitter-base"))]
+mod supported_extensions_tests {
+    use super::supported_extensions;
+
+    #[test]
+    fn lists_extensions_of_enabled_languages() {
+        let exts = supported_extensions();
+        assert!(exts.contains(&"rs"));
+        assert!(!exts.is_empty());
+    }
+}

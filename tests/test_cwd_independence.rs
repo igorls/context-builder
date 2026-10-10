@@ -12,23 +12,15 @@ use context_builder::{Prompter, cli::Args, run_with_args};
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-        }
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -104,6 +96,7 @@ filter = ["txt"]
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     // Apply config settings to args (mimicking the run() function logic)
@@ -118,7 +111,7 @@ filter = ["txt"]
         args.line_numbers = line_numbers;
     }
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
     let result = run_with_args(args, config, &prompter);
 
     // Restore original directory
@@ -200,6 +193,7 @@ timestamped_output = true
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     // Apply timestamping manually since we're bypassing run()
@@ -223,7 +217,7 @@ timestamped_output = true
         }
     }
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // First run to create cache
     let result1 = run_with_args(args.clone(), config.clone(), &prompter);

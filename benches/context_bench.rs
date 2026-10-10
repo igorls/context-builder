@@ -25,9 +25,6 @@ fn init_bench_env() {
 struct NoPrompt;
 
 impl Prompter for NoPrompt {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(true)
-    }
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(true)
     }
@@ -219,6 +216,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let prompter = NoPrompt;
@@ -258,6 +256,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     preview: args.preview,
                     token_count: args.token_count,
                     line_numbers: args.line_numbers,
+                    file_metadata: args.file_metadata,
                     yes: true,
                     diff_only: false,
                     clear_cache: false,

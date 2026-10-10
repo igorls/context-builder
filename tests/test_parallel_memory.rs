@@ -9,23 +9,15 @@ use tempfile::tempdir;
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-        }
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, _file_count: usize) -> std::io::Result<bool> {
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -74,10 +66,11 @@ fn test_streaming_parallel_processing() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let config = Config::default();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Process files using the proper flow through lib.rs
     let result = run_with_args(args, config, &prompter);
@@ -196,10 +189,11 @@ fn test_parallel_error_handling() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let config = Config::default();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Should succeed even with binary files
     let result = run_with_args(args, config, &prompter);
@@ -262,10 +256,11 @@ fn test_memory_efficiency_with_large_files() {
         max_file_size: "256K".to_string(),
         hidden: false,
         include_secrets: false,
+        file_metadata: false,
     };
 
     let config = Config::default();
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // This should complete without excessive memory usage
     let result = run_with_args(args, config, &prompter);

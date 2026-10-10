@@ -9,6 +9,13 @@ use crate::token_count::{Encoding as TokenEncoding, estimate_tokens};
 use crate::tree::{FileTree, write_tree_to_file};
 use encoding_rs::{Encoding, UTF_8};
 
+/// First line of every generated report. A blank line follows it.
+pub(crate) const REPORT_TITLE_LINE: &str = "# Directory Structure Report";
+
+/// Prefix of the header line that fingerprints a generated report.
+/// The writer appends 16 lowercase hex digits (`{:016x}`).
+pub(crate) const CONTENT_HASH_PREFIX: &str = "Content hash: ";
+
 #[cfg(feature = "parallel")]
 use crossbeam_channel::{Receiver, Sender, bounded};
 #[cfg(feature = "parallel")]
@@ -25,9 +32,34 @@ pub struct TreeSitterConfig {
     pub truncate: String,
     /// Visibility filter: "public", "private", or "all".
     pub visibility: String,
+    /// Emit per-file `- Size:` / `- Modified:` lines. Carried here so
+    /// `process_file` does not grow another parameter (the renderer signature
+    /// is shared with in-flight fence work). Off by default.
+    pub file_metadata: bool,
+}
+
+/// Counts bytes written so callers can warn about large documents, including
+/// when the document is streamed to stdout (`-o -`) and there is no file to stat.
+struct CountingWriter<W> {
+    inner: W,
+    count: usize,
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.count += n;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// Generates the final Markdown file.
+///
+/// Returns the number of bytes written (the file, or stdout in pipe mode).
 #[allow(clippy::too_many_arguments, unused_variables)]
 pub fn generate_markdown(
     output_path: &str,
@@ -43,10 +75,10 @@ pub fn generate_markdown(
     token_encoding: TokenEncoding,
     ts_config: &TreeSitterConfig,
     skipped: &[crate::content_filter::SkippedFile],
-) -> io::Result<()> {
+) -> io::Result<usize> {
     // `-` selects stdout (pipe mode, e.g. `context-builder -o - | llm`);
     // otherwise create/truncate the file path (creating parent dirs as needed).
-    let mut output: Box<dyn Write + Send> = if output_path == "-" {
+    let inner: Box<dyn Write + Send> = if output_path == "-" {
         Box::new(io::stdout())
     } else {
         if let Some(parent) = Path::new(output_path).parent()
@@ -56,6 +88,7 @@ pub fn generate_markdown(
         }
         Box::new(fs::File::create(output_path)?)
     };
+    let mut output = CountingWriter { inner, count: 0 };
 
     let input_dir_name = if input_dir == "." {
         let current_dir = std::env::current_dir()?;
@@ -72,20 +105,20 @@ pub fn generate_markdown(
     // Build the header and tree into a buffer first so we can (a) write them in
     // one shot and (b) debit their token cost from the `--max-tokens` budget.
     let mut head_buf: Vec<u8> = Vec::new();
-    writeln!(head_buf, "# Directory Structure Report\n")?;
+    writeln!(head_buf, "{REPORT_TITLE_LINE}\n")?;
 
     if !filters.is_empty() {
         writeln!(
             head_buf,
-            "This document contains files from the `{}` directory with extensions: {}",
-            input_dir_name,
+            "This document contains files from the {} directory with extensions: {}",
+            crate::fences::inline_code(&input_dir_name),
             filters.join(", ")
         )?;
     } else {
         writeln!(
             head_buf,
-            "This document contains all files from the `{}` directory, optimized for LLM consumption.",
-            input_dir_name
+            "This document contains all files from the {} directory, optimized for LLM consumption.",
+            crate::fences::inline_code(&input_dir_name)
         )?;
     }
 
@@ -94,10 +127,13 @@ pub fn generate_markdown(
     }
 
     // Deterministic content hash (enables LLM prompt caching across runs).
-    // Hashes raw file content (NOT mtime — see v0.7.0; the rendered output embeds
-    // each file's mtime, so hashing emitted bytes would be volatile) PLUS every
-    // option that changes the rendered output. The hash is therefore a complete
-    // fingerprint: two runs share a hash iff they produce identical output.
+    // Hashes raw file content (NOT mtime — see v0.7.0) PLUS every option that
+    // changes the rendered output, including whether per-file Size/Modified
+    // lines are emitted (`file_metadata`). mtime itself is never hashed.
+    // With metadata off (the default) those lines are absent, so two runs that
+    // differ only in mtime produce identical output and an identical hash.
+    // With `--file-metadata` the rendered mtime can still differ while the hash
+    // stays a content fingerprint, so prompt caches survive checkouts.
     // Folding in line_numbers / max_tokens / encoding / tree-sitter flags fixes
     // the bug where toggling those yielded a different document under the same
     // hash, and keeps the hash honest when `--max-tokens` truncates the file set.
@@ -116,6 +152,10 @@ pub fn generate_markdown(
     content_hasher.update(ts_config.visibility.as_bytes());
     content_hasher.update(b"\0encoding_strategy\0");
     content_hasher.update(encoding_strategy.unwrap_or("").as_bytes());
+    // The flag changes the document (the lines are present or not) but the
+    // mtime value is deliberately not hashed — see the comment above.
+    content_hasher.update(b"\0file_metadata\0");
+    content_hasher.update(&[ts_config.file_metadata as u8]);
     content_hasher.update(b"\0files\0");
     for entry in files {
         // Hash relative unix-style path for cross-OS determinism.
@@ -142,7 +182,11 @@ pub fn generate_markdown(
         content_hasher.update(item.reason.label().as_bytes());
         content_hasher.update(b"\0");
     }
-    writeln!(head_buf, "Content hash: {:016x}", content_hasher.digest())?;
+    writeln!(
+        head_buf,
+        "{CONTENT_HASH_PREFIX}{:016x}",
+        content_hasher.digest()
+    )?;
     writeln!(head_buf)?;
 
     writeln!(head_buf, "## File Tree Structure\n")?;
@@ -164,7 +208,7 @@ pub fn generate_markdown(
     // (Diff section will be conditionally inserted later by the auto_diff logic in lib.rs)
 
     #[cfg(feature = "parallel")]
-    {
+    let bytes_written = {
         use rayon::prelude::*;
 
         // Create a bounded channel for ordered chunks
@@ -199,7 +243,7 @@ pub fn generate_markdown(
             // be 'static, so it gets an owned copy for any re-render.
             let w_base_path = base_path.to_path_buf();
 
-            thread::spawn(move || -> io::Result<()> {
+            thread::spawn(move || -> io::Result<usize> {
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
@@ -322,7 +366,7 @@ pub fn generate_markdown(
                     )));
                 }
 
-                Ok(())
+                Ok(output.count)
             })
         };
 
@@ -350,11 +394,11 @@ pub fn generate_markdown(
         // Wait for writer thread to complete and propagate any errors
         writer_handle
             .join()
-            .map_err(|_| std::io::Error::other("Writer thread panicked"))??;
-    }
+            .map_err(|_| std::io::Error::other("Writer thread panicked"))??
+    };
 
     #[cfg(not(feature = "parallel"))]
-    {
+    let bytes_written = {
         match max_tokens {
             // No budget: stream each file straight to the output (as the serial
             // path did before v0.9.0). Buffering would only be needed to count
@@ -428,9 +472,10 @@ pub fn generate_markdown(
                 }
             }
         }
-    }
+        output.count
+    };
 
-    Ok(())
+    Ok(bytes_written)
 }
 
 /// Processes a single file and writes its content to the output.
@@ -486,23 +531,32 @@ pub fn process_file_with_content_limit(
         }
     };
 
-    let modified_time = metadata
-        .modified()
-        .ok()
-        .map(|time| {
-            let system_time: chrono::DateTime<Utc> = time.into();
-            system_time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
-        })
-        .unwrap_or_else(|| "Unknown".to_string());
-
     writeln!(output)?;
-    writeln!(output, "### File: `{}`", relative_path.display())?;
+    writeln!(
+        output,
+        "### File: {}",
+        crate::fences::inline_code(&relative_path.display().to_string())
+    )?;
 
     writeln!(output)?;
 
-    writeln!(output, "- Size: {} bytes", metadata.len())?;
-    writeln!(output, "- Modified: {}", modified_time)?;
-    writeln!(output)?;
+    // Opt-in. Off by default so a checkout or `touch` does not change the
+    // document when the bytes are unchanged. The document content hash never
+    // includes mtime either way (see `generate_markdown`).
+    if ts_config.file_metadata {
+        let modified_time = metadata
+            .modified()
+            .ok()
+            .map(|time| {
+                let system_time: chrono::DateTime<Utc> = time.into();
+                system_time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+            })
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        writeln!(output, "- Size: {} bytes", metadata.len())?;
+        writeln!(output, "- Modified: {}", modified_time)?;
+        writeln!(output)?;
+    }
 
     // --- File Content --- //
     let extension = file_path
@@ -514,7 +568,7 @@ pub fn process_file_with_content_limit(
     // Enhanced binary file handling with encoding detection and transcoding
     match fs::File::open(file_path) {
         Ok(mut file) => {
-            let mut sniff = [0u8; 8192];
+            let mut sniff = [0u8; BINARY_SNIFF_LEN];
             let n = match file.read(&mut sniff) {
                 Ok(n) => n,
                 Err(e) => {
@@ -538,8 +592,21 @@ pub fn process_file_with_content_limit(
             };
             let slice = &sniff[..n];
 
+            // Classify from the sniff buffer before any encoding guess.
+            // Windows-1252 accepts every byte, so a PDF header or a single NUL
+            // used to be transcoded and written out as text (dogfood B2).
+            if is_binary_content(slice) {
+                warn!(
+                    "Detected binary file {} (null byte or binary signature). Skipping content.",
+                    relative_path.display()
+                );
+                write_binary_placeholder(output, metadata.len())?;
+                return Ok(());
+            }
+
             // Find a valid UTF-8 boundary by backtracking up to 3 bytes.
-            // If the sniff buffer cuts a multi-byte char (e.g., emoji at byte 8191),
+            // If the sniff buffer cuts a multi-byte char (e.g., an emoji in the
+            // last bytes),
             // from_utf8 would falsely classify the file as non-UTF-8.
             let check_len = if n == sniff.len() {
                 // Buffer is full — may have split a multi-byte char at the end
@@ -649,13 +716,7 @@ pub fn process_file_with_content_limit(
                 }
 
                 // Fallback to binary file placeholder
-                writeln!(output, "```text")?;
-                writeln!(
-                    output,
-                    "<Binary file or unsupported encoding: {} bytes>",
-                    metadata.len()
-                )?;
-                writeln!(output, "```")?;
+                write_binary_placeholder(output, metadata.len())?;
                 return Ok(());
             }
 
@@ -800,7 +861,7 @@ fn char_boundary_clamp(content: &str, position: usize) -> usize {
 /// serial and parallel budget paths so both builds truncate at the same
 /// boundary.
 ///
-/// The section header (`### File: …`, size/mtime, fence, truncation marker) is
+/// The section header (`### File: …`, optional size/mtime, fence, truncation marker) is
 /// a fixed token cost paid before any content fits, so it is measured first
 /// with a zero-byte content probe; the content allowance is what remains
 /// after it, converted to bytes at ~4 bytes/token and shrunk proportionally
@@ -978,6 +1039,115 @@ fn first_visibility_warning_for(ext: &str) -> bool {
     guard.insert(ext.to_string())
 }
 
+/// Bytes read from the start of a file when deciding text vs binary.
+const BINARY_SNIFF_LEN: usize = 8192;
+
+/// Write the placeholder used for binary files and undecodable encodings.
+fn write_binary_placeholder(output: &mut impl Write, len: u64) -> io::Result<()> {
+    writeln!(output, "```text")?;
+    writeln!(
+        output,
+        "<Binary file or unsupported encoding: {} bytes>",
+        len
+    )?;
+    writeln!(output, "```")?;
+    Ok(())
+}
+
+/// Whether the sniff buffer should be treated as binary.
+///
+/// A NUL byte means binary unless the buffer starts with a UTF-16 or UTF-32
+/// BOM (those encodings store ASCII as NUL-padded code units and are
+/// transcoded). Known binary signatures are binary even when the header is
+/// valid UTF-8 or Windows-1252, which is how PDF-based `.ai` files were
+/// emitted as text.
+pub(crate) fn is_binary_content(bytes: &[u8]) -> bool {
+    if bytes.is_empty() || has_utf16_or_utf32_bom(bytes) {
+        return false;
+    }
+    bytes.contains(&0) || has_binary_magic(bytes)
+}
+
+/// True when `bytes` begins with a UTF-16 or UTF-32 byte-order mark.
+///
+/// UTF-32LE (`FF FE 00 00`) shares its first two bytes with UTF-16LE, so the
+/// two-byte LE/BE marks cover it. UTF-32BE (`00 00 FE FF`) starts with NUL and
+/// has to be matched on its own, before the NUL rule runs.
+fn has_utf16_or_utf32_bom(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xFF, 0xFE])
+        || bytes.starts_with(&[0xFE, 0xFF])
+        || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+}
+
+/// True when `bytes` starts with a known binary file signature.
+///
+/// PDF, PNG, JPEG, GIF, ZIP (and docx/jar/xlsx), gzip, ELF, Mach-O, and
+/// WebAssembly. Also the other common containers whose headers decode as
+/// Windows-1252: bzip2, xz, zstd, 7z, RAR, WebP/WAV/AVI, ISO BMFF (`ftyp`),
+/// Ogg, FLAC, and WOFF/WOFF2.
+///
+/// PE/DOS is not matched on the bare `MZ` prefix. Those two letters start
+/// ordinary text ("MZ is a postal prefix"), and a real executable always
+/// has a NUL in the first 64 bytes of the DOS header, so the NUL rule
+/// already classifies it.
+///
+/// `OggS` and `fLaC` are kept as four-byte ASCII container magics. A UTF-8
+/// file whose first line is plain text starting with either tag is therefore
+/// binary. That trade-off is accepted: real prose does not begin with those
+/// tags, and omitting them would emit Ogg/FLAC headers as text.
+fn has_binary_magic(bytes: &[u8]) -> bool {
+    const SIGNATURES: &[&[u8]] = &[
+        b"%PDF",
+        b"\x89PNG\r\n\x1a\n",
+        b"\xFF\xD8\xFF",
+        b"GIF87a",
+        b"GIF89a",
+        b"PK\x03\x04",
+        b"PK\x05\x06",
+        b"PK\x07\x08",
+        b"\x1F\x8B",
+        b"\x7FELF",
+        b"\xFE\xED\xFA\xCE",
+        b"\xFE\xED\xFA\xCF",
+        b"\xCE\xFA\xED\xFE",
+        b"\xCF\xFA\xED\xFE",
+        b"\xCA\xFE\xBA\xBE",
+        b"\xBE\xBA\xFE\xCA",
+        b"\x00asm",
+        b"\xFD7zXZ\x00",
+        b"7z\xBC\xAF\x27\x1C",
+        b"Rar!\x1A\x07",
+        b"\x28\xB5\x2F\xFD",
+        // ASCII container tags. See the trade-off noted on this function.
+        b"OggS",
+        b"fLaC",
+        b"wOFF",
+        b"wOF2",
+    ];
+
+    if SIGNATURES.iter().any(|sig| bytes.starts_with(sig)) {
+        return true;
+    }
+
+    // bzip2: "BZh" plus a block-size digit 1-9.
+    if let [b'B', b'Z', b'h', level, ..] = bytes
+        && (b'1'..=b'9').contains(level)
+    {
+        return true;
+    }
+
+    // RIFF container with a media form type (WebP, WAV, AVI).
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") {
+        let form = &bytes[8..12];
+        if form == b"WEBP" || form == b"WAVE" || form == b"AVI " {
+            return true;
+        }
+    }
+
+    // ISO BMFF (MP4, MOV, HEIC): 4-byte box size, then "ftyp".
+    bytes.len() >= 8 && &bytes[4..8] == b"ftyp"
+}
+
 /// Detect text encoding using heuristics for common encodings
 fn detect_text_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
     // Try common encodings
@@ -1038,14 +1208,20 @@ fn transcode_file_content(file_path: &Path, encoding: &'static Encoding) -> io::
     Ok(decoded.into_owned())
 }
 
-/// Write text content with optional line numbers
-fn write_text_content(
+/// Write text content with optional line numbers.
+///
+/// The fence is at least three backticks and one longer than any backtick run
+/// in `content`, so an inner ` ``` ` line cannot close the block (CommonMark).
+pub(crate) fn write_text_content(
     output: &mut impl Write,
     content: &str,
     language: &str,
     line_numbers: bool,
 ) -> io::Result<()> {
-    writeln!(output, "```{}", language)?;
+    // Line-number prefixes contain no backticks, so the raw content's longest
+    // run is also the longest run of the bytes that land inside the fence.
+    let fence = crate::fences::backtick_fence(content);
+    writeln!(output, "{fence}{language}")?;
 
     if line_numbers {
         for (i, line) in content.lines().enumerate() {
@@ -1058,7 +1234,7 @@ fn write_text_content(
         }
     }
 
-    writeln!(output, "```")?;
+    writeln!(output, "{fence}")?;
     Ok(())
 }
 
@@ -1242,6 +1418,298 @@ mod tests {
             "expected at least opening and closing fences, got {}",
             fence_count
         );
+    }
+
+    /// Render `bytes` through `process_file` the way a normal run would.
+    fn render_bytes(filename: &str, bytes: &[u8]) -> String {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let file_path = base_path.join(filename);
+        fs::write(&file_path, bytes).unwrap();
+
+        let mut output = Vec::new();
+        process_file(
+            base_path,
+            &file_path,
+            &mut output,
+            false,
+            Some("detect"),
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+        String::from_utf8(output).expect("rendered markdown is UTF-8")
+    }
+
+    fn assert_binary_placeholder(content: &str, len: usize) {
+        assert!(
+            content.contains(&format!(
+                "<Binary file or unsupported encoding: {len} bytes>"
+            )),
+            "expected binary placeholder, got:\n{content}"
+        );
+        assert!(
+            !content.contains('\0'),
+            "binary placeholder output must not contain NUL bytes"
+        );
+    }
+
+    #[test]
+    fn test_multibyte_char_split_by_sniff_boundary_stays_text() {
+        // The 8 KiB sniff buffer can cut a multi-byte char; the file must still
+        // be classified as UTF-8 text, for 2-, 3- and 4-byte sequences, split
+        // at every offset and when the sequence ends exactly on the boundary.
+        for (ch, len) in [("é", 2usize), ("世", 3), ("🌍", 4)] {
+            for start in (8192 - len)..=8192 {
+                let mut text = "a".repeat(start);
+                text.push_str(ch);
+                text.push_str("\ntail marker\n");
+                let content = render_bytes("big.txt", text.as_bytes());
+                assert!(
+                    content.contains("tail marker") && !content.contains("Binary file"),
+                    "{ch} at {start} misclassified"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn counting_writer_counts_bytes_and_flushes() {
+        let mut writer = CountingWriter {
+            inner: Vec::new(),
+            count: 0,
+        };
+        writer.write_all(b"hello ").unwrap();
+        writer.write_all(b"world").unwrap();
+        writer.flush().unwrap();
+        assert_eq!(writer.count, 11);
+        assert_eq!(writer.inner, b"hello world");
+    }
+
+    #[test]
+    fn test_pdf_header_is_binary() {
+        // PDF-based `.ai` from dogfood B2 (repro.sh case B4): `%PDF` header,
+        // the binary comment, and an object. No NUL in this prefix, and the
+        // high bytes are valid Windows-1252, so the old sniff wrote the body
+        // out as text.
+        let bytes = b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n1 0 obj <</Type/Catalog>> endobj\n";
+        let content = render_bytes("logo.ai", bytes);
+        assert_binary_placeholder(&content, bytes.len());
+        assert!(
+            !content.contains("%PDF") && !content.contains("Catalog"),
+            "PDF body must not be emitted as text:\n{content}"
+        );
+
+        // A header that is also valid UTF-8 used to take the text fast path.
+        let ascii = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n";
+        let content = render_bytes("ascii.pdf", ascii);
+        assert_binary_placeholder(&content, ascii.len());
+        assert!(
+            !content.contains("endobj"),
+            "ASCII PDF must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_png_header_is_binary() {
+        // Signature only — no NUL — so the old 5% control-character heuristic
+        // decoded it as UTF-16LE mojibake.
+        let bytes = b"\x89PNG\r\n\x1a\nIHDR";
+        let content = render_bytes("logo.png", bytes);
+        assert_binary_placeholder(&content, bytes.len());
+        assert!(
+            !content.contains("IHDR"),
+            "PNG payload must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_embedded_nul_without_bom_is_binary() {
+        // Exact dogfood case. A NUL with no UTF-16/32 BOM is binary, not
+        // UTF-16LE CJK mojibake and not Windows-1252 text.
+        let bytes = b"abc\0def";
+        let content = render_bytes("embedded-nul.bin", bytes);
+        assert_binary_placeholder(&content, bytes.len());
+        assert!(
+            !content.contains("def") && !content.contains('扡'),
+            "NUL payload must not be decoded as text:\n{content}"
+        );
+
+        // One NUL among enough ASCII to slip under the old 5% control-char
+        // threshold, which then transcoded the file as Windows-1252.
+        let mut sparse = vec![b'a'; 400];
+        sparse[200] = 0;
+        sparse.extend_from_slice(b"DROP_ME");
+        let content = render_bytes("sparse-nul.txt", &sparse);
+        assert_binary_placeholder(&content, sparse.len());
+        assert!(
+            !content.contains("DROP_ME"),
+            "sparse NUL file must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_utf16le_bom_still_transcoded_as_text() {
+        // BOM + "Hi". ASCII UTF-16LE contains NULs; those must not trip the
+        // binary rule, and detect-strategy transcoding must still run.
+        let bytes = [0xFF, 0xFE, b'H', 0x00, b'i', 0x00];
+        let content = render_bytes("utf16.txt", &bytes);
+        assert!(
+            content.contains("Hi"),
+            "UTF-16LE with BOM should transcode to text, got:\n{content}"
+        );
+        assert!(
+            !content.contains("<Binary file"),
+            "UTF-16LE with BOM must stay text, got:\n{content}"
+        );
+        assert!(content.contains("```txt"));
+    }
+
+    #[test]
+    fn test_latin1_text_still_transcoded() {
+        // "café au lait" in ISO-8859-1 / Windows-1252. No NUL, no signature.
+        let bytes = b"caf\xe9 au lait\n";
+        let content = render_bytes("latin1.txt", bytes);
+        assert!(
+            content.contains("café au lait"),
+            "Latin-1 text should be transcoded, got:\n{content}"
+        );
+        assert!(
+            !content.contains("<Binary file"),
+            "Latin-1 text must not be treated as binary, got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_binary_sniff_rules() {
+        assert!(!is_binary_content(b""));
+        assert!(!is_binary_content(b"fn main() {}\n"));
+        // Latin-1 é, and Windows-1252 smart quotes, are text.
+        assert!(!is_binary_content(b"caf\xe9"));
+        assert!(!is_binary_content(&[0x93, 0x48, 0x69, 0x94]));
+
+        // NUL without a UTF-16/32 BOM.
+        assert!(is_binary_content(b"abc\0def"));
+        assert!(is_binary_content(&[0xEF, 0xBB, 0xBF, b'a', 0x00]));
+
+        // UTF-16/32 BOMs legitimately contain NULs.
+        assert!(!is_binary_content(&[0xFF, 0xFE, b'A', 0x00]));
+        assert!(!is_binary_content(&[0xFE, 0xFF, 0x00, b'A']));
+        assert!(!is_binary_content(&[
+            0xFF, 0xFE, 0x00, 0x00, b'A', 0x00, 0x00, 0x00
+        ]));
+        assert!(!is_binary_content(&[
+            0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'A'
+        ]));
+
+        let signatures: &[&[u8]] = &[
+            b"%PDF-1.4\n",
+            b"\x89PNG\r\n\x1a\n",
+            b"\xFF\xD8\xFF\xE0",
+            b"GIF87a",
+            b"GIF89a",
+            b"PK\x03\x04",
+            b"PK\x05\x06",
+            b"PK\x07\x08",
+            b"\x1F\x8B\x08",
+            b"\x7FELF",
+            b"\xFE\xED\xFA\xCE",
+            b"\xFE\xED\xFA\xCF",
+            b"\xCE\xFA\xED\xFE",
+            b"\xCF\xFA\xED\xFE",
+            b"\xCA\xFE\xBA\xBE",
+            b"\xBE\xBA\xFE\xCA",
+            b"\x00asm",
+            b"\xFD7zXZ\x00",
+            b"7z\xBC\xAF\x27\x1C",
+            b"Rar!\x1A\x07",
+            b"\x28\xB5\x2F\xFD",
+            b"BZh9",
+            b"OggS",
+            b"fLaC",
+            b"wOFF",
+            b"wOF2",
+        ];
+        for sig in signatures {
+            assert!(
+                is_binary_content(sig),
+                "signature should be binary: {sig:?}"
+            );
+        }
+
+        // Size fields deliberately contain no NUL, so the form-type / ftyp
+        // check is what classifies these — not the NUL rule.
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&[0x10, 0x01, 0x02, 0x03]);
+        webp.extend_from_slice(b"WEBP");
+        assert!(is_binary_content(&webp));
+        assert!(has_binary_magic(b"\x00asm"));
+
+        let mut mp4 = vec![0x01, 0x02, 0x03, 0x04];
+        mp4.extend_from_slice(b"ftypmp42");
+        assert!(is_binary_content(&mp4));
+
+        // "BZh" alone is not bzip2; the block-size digit is required.
+        assert!(!is_binary_content(b"BZh"));
+        assert!(!is_binary_content(b"BZh0"));
+
+        // Bare "MZ" is text. A DOS/PE image is binary because of its NULs.
+        assert!(!is_binary_content(b"MZ is a postal prefix\n"));
+        assert!(!has_binary_magic(b"MZ"));
+        assert!(is_binary_content(&minimal_dos_pe_header()));
+    }
+
+    /// 64-byte DOS header with `e_lfanew` pointing at a following `PE\0\0`.
+    /// The stub is NUL-padded, as every real PE/DOS executable is.
+    fn minimal_dos_pe_header() -> Vec<u8> {
+        let mut header = vec![0u8; 64];
+        header[0] = b'M';
+        header[1] = b'Z';
+        header[0x3C] = 64; // e_lfanew
+        header.extend_from_slice(b"PE\0\0");
+        header
+    }
+
+    #[test]
+    fn test_mz_text_stays_text_and_pe_header_is_binary() {
+        let text = b"MZ is a postal prefix\n";
+        let content = render_bytes("postal.txt", text);
+        assert!(
+            content.contains("MZ is a postal prefix"),
+            "text starting with MZ must be kept, got:\n{content}"
+        );
+        assert!(
+            !content.contains("<Binary file"),
+            "text starting with MZ must not be a binary placeholder, got:\n{content}"
+        );
+
+        let header = minimal_dos_pe_header();
+        let content = render_bytes("program.exe", &header);
+        assert_binary_placeholder(&content, header.len());
+        assert!(
+            !content.contains("PE"),
+            "DOS/PE header must not be emitted as text:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_ogg_and_flac_ascii_prefixes_are_binary() {
+        // Documented trade-off: `OggS` and `fLaC` are container magics, so a
+        // UTF-8 file whose first line is plain text starting with either tag
+        // is binary. See `has_binary_magic`.
+        for (name, bytes) in [
+            ("note-ogg.txt", &b"OggS this line is plain UTF-8 text\n"[..]),
+            (
+                "note-flac.txt",
+                &b"fLaC this line is plain UTF-8 text\n"[..],
+            ),
+        ] {
+            let content = render_bytes(name, bytes);
+            assert_binary_placeholder(&content, bytes.len());
+            assert!(
+                !content.contains("plain UTF-8 text"),
+                "{name} must follow the OggS/fLaC signature rule, got:\n{content}"
+            );
+        }
     }
 
     #[test]
@@ -1810,6 +2278,7 @@ mod tests {
             structure: false,
             truncate: "smart".to_string(),
             visibility: "all".to_string(),
+            file_metadata: false,
         };
 
         let result = write_tree_sitter_enrichment(&mut output, content, "rs", &ts_config);
@@ -1898,14 +2367,15 @@ mod tests {
     #[test]
     fn test_max_tokens_truncates_single_oversized_first_file() {
         // Regression (B1): the first file used to bypass the budget and was always
-        // emitted in full. A single oversized file is now omitted with a notice.
+        // emitted in full. It is now truncated or omitted, with a notice.
         let dir = tempdir().unwrap();
         let base_path = dir.path();
         let output_path = base_path.join("output.md");
 
-        // ~17 KB of whitespace-separated text (well over a 100-token budget) with a
-        // unique marker we can assert is absent. Avoid a single-char run (slow BPE).
-        let body = "UNIQUE_BODY_MARKER alpha beta gamma ".repeat(500);
+        // ~17 KB of whitespace-separated text (well over a 100-token budget). The
+        // marker sits at the tail so it is absent whether the file is truncated
+        // in place or omitted. Avoid a single-char run (slow BPE).
+        let body = "alpha beta gamma ".repeat(500) + "UNIQUE_TAIL_MARKER";
         fs::write(base_path.join("huge.txt"), &body).unwrap();
 
         let files = crate::file_utils::collect_files(base_path, &[], &[], &[]).unwrap();
@@ -1934,8 +2404,12 @@ mod tests {
             "expected the budget notice"
         );
         assert!(
-            !content.contains("UNIQUE_BODY_MARKER"),
-            "oversized first file body leaked despite the budget"
+            !content.contains("UNIQUE_TAIL_MARKER"),
+            "oversized first file was emitted in full despite the budget"
+        );
+        assert!(
+            content.len() < body.len(),
+            "output should be smaller than the unbudgeted file"
         );
     }
 
@@ -2012,7 +2486,9 @@ mod tests {
         assert!(result.is_ok());
         let content = fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("empty.txt"));
-        assert!(content.contains("Size: 0 bytes"));
+        // Size/Modified are opt-in (`file_metadata`, off by default).
+        assert!(!content.contains("Size:"));
+        assert!(!content.contains("Modified:"));
     }
 
     #[test]
@@ -2260,5 +2736,151 @@ mod tests {
             out.contains("big.rs") && out.contains("File content truncated"),
             "expected big.rs to be truncated in place, got:\n{out}"
         );
+    }
+
+    /// Opening fence after `header`, its info string, and the body up to the matching closer.
+    fn section_fence(doc: &str, header: &str) -> (String, String, String) {
+        let idx = doc
+            .find(header)
+            .unwrap_or_else(|| panic!("missing header {header} in:\n{doc}"));
+        let rest = &doc[idx + header.len()..];
+        let mut offset = 0;
+        for line in rest.split_inclusive('\n') {
+            let stripped = line.trim_end_matches(['\n', '\r']);
+            let ticks = stripped.bytes().take_while(|b| *b == b'`').count();
+            if ticks >= 3 && !stripped[ticks..].contains('`') {
+                let fence = "`".repeat(ticks);
+                let info = stripped[ticks..].to_string();
+                let after = &rest[offset + line.len()..];
+                let mut pos = 0;
+                for bline in after.split_inclusive('\n') {
+                    let bstripped = bline.trim_end_matches(['\n', '\r']);
+                    if bstripped == fence {
+                        return (fence, info, after[..pos].to_string());
+                    }
+                    pos += bline.len();
+                }
+                panic!("no closer for {header} in:\n{doc}");
+            }
+            offset += line.len();
+        }
+        panic!("no fence after {header} in:\n{doc}");
+    }
+
+    #[test]
+    fn nested_fences_are_longer_than_the_inner_run_and_preserve_content() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+
+        let triple = "before\n```\nafter\n";
+        let quad = "before\n````\nafter\n";
+        let single = "let x = `a`;\n";
+        let no_nl = "see ``` here";
+
+        fs::write(base.join("triple.md"), triple).unwrap();
+        fs::write(base.join("quad.md"), quad).unwrap();
+        fs::write(base.join("single.rs"), single).unwrap();
+        fs::write(base.join("nonewline.md"), no_nl).unwrap();
+
+        let cases = [
+            ("triple.md", triple, "markdown", 3usize),
+            ("quad.md", quad, "markdown", 4),
+            ("single.rs", single, "rust", 1),
+            // Writer inserts the newline the closer needs; the file bytes are unchanged.
+            ("nonewline.md", no_nl, "markdown", 3),
+        ];
+
+        for (name, original, lang, run) in cases {
+            let mut output = Vec::new();
+            process_file(
+                base,
+                &base.join(name),
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+            let rendered = String::from_utf8(output).unwrap();
+            assert!(
+                crate::fences::unmatched_backtick_fence_len(&rendered).is_none(),
+                "unbalanced fences for {name}:\n{rendered}"
+            );
+
+            let header = format!("### File: `{name}`");
+            let (fence, info, body) = section_fence(&rendered, &header);
+            assert_eq!(info, lang, "{name}");
+            assert!(
+                fence.len() >= 3 && fence.len() == run.max(2) + 1,
+                "{name}: fence {fence} should be one longer than run {run}"
+            );
+            assert!(
+                fence.len() > crate::fences::longest_backtick_run(original),
+                "{name}"
+            );
+            let expected_body = if original.ends_with('\n') {
+                original.to_string()
+            } else {
+                format!("{original}\n")
+            };
+            assert_eq!(body, expected_body, "{name} content was not preserved");
+        }
+    }
+
+    #[test]
+    fn line_numbers_keep_a_fence_longer_than_inner_backticks() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        let original = "before\n```\nafter\n";
+        fs::write(base.join("triple.md"), original).unwrap();
+
+        let mut output = Vec::new();
+        process_file(
+            base,
+            &base.join("triple.md"),
+            &mut output,
+            true,
+            None,
+            &TreeSitterConfig::default(),
+        )
+        .unwrap();
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(crate::fences::unmatched_backtick_fence_len(&rendered).is_none());
+        let (fence, info, body) = section_fence(&rendered, "### File: `triple.md`");
+        assert_eq!(info, "markdown");
+        assert_eq!(fence.len(), 4);
+        assert!(body.contains("   2 | ```"));
+        assert!(body.contains("before"));
+        assert!(body.contains("after"));
+    }
+
+    #[test]
+    fn filename_with_backtick_uses_longer_inline_code() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("weird`name.py"), "print(1)\n").unwrap();
+        fs::write(base.join("`lead.txt"), "x\n").unwrap();
+
+        for (name, header) in [
+            ("weird`name.py", "### File: ``weird`name.py``"),
+            ("`lead.txt", "### File: `` `lead.txt ``"),
+        ] {
+            let mut output = Vec::new();
+            process_file(
+                base,
+                &base.join(name),
+                &mut output,
+                false,
+                None,
+                &TreeSitterConfig::default(),
+            )
+            .unwrap();
+            let rendered = String::from_utf8(output).unwrap();
+            assert!(
+                rendered.contains(header),
+                "expected {header:?} in:\n{rendered}"
+            );
+            assert!(crate::fences::unmatched_backtick_fence_len(&rendered).is_none());
+        }
     }
 }
