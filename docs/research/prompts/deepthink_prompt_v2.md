@@ -1,6 +1,6 @@
 # Deep Think v2 Evaluation Prompt
 
-> **Usage**: Upload `docs/deepthink_context_v2.md` as an attachment, then paste the prompt below.
+> **Usage**: Regenerate the context dump, upload it as an attachment, then paste the prompt below. The previous dump `docs/research/context-files/deepthink_context_v2.md` was removed from the repo.
 
 ---
 

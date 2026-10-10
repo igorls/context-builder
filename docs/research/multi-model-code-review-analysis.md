@@ -320,7 +320,9 @@ This has implications for context-builder itself: **if the context file is well-
 
 ## Appendix B: Context File Used
 
-- **Pre-fix context**: [`deepthink_context_v2.md`](context-files/deepthink_context_v2.md) (original, Cargo.lock at position 0)
-- **Post-fix context**: [`deepthink_context_v2_fixed.md`](context-files/deepthink_context_v2_fixed.md) (lockfile fix applied, Cargo.lock at position last)
+The context dumps below were generated context-builder output and have been removed from the repo:
+
+- **Pre-fix context**: `deepthink_context_v2.md` (original, Cargo.lock at position 0)
+- **Post-fix context**: `deepthink_context_v2_fixed.md` (lockfile fix applied, Cargo.lock at position last)
 - **Prompt template**: [`deep_think_prompt_v2.md`](prompts/deepthink_prompt_v2.md)
 
