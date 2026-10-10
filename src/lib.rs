@@ -705,13 +705,11 @@ fn suggested_filter_exts(paths: &[&Path]) -> Option<String> {
     use std::collections::HashMap;
 
     let mut counts: HashMap<&str, usize> = HashMap::new();
-    for path in paths {
-        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
-            continue;
-        };
-        if !is_suggestable_filter_ext(ext) {
-            continue;
-        }
+    let exts = paths
+        .iter()
+        .filter_map(|path| path.extension().and_then(|ext| ext.to_str()))
+        .filter(|ext| is_suggestable_filter_ext(ext));
+    for ext in exts {
         *counts.entry(ext).or_insert(0) += 1;
     }
     if counts.is_empty() {
@@ -738,27 +736,21 @@ fn is_suggestable_filter_ext(ext: &str) -> bool {
 /// Copy-pasteable commands for the >128K warning. Every flag here is one the
 /// CLI actually honors (`--ignore docs,assets` included).
 fn context_window_suggestions(paths: &[&Path]) -> Vec<String> {
-    let filter = suggested_filter_exts(paths).map(|exts| format!("--filter {exts}"));
-    let advice: [(Option<String>, &str); 4] = [
-        (
-            Some("--max-tokens 100000".into()),
-            "Cap output to a token budget",
-        ),
-        (filter, "Include only these file types"),
-        (
-            Some("--ignore docs,assets".into()),
-            "Exclude directories by name",
-        ),
-        (
-            Some("--token-count".into()),
-            "Preview size without generating",
-        ),
-    ];
-    advice
-        .into_iter()
-        .filter_map(|(flag, description)| flag.map(|flag| advice_line(&flag, description)))
-        .collect()
+    let mut lines: Vec<String> = ADVICE.iter().map(|(f, d)| advice_line(f, d)).collect();
+    if let Some(exts) = suggested_filter_exts(paths) {
+        lines.insert(1, advice_line(&format!("--filter {exts}"), FILTER_ADVICE));
+    }
+    lines
 }
+
+const FILTER_ADVICE: &str = "Include only these file types";
+
+/// The fixed suggestions; the `--filter` line is inserted after the first.
+const ADVICE: [(&str, &str); 3] = [
+    ("--max-tokens 100000", "Cap output to a token budget"),
+    ("--ignore docs,assets", "Exclude directories by name"),
+    ("--token-count", "Preview size without generating"),
+];
 
 /// `flag` padded to a column, or followed by two spaces when it is too long.
 fn advice_line(flag: &str, description: &str) -> String {
