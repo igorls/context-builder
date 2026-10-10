@@ -270,7 +270,7 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `-d, --input <PATH>` - Directory path to process (default: current directory).
 - `-o, --output <FILE>` - Output file path (default: `output.md`). Use `-` to stream the document to **stdout** (e.g. `context-builder -o - | llm`); progress messages then go to stderr so the pipe stays clean.
 - `-f, --filter <EXT>` - File extensions to include (can be used multiple times).
-- `-i, --ignore <PATTERN>` - Paths or gitignore-style globs to ignore. Use a comma-separated list (`-i docs,assets`) or repeat the flag (`-i '*.lock' -i crates/core`). A pattern can be a file or directory name (`docs`), a path relative to the project (`crates/core`), or a glob (`*.lock`). Quote globs so the shell does not expand them.
+- `-i, --ignore <PATTERN>` - Paths or gitignore-style globs to ignore. Use a comma-separated list (`-i docs,assets`) or repeat the flag (`-i '*.lock' -i crates/core`). A pattern can be a file or directory name (`docs`), a path relative to the project (`crates/core`), or a glob (`*.lock`). Quote globs so the shell does not expand them. Commas always separate patterns on the command line, so a pattern that contains a comma (e.g. `report,old.md`) must go in the `ignore = [...]` list of `context-builder.toml` instead.
 - `--max-tokens <N>` - Maximum token budget for the output. Files that exceed the remaining budget are truncated in place (per the `--truncate` mode); further files are omitted with a notice.
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
