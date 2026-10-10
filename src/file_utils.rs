@@ -543,10 +543,7 @@ fn is_prior_context_output(path: &Path) -> bool {
     if !header_is_context_builder_output(&buf[..n]) {
         return false;
     }
-    log::debug!(
-        "skipping previous context-builder output: {}",
-        path.display()
-    );
+    log::debug!("skipping prior report: {}", path.display());
     true
 }
 
@@ -604,20 +601,6 @@ fn prompt_yes(prompt: &str) -> io::Result<bool> {
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(input.trim().eq_ignore_ascii_case("y"))
-}
-
-/// Asks for user confirmation if the number of files is large.
-///
-/// The `> 100` question is unchanged on an interactive terminal. When stdin is
-/// not a terminal the prompt is skipped and processing proceeds.
-pub fn confirm_processing(file_count: usize) -> io::Result<bool> {
-    if file_count > 100 && stdin_is_terminal() {
-        prompt_yes(&format!(
-            "Warning: You're about to process {file_count} files. This might take a while. Continue? [y/N] "
-        ))
-    } else {
-        Ok(true)
-    }
 }
 
 /// Asks for user confirmation to overwrite an existing file.
@@ -913,14 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn confirm_processing_small_count() {
-        // Test that small file counts don't require confirmation
-        let result = confirm_processing(50);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[test]
     fn find_latest_file_empty_directory() {
         let dir = tempdir().unwrap();
         let result = find_latest_file(dir.path()).unwrap();
@@ -977,32 +952,8 @@ mod tests {
     }
 
     #[test]
-    fn test_confirm_processing_requires_user_interaction() {
-        // This test verifies the function signature and basic logic for large file counts
-        // The actual user interaction cannot be tested in unit tests
-
-        // For file counts <= 100, should return Ok(true) without prompting
-        // This is already tested implicitly by the fact that small counts don't prompt
-
-        // For file counts > 100, the function would prompt user input
-        // We can't easily test this without mocking stdin, but we can verify
-        // that the function exists and has the expected signature
-        use std::io::Cursor;
-
-        // Create a mock stdin that simulates user typing "y"
-        let input = b"y\n";
-        let _ = Cursor::new(input);
-
-        // We can't easily override stdin in a unit test without complex setup,
-        // so we'll just verify the function exists and handles small counts
-        let result = confirm_processing(50);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[test]
     fn test_confirm_overwrite_function_exists() {
-        // Similar to confirm_processing, this function requires user interaction
+        // This function requires user interaction
         // We can verify it exists and has the expected signature
 
         // For testing purposes, we know this function prompts for user input

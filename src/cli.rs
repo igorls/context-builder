@@ -37,7 +37,8 @@ pub struct Args {
     #[clap(long)]
     pub line_numbers: bool,
 
-    /// Automatically answer yes to all prompts
+    /// Overwrite an existing output file without asking. The >100-file confirmation
+    /// was removed in v0.11.0; this flag is still accepted and only affects the overwrite prompt
     #[clap(short = 'y', long)]
     pub yes: bool,
 

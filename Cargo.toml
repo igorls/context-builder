@@ -108,6 +108,10 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 pretty_assertions = "1.4.1"
 serial_test = "3.0"
 
+# PTY tests for the overwrite prompt (Unix only; the crate is unused on Windows).
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [[bench]]
 name = "context_bench"
 harness = false

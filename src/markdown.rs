@@ -34,7 +34,28 @@ pub struct TreeSitterConfig {
     pub visibility: String,
 }
 
+/// Counts bytes written so callers can warn about large documents, including
+/// when the document is streamed to stdout (`-o -`) and there is no file to stat.
+struct CountingWriter<W> {
+    inner: W,
+    count: usize,
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.count += n;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Generates the final Markdown file.
+///
+/// Returns the number of bytes written (the file, or stdout in pipe mode).
 #[allow(clippy::too_many_arguments, unused_variables)]
 pub fn generate_markdown(
     output_path: &str,
@@ -49,10 +70,10 @@ pub fn generate_markdown(
     max_tokens: Option<usize>,
     token_encoding: TokenEncoding,
     ts_config: &TreeSitterConfig,
-) -> io::Result<()> {
+) -> io::Result<usize> {
     // `-` selects stdout (pipe mode, e.g. `context-builder -o - | llm`);
     // otherwise create/truncate the file path (creating parent dirs as needed).
-    let mut output: Box<dyn Write + Send> = if output_path == "-" {
+    let inner: Box<dyn Write + Send> = if output_path == "-" {
         Box::new(io::stdout())
     } else {
         if let Some(parent) = Path::new(output_path).parent()
@@ -62,6 +83,7 @@ pub fn generate_markdown(
         }
         Box::new(fs::File::create(output_path)?)
     };
+    let mut output = CountingWriter { inner, count: 0 };
 
     let input_dir_name = if input_dir == "." {
         let current_dir = std::env::current_dir()?;
@@ -163,7 +185,7 @@ pub fn generate_markdown(
     // (Diff section will be conditionally inserted later by the auto_diff logic in lib.rs)
 
     #[cfg(feature = "parallel")]
-    {
+    let bytes_written = {
         use rayon::prelude::*;
 
         // Create a bounded channel for ordered chunks
@@ -198,7 +220,7 @@ pub fn generate_markdown(
             // be 'static, so it gets an owned copy for any re-render.
             let w_base_path = base_path.to_path_buf();
 
-            thread::spawn(move || -> io::Result<()> {
+            thread::spawn(move || -> io::Result<usize> {
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
@@ -321,7 +343,7 @@ pub fn generate_markdown(
                     )));
                 }
 
-                Ok(())
+                Ok(output.count)
             })
         };
 
@@ -349,11 +371,11 @@ pub fn generate_markdown(
         // Wait for writer thread to complete and propagate any errors
         writer_handle
             .join()
-            .map_err(|_| std::io::Error::other("Writer thread panicked"))??;
-    }
+            .map_err(|_| std::io::Error::other("Writer thread panicked"))??
+    };
 
     #[cfg(not(feature = "parallel"))]
-    {
+    let bytes_written = {
         match max_tokens {
             // No budget: stream each file straight to the output (as the serial
             // path did before v0.9.0). Buffering would only be needed to count
@@ -427,9 +449,10 @@ pub fn generate_markdown(
                 }
             }
         }
-    }
+        output.count
+    };
 
-    Ok(())
+    Ok(bytes_written)
 }
 
 /// Processes a single file and writes its content to the output.
@@ -1419,6 +1442,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn counting_writer_counts_bytes_and_flushes() {
+        let mut writer = CountingWriter {
+            inner: Vec::new(),
+            count: 0,
+        };
+        writer.write_all(b"hello ").unwrap();
+        writer.write_all(b"world").unwrap();
+        writer.flush().unwrap();
+        assert_eq!(writer.count, 11);
+        assert_eq!(writer.inner, b"hello world");
     }
 
     #[test]

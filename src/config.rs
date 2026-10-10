@@ -47,7 +47,10 @@ pub struct Config {
     /// If true, append a UTC timestamp to the output file name (before extension)
     pub timestamped_output: Option<bool>,
 
-    /// Assume "yes" for overwrite / processing confirmations
+    /// Assume "yes" for the overwrite prompt.
+    ///
+    /// Still accepted after the >100-file confirmation was removed in v0.11.0.
+    /// It does not change processing; there is no processing prompt to skip.
     pub yes: Option<bool>,
 
     /// Enable automatic diff generation (requires `timestamped_output = true`)

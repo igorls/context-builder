@@ -56,7 +56,7 @@ It's a command-line utility that recursively processes directories and creates c
   Files appear in LLM-optimized order: config & project docs first, then source code (entry points before helpers), tests, documentation, build/CI files, and lockfiles last. This helps LLMs build a mental model faster.
 
 - 💰 **Context Budgeting (`--max-tokens`):**
-  Cap token output to fit your model's context window. Warns when output exceeds 128K tokens with actionable suggestions.
+  Cap token output to fit your model's context window. When output exceeds about 128K tokens, a non-blocking warning is printed to stderr — nothing is asked.
 
 - 💾 **Memory-Efficient Streaming:**
   Handles massive files with ease by reading and writing line-by-line, keeping memory usage low.
@@ -171,7 +171,7 @@ context-builder --line-numbers
 # Stream the document to stdout and pipe it straight into an LLM tool
 context-builder -f rs -o - | llm
 
-# Skip all confirmation prompts (auto-answer yes)
+# Overwrite an existing output file without asking (`-y` does not gate large runs)
 context-builder --yes
 
 # Output only diffs (requires auto-diff & timestamped output)
@@ -235,7 +235,8 @@ token_count = false
 encoding = "o200k_base"
 
 
-# Automatically answer yes to all prompts
+# Overwrite an existing output file without asking.
+# The >100-file confirmation was removed in v0.11.0; this flag is still accepted.
 
 yes = false
 
@@ -278,7 +279,7 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
 - `--line-numbers` - Add line numbers to code blocks in the output.
-- `-y, --yes` - Automatically answer yes to all prompts (skip confirmation dialogs).
+- `-y, --yes` - Overwrite an existing output file without asking. The confirmation that used to run before processing more than 100 files was removed in v0.11.0; `-y` is still accepted so existing scripts keep working, and it only affects the overwrite prompt.
 - `--diff-only` - With auto-diff + timestamped output, output only change summary + modified file diffs (omit full file bodies).
 - `--clear-cache` - Remove stored state used for auto-diff; next run becomes a fresh baseline.
 - `--signatures` - Replace full file content with extracted function/class signatures *(requires tree-sitter)*.

@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 
@@ -10,30 +9,15 @@ use context_builder::{Prompter, cli::Args, run_with_args};
 
 struct TestPrompter {
     overwrite_response: bool,
-    processing_response: bool,
-    last_processing_count: Cell<usize>,
 }
 
 impl TestPrompter {
-    fn new(overwrite_response: bool, processing_response: bool) -> Self {
-        Self {
-            overwrite_response,
-            processing_response,
-            last_processing_count: Cell::new(0),
-        }
-    }
-
-    fn last_count(&self) -> usize {
-        self.last_processing_count.get()
+    fn new(overwrite_response: bool) -> Self {
+        Self { overwrite_response }
     }
 }
 
 impl Prompter for TestPrompter {
-    fn confirm_processing(&self, file_count: usize) -> std::io::Result<bool> {
-        self.last_processing_count.set(file_count);
-        Ok(self.processing_response)
-    }
-
     fn confirm_overwrite(&self, _file_path: &str) -> std::io::Result<bool> {
         Ok(self.overwrite_response)
     }
@@ -75,7 +59,7 @@ fn preview_mode_does_not_create_output_file() {
         visibility: "all".to_string(),
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Run in preview mode
     let res = run_with_args(args, Config::default(), &prompter);
@@ -122,7 +106,7 @@ fn preview_mode_skips_overwrite_confirmation() {
     };
 
     // Use false for overwrite response to verify it's not called
-    let prompter = TestPrompter::new(false, true);
+    let prompter = TestPrompter::new(false);
 
     // Run in preview mode - should succeed even with overwrite denied
     let res = run_with_args(args, Config::default(), &prompter);
@@ -173,7 +157,7 @@ fn token_count_mode_skips_overwrite_confirmation() {
     };
 
     // Use false for overwrite response to verify it's not called
-    let prompter = TestPrompter::new(false, true);
+    let prompter = TestPrompter::new(false);
 
     // Run in token count mode - should succeed even with overwrite denied
     let res = run_with_args(args, Config::default(), &prompter);
@@ -220,7 +204,7 @@ fn both_preview_and_token_count_modes_work_together() {
         visibility: "all".to_string(),
     };
 
-    let prompter = TestPrompter::new(false, true); // false for overwrite since it should be skipped
+    let prompter = TestPrompter::new(false); // false for overwrite since it should be skipped
 
     // Run with both modes
     let res = run_with_args(args, Config::default(), &prompter);
@@ -282,7 +266,7 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
     };
 
     // Always proceed without interactive prompts
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let res = run_with_args(args, Config::default(), &prompter);
     assert!(res.is_ok(), "end-to-end generation should succeed");
@@ -375,7 +359,7 @@ fn overwrite_prompt_is_respected() {
     };
 
     // Deny overwrite
-    let prompter = TestPrompter::new(false, true);
+    let prompter = TestPrompter::new(false);
 
     let res = run_with_args(args, Config::default(), &prompter);
     assert!(
@@ -389,19 +373,21 @@ fn overwrite_prompt_is_respected() {
 }
 
 #[test]
-fn confirm_processing_receives_large_count() {
+fn many_files_proceed_without_a_processing_prompt() {
+    // The >100-file confirmation was removed. A large tree must succeed
+    // without `--yes`.
     let dir = tempdir().unwrap();
     let root = dir.path();
 
-    // Create a lot of files (should be well over the 100 threshold)
     fs::create_dir_all(root.join("data")).unwrap();
     for i in 0..150 {
         write_file(&root.join("data").join(format!("f{}.txt", i)), "x");
     }
 
+    let output = root.join("out.md");
     let args = Args {
         input: root.to_string_lossy().into_owned(),
-        output: root.join("out.md").to_string_lossy().into_owned(),
+        output: output.to_string_lossy().into_owned(),
         filter: vec!["txt".into()],
         ignore: vec![],
         preview: false,
@@ -419,25 +405,17 @@ fn confirm_processing_receives_large_count() {
         visibility: "all".to_string(),
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     let res = run_with_args(args, Config::default(), &prompter);
     assert!(res.is_ok(), "run should succeed with many files");
-
-    // Ensure our injected prompter saw the large count (>= 150)
-    assert!(
-        prompter.last_count() >= 150,
-        "expected confirm_processing to be called with >=150 files, got {}",
-        prompter.last_count()
-    );
+    assert!(output.exists(), "output should be written");
 }
 
 #[test]
-fn pipe_mode_skips_processing_confirmation() {
-    // In `-o -` (stdout pipe) mode the confirmation prompt would `print!` to
-    // stdout and corrupt the piped document — so it must be skipped entirely,
-    // even with >100 files and without `--yes`. A prompter that would CANCEL
-    // proves the prompt is never consulted: the run still succeeds.
+fn pipe_mode_many_files_does_not_block() {
+    // `-o -` with >100 files and without `--yes` must succeed. There is no
+    // processing prompt to answer, so the pipe is not blocked on stdin.
     let dir = tempdir().unwrap();
     let root = dir.path();
 
@@ -466,18 +444,12 @@ fn pipe_mode_skips_processing_confirmation() {
         visibility: "all".to_string(),
     };
 
-    // processing_response = false → would cancel if the prompt were consulted.
-    let prompter = TestPrompter::new(true, false);
+    let prompter = TestPrompter::new(true);
 
     let res = run_with_args(args, Config::default(), &prompter);
     assert!(
         res.is_ok(),
-        "pipe mode must proceed without consulting the confirmation prompt"
-    );
-    assert_eq!(
-        prompter.last_count(),
-        0,
-        "confirm_processing must NOT be called in pipe mode"
+        "pipe mode must proceed without a file-count confirmation"
     );
 }
 
@@ -510,7 +482,7 @@ fn token_count_mode_does_not_create_output_file() {
         visibility: "all".to_string(),
     };
 
-    let prompter = TestPrompter::new(true, true);
+    let prompter = TestPrompter::new(true);
 
     // Run in token count mode
     let res = run_with_args(args, Config::default(), &prompter);
