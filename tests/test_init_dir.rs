@@ -55,7 +55,9 @@ fn init_targets_the_directory_given_with_d() {
     let mut reports: Vec<_> = fs::read_dir(&out_dir).unwrap().flatten().collect();
     assert!(!reports.is_empty(), "no report in {out_dir:?}");
     reports.sort_by_key(|e| e.file_name());
-    let doc = fs::read_to_string(reports.last().unwrap().path()).unwrap();
+    let doc = fs::read_to_string(reports.last().unwrap().path())
+        .unwrap()
+        .replace('\\', "/");
     assert!(doc.contains("docs/index.rst"), "docs dropped");
     assert_eq!(
         doc.matches("# Directory Structure Report").count(),
