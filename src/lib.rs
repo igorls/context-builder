@@ -958,7 +958,7 @@ fn generate_markdown_with_diff(
                 // compares content hashes (file bytes), not mtime.
                 if args.file_metadata {
                     output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-                    let modified: chrono::DateTime<chrono::Utc> = file_state.modified.into();
+                    let modified = chrono::DateTime::<chrono::Utc>::from(file_state.modified);
                     output.push_str(&format!(
                         "- Modified: {}\n\n",
                         modified.format("%Y-%m-%d %H:%M:%S UTC")
