@@ -101,10 +101,7 @@ fn binary_prints_imports_and_exports() {
         .unwrap();
     let doc = String::from_utf8_lossy(&out.stdout);
     assert!(doc.contains("**Imports:**\n- `import b from 'b'`"), "{doc}");
-    assert!(
-        doc.contains("**Exports:**\n- `export const x`"),
-        "{doc}"
-    );
+    assert!(doc.contains("**Exports:**\n- `export const x`"), "{doc}");
 }
 
 #[test]
