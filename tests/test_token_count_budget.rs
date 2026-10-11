@@ -57,3 +57,45 @@ fn token_count_reports_the_capped_size_and_omitted_files() {
         "{omitted_line}"
     );
 }
+
+/// The preview must agree with the real run about how many files the budget
+/// leaves out, including when the crossing file cannot even fit its header.
+#[test]
+fn preview_omitted_count_matches_the_real_run_at_every_small_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..6 {
+        fs::write(
+            dir.path().join(format!("file_{i}.rs")),
+            "let value = compute(alpha, beta);\n".repeat(30),
+        )
+        .unwrap();
+    }
+    for budget in (120..700).step_by(45) {
+        let b = budget.to_string();
+        let preview = count(dir.path(), &["--max-tokens", &b]);
+        assert!(total(&preview) <= budget, "{budget}: {preview}");
+        let preview_omitted: usize = preview
+            .lines()
+            .find_map(|l| l.split("files omitted: ").nth(1))
+            .and_then(|s| s.trim_end_matches(')').parse().ok())
+            .expect("omitted");
+
+        let real = Command::new(env!("CARGO_BIN_EXE_context-builder"))
+            .args(["-d", dir.path().to_str().unwrap(), "-o", "-", "-y"])
+            .args(["--max-tokens", &b])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let doc = String::from_utf8_lossy(&real.stdout);
+        let real_omitted: usize = doc
+            .split("reached. ")
+            .nth(1)
+            .and_then(|s| s.split(' ').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+        assert_eq!(
+            preview_omitted, real_omitted,
+            "budget {budget}:\n{preview}\n{doc}"
+        );
+    }
+}

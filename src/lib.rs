@@ -429,18 +429,28 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             match final_args.max_tokens {
                 Some(budget) => {
                     let mut remaining = budget.saturating_sub(total_tokens);
-                    let mut exhausted = false;
-                    for tokens in &per_file {
-                        if exhausted {
-                            omitted += 1;
-                        } else if *tokens <= remaining {
+                    for (i, tokens) in per_file.iter().enumerate() {
+                        if *tokens <= remaining {
                             file_tokens += tokens;
                             remaining -= tokens;
-                        } else {
-                            file_tokens += remaining;
-                            remaining = 0;
-                            exhausted = true;
+                            continue;
                         }
+                        // The crossing file: the real writer clamps it with the
+                        // same helper, or omits it when not even its header fits.
+                        let mut scratch = Vec::new();
+                        let fit = markdown::render_truncated_to_fit(
+                            base_path,
+                            files[i].path(),
+                            &mut scratch,
+                            final_args.line_numbers,
+                            enc_strategy,
+                            &ts_config,
+                            encoding,
+                            remaining,
+                        );
+                        file_tokens += fit.unwrap_or(0);
+                        omitted = per_file.len() - i - usize::from(fit.is_some());
+                        break;
                     }
                 }
                 None => file_tokens = per_file.iter().sum(),
