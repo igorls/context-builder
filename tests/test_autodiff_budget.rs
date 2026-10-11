@@ -237,6 +237,7 @@ fn file_metadata_is_rendered_in_budgeted_sections() {
 
 #[test]
 #[serial]
+#[cfg(feature = "tree-sitter-rust")]
 fn truncation_marker_is_kept_when_signatures_replace_the_body() {
     let dir = tempdir().unwrap();
     let mut body = String::new();
