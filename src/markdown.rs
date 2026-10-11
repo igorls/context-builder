@@ -84,9 +84,12 @@ pub fn generate_markdown(
         if let Some(parent) = Path::new(output_path).parent()
             && !parent.exists()
         {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| crate::write_error(parent, e))?;
         }
-        Box::new(fs::File::create(output_path)?)
+        Box::new(
+            fs::File::create(output_path)
+                .map_err(|e| crate::write_error(Path::new(output_path), e))?,
+        )
     };
     let mut output = CountingWriter { inner, count: 0 };
 

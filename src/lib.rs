@@ -199,12 +199,6 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     let base_path = resolved_base.as_path();
 
     if !base_path.exists() || !base_path.is_dir() {
-        if !silent {
-            errln!(
-                "Error: The specified input directory '{}' does not exist or is not a directory.",
-                final_args.input
-            );
-        }
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
@@ -630,7 +624,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     e
                 )));
             }
-            let mut final_output = fs::File::create(output_path)?;
+            let mut final_output =
+                fs::File::create(output_path).map_err(|e| write_error(output_path, e))?;
             final_output.write_all(final_doc.as_bytes())?;
         }
 
@@ -677,17 +672,27 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     let ts_config = markdown::TreeSitterConfig {
         signatures: final_args.signatures,
         structure: final_args.structure,
-        truncate: final_args.truncate.clone(),
+        // Without tree-sitter support "smart" truncation cannot happen; report the
+        // mode that is actually used (byte) in truncation notices.
+        truncate: if cfg!(feature = "tree-sitter-base") {
+            final_args.truncate.clone()
+        } else {
+            "byte".to_string()
+        },
         visibility: final_args.visibility.clone(),
         file_metadata: final_args.file_metadata,
     };
 
-    // Graceful degradation: warn if tree-sitter flags are used without the feature
-    if !silent && (ts_config.signatures || ts_config.structure || ts_config.truncate == "smart") {
+    // Graceful degradation: warn if tree-sitter flags are used without the feature.
+    // `--truncate` defaults to "smart", so it only matters (and only warns) when a
+    // token budget is actually being applied; a plain default run stays quiet.
+    let smart_truncate_requested =
+        final_args.truncate == "smart" && final_args.max_tokens.is_some();
+    if !silent && (ts_config.signatures || ts_config.structure || smart_truncate_requested) {
         #[cfg(not(feature = "tree-sitter-base"))]
         {
             errln!("⚠️  --signatures/--structure/--truncate smart require tree-sitter support.");
-            errln!("   Build with: cargo build --features tree-sitter-all");
+            errln!("   Install with: cargo install context-builder --features tree-sitter-all");
             errln!("   Falling back to standard output.\n");
         }
     }
@@ -1005,6 +1010,14 @@ fn generate_markdown_with_diff(
     }
 
     Ok(output)
+}
+
+/// An output-path error naming the path (the bare OS error does not).
+pub(crate) fn write_error(path: &Path, err: io::Error) -> io::Error {
+    io::Error::new(
+        err.kind(),
+        format!("cannot write '{}': {err}", path.display()),
+    )
 }
 
 pub fn run() -> io::Result<()> {
