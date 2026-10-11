@@ -356,10 +356,10 @@ The diff sections use a simple `+ ` / `- ` line format with `  ...` separators, 
 | Variable | Effect |
 |---|---|
 | `RUST_LOG` | Log verbosity (`env_logger`), e.g. `RUST_LOG=warn` to see per-file warnings such as encoding fallbacks |
-| `CB_SILENT` | `1`/`true` suppresses progress and warning output |
+| `CB_SILENT` | `1`/`true` suppresses the tool's own progress, status and warning messages on stderr/stdout. Logging controlled by `RUST_LOG` is separate |
 | `CB_DEBUG_CONFIG` | Any value: print the merged configuration and collected files to stderr |
 | `CB_DEBUG_AUTODIFF` | Any value: print auto-diff cache decisions to stderr |
-| `CB_DIFF_CONTEXT_LINES` | Number of unchanged context lines around each diff hunk |
+| `CB_DIFF_CONTEXT_LINES` | Library use only (`generate_diff`). The CLI takes the context size from `diff_context_lines` in `context-builder.toml` (default 3) |
 
 Hidden files and directories are skipped unless you pass `--hidden`. Symbolic links are neither followed nor listed.
 
