@@ -279,7 +279,16 @@ impl GoSupport {
                 }
 
                 let kind = self.get_type_kind(&child);
-                let full_sig = format!("type {} {}", name, kind);
+                let full_sig = match kind {
+                    SignatureKind::Struct => format!("type {name} struct"),
+                    SignatureKind::Interface => format!("type {name} interface"),
+                    // `type Name Underlying` / `type Name = Other`: show the
+                    // declaration itself, not the word "type".
+                    _ => {
+                        let text = &source[child.start_byte()..child.end_byte()];
+                        format!("type {}", text.lines().next().unwrap_or(&name).trim_end())
+                    }
+                };
 
                 signatures.push(Signature {
                     kind,
@@ -326,13 +335,9 @@ impl GoSupport {
     }
 
     fn find_child_text_for_result(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == "func_result" {
-                return Some(source[child.start_byte()..child.end_byte()].to_string());
-            }
-        }
-        None
+        // The grammar exposes the result list or single type as the `result` field.
+        let child = node.child_by_field_name("result")?;
+        Some(source[child.start_byte()..child.end_byte()].to_string())
     }
 
     fn find_method_params(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {

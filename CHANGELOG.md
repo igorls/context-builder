@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Go `--signatures` keep return types (#22 B16).** Methods lost their results (`func (c *Command) Context()` for `… context.Context`) because the grammar's `result` field was looked up under the wrong node kind; type aliases printed `type X type`. Now `func (c *Command) Context() context.Context` and `type X flag.ParseErrorsWhitelist`.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):
