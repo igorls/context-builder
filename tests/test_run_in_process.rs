@@ -123,3 +123,11 @@ fn project_config_with_warnings_still_runs() {
     .unwrap();
     assert!(out.exists());
 }
+
+#[test]
+fn help_and_version_succeed_instead_of_being_invalid_input() {
+    run_from(["context-builder", "--help"]).unwrap();
+    run_from(["context-builder", "--version"]).unwrap();
+    let err = run_from(["context-builder", "--definitely-not-a-flag"]).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
