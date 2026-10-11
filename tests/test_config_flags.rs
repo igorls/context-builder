@@ -85,3 +85,16 @@ fn help_lists_both_flags() {
         "{help}"
     );
 }
+
+#[test]
+fn bare_invocation_help_lists_the_config_flags_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_context-builder"))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(help.contains("--no-config"), "{help}");
+    assert!(help.contains("--config <PATH>"), "{help}");
+}
