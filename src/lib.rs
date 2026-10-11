@@ -301,8 +301,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         }
     }
 
-    // Smart large-file detection: warn about files that may bloat the context
-    if !silent {
+    // Smart large-file detection: warn about files that may bloat the context.
+    // Skipped when the output is already reduced (token budget, signatures,
+    // structure): the input sizes would only suggest a problem that is not there.
+    if !silent && !output_is_reduced(&final_args) {
         const LARGE_FILE_THRESHOLD: u64 = 100 * 1024; // 100 KB
         let mut large_files: Vec<(String, u64)> = Vec::new();
         let mut total_size: u64 = 0;
@@ -664,7 +666,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if !silent {
             // Non-blocking. File count is not a cost proxy; this estimate is.
             // Stderr so `-o -` stays a clean document.
-            print_context_window_warning(final_doc.len(), final_args.max_tokens, &files);
+            print_context_window_warning(
+                final_doc.len(),
+                final_args.max_tokens,
+                &files,
+                !final_args.filter.is_empty(),
+            );
         }
         return Ok(());
     }
@@ -713,7 +720,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent {
         // Non-blocking. File count is not a cost proxy; this estimate is.
         // Stderr so `-o -` stays a clean document.
-        print_context_window_warning(output_bytes, final_args.max_tokens, &files);
+        print_context_window_warning(
+            output_bytes,
+            final_args.max_tokens,
+            &files,
+            !final_args.filter.is_empty(),
+        );
     }
 
     Ok(())
@@ -727,6 +739,15 @@ fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Re
     Ok(estimate_tokens(encoding, &String::from_utf8_lossy(&buf)))
 }
 
+/// True when the document will be much smaller than the input files: a token
+/// budget caps it, or `--signatures` / `--structure` replace bodies with an
+/// outline (only when tree-sitter support is compiled in; otherwise the full
+/// content is written).
+fn output_is_reduced(args: &Args) -> bool {
+    args.max_tokens.is_some()
+        || (cfg!(feature = "tree-sitter-base") && (args.signatures || args.structure))
+}
+
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
 /// exceeds 128K tokens — beyond this size, context quality degrades
 /// significantly for most LLM use cases.
@@ -736,6 +757,7 @@ fn print_context_window_warning(
     output_bytes: usize,
     max_tokens: Option<usize>,
     files: &[ignore::DirEntry],
+    filter_applied: bool,
 ) {
     let estimated_tokens = output_bytes / 4;
 
@@ -762,7 +784,7 @@ fn print_context_window_warning(
     );
     eprintln!("   Large contexts degrade response quality. Consider narrowing the scope:");
     eprintln!();
-    for line in context_window_suggestions(&paths) {
+    for line in context_window_suggestions(&paths, filter_applied) {
         eprintln!("   • {line}");
     }
     eprintln!();
@@ -808,9 +830,10 @@ fn is_suggestable_filter_ext(ext: &str) -> bool {
 
 /// Copy-pasteable commands for the >128K warning. Every flag here is one the
 /// CLI actually honors (`--ignore docs,assets` included).
-fn context_window_suggestions(paths: &[&Path]) -> Vec<String> {
+fn context_window_suggestions(paths: &[&Path], filter_applied: bool) -> Vec<String> {
     let mut lines: Vec<String> = ADVICE.iter().map(|(f, d)| advice_line(f, d)).collect();
-    if let Some(exts) = suggested_filter_exts(paths) {
+    // A run that already passes `--filter` has nothing more to gain from that advice.
+    if !filter_applied && let Some(exts) = suggested_filter_exts(paths) {
         lines.insert(1, advice_line(&format!("--filter {exts}"), FILTER_ADVICE));
     }
     lines
@@ -1937,7 +1960,7 @@ mod tests {
             Path::new("cmd/main.go"),
             Path::new("README.md"),
         ];
-        let lines = context_window_suggestions(&go);
+        let lines = context_window_suggestions(&go, false);
         let text = lines.join("\n");
         assert!(
             text.contains("--filter go,md"),
@@ -1960,7 +1983,7 @@ mod tests {
             Path::new("src/util.py"),
             Path::new("tests/test_app.py"),
         ];
-        let py_lines = context_window_suggestions(&python);
+        let py_lines = context_window_suggestions(&python, false);
         assert!(
             py_lines.iter().any(|line| line.contains("--filter py")),
             "{py_lines:?}"
@@ -1997,9 +2020,22 @@ mod tests {
     }
 
     #[test]
+    fn test_context_window_suggestions_omit_filter_when_already_applied() {
+        let paths = [Path::new("a.rs"), Path::new("b.rs")];
+        let with = context_window_suggestions(&paths, false);
+        assert!(with.iter().any(|l| l.contains("--filter rs")));
+        let without = context_window_suggestions(&paths, true);
+        assert!(
+            !without.iter().any(|l| l.contains("--filter")),
+            "{without:?}"
+        );
+        assert_eq!(without.len(), with.len() - 1);
+    }
+
+    #[test]
     fn test_context_window_suggestions_omit_filter_without_extensions() {
         let paths = [Path::new("Makefile"), Path::new("LICENSE")];
-        let lines = context_window_suggestions(&paths);
+        let lines = context_window_suggestions(&paths, false);
         assert!(
             !lines.iter().any(|line| line.contains("--filter")),
             "no extensions means no --filter command to suggest: {lines:?}"
@@ -2025,7 +2061,7 @@ mod tests {
         }
 
         let output_bytes = 100_000;
-        print_context_window_warning(output_bytes * 4, None, &[]);
+        print_context_window_warning(output_bytes * 4, None, &[], false);
 
         unsafe {
             std::env::remove_var("CB_SILENT");
@@ -2040,21 +2076,21 @@ mod tests {
     #[test]
     fn test_context_window_warning_over_limit() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, None, &[]);
+        print_context_window_warning(output_bytes * 4, None, &[], false);
     }
 
     #[test]
     fn test_context_window_warning_with_max_tokens() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, Some(100_000), &[]);
+        print_context_window_warning(output_bytes * 4, Some(100_000), &[], false);
     }
 
     #[test]
     fn test_print_context_window_warning_various_sizes() {
-        print_context_window_warning(50_000, None, &[]);
-        print_context_window_warning(200_000, None, &[]);
-        print_context_window_warning(500_000, None, &[]);
-        print_context_window_warning(1_000_000, None, &[]);
+        print_context_window_warning(50_000, None, &[], false);
+        print_context_window_warning(200_000, None, &[], false);
+        print_context_window_warning(500_000, None, &[], false);
+        print_context_window_warning(1_000_000, None, &[], false);
     }
 
     #[test]
@@ -2679,7 +2715,7 @@ mod tests {
     #[test]
     fn test_print_context_window_warning_exact_limit() {
         let output_bytes = 128_000 * 4;
-        print_context_window_warning(output_bytes, None, &[]);
+        print_context_window_warning(output_bytes, None, &[], false);
     }
 
     #[test]

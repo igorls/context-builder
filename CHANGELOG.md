@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Size warnings match what the run writes (#41).** The `large file(s) detected … Total context size` block is no longer printed when `--max-tokens`, `--signatures` or `--structure` already shrink the output (it still appears for full runs and `--preview`). The >128K advice omits `--filter …` when a filter was already given.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):
