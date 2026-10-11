@@ -1,5 +1,5 @@
 //! `--structure` lists imports and exports (#22 B15), as `--help` always promised.
-#![cfg(feature = "tree-sitter-base")]
+#![cfg(feature = "tree-sitter-all")]
 
 use context_builder::tree_sitter::extract_structure_for_file;
 use context_builder::tree_sitter::structure::format_structure_as_markdown;
@@ -102,7 +102,31 @@ fn binary_prints_imports_and_exports() {
     let doc = String::from_utf8_lossy(&out.stdout);
     assert!(doc.contains("**Imports:**\n- `import b from 'b'`"), "{doc}");
     assert!(
-        doc.contains("**Exports:**\n- `export const x = 1`"),
+        doc.contains("**Exports:**\n- `export const x`"),
         "{doc}"
     );
+}
+
+#[test]
+fn export_headers_survive_braces_in_types_and_multiline_lists() {
+    let (_, e) = lists(
+        "export function f(opts: { a: string }) { return 1; }\nexport {\n  a,\n  b,\n};\nexport const cfg = { a: 1 };\nexport interface P {\n  x: number;\n}\nexport * from \"./x\";\n",
+        "ts",
+    );
+    assert_eq!(
+        e,
+        [
+            "export function f(opts: { a: string })",
+            "export { a, b, }",
+            "export const cfg",
+            "export interface P",
+            "export * from \"./x\"",
+        ]
+    );
+}
+
+#[test]
+fn pyw_files_get_real_imports() {
+    let (i, _) = lists("import os\n", "pyw");
+    assert_eq!(i, ["import os"]);
 }

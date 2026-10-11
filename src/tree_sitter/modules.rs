@@ -21,7 +21,7 @@ fn kinds_for(ext: &str) -> Option<Kinds> {
             exports: &[],
             containers: &[],
         },
-        "py" | "pyi" => Kinds {
+        "py" | "pyi" | "pyw" => Kinds {
             imports: &["import_statement", "import_from_statement"],
             exports: &[],
             containers: &[],
@@ -93,7 +93,7 @@ fn collect(
                 imports.push(one_line(text, MAX_IMPORT_CHARS));
             }
         } else if kinds.exports.contains(&kind) {
-            exports.push(export_header(text));
+            exports.push(export_header(&child, source));
         } else if kinds.containers.contains(&kind) {
             collect(&child, source, ext, kinds, imports, exports);
         }
@@ -107,20 +107,24 @@ fn one_line(text: &str, max: usize) -> String {
     cap(trimmed, max)
 }
 
-/// The first line of an export, without the opening brace of a body.
-fn export_header(text: &str) -> String {
-    let first = text.lines().next().unwrap_or("").trim();
-    // `export { a, b }` / `export * from "x"` are the whole statement; for a
-    // declaration, stop before its body (or object literal).
-    let list_form = first.starts_with("export {") || first.starts_with("export *");
-    let head = if list_form {
-        first
-    } else {
-        first.split('{').next().unwrap_or(first)
-    };
-    let head = head.trim_end_matches(';').trim_end();
-    let head = head.trim_end_matches('=').trim_end();
-    cap(head, MAX_EXPORT_CHARS)
+/// An export without its body: `export function f(o: { a: string })`, not
+/// `export function f(o:` and not the whole function. The declaration's
+/// `body` field marks where the header ends; list forms (`export { a, b }`)
+/// are kept whole, with whitespace collapsed.
+fn export_header(node: &tree_sitter::Node, source: &str) -> String {
+    let mut end = node.end_byte();
+    if let Some(decl) = node.child_by_field_name("declaration") {
+        end = decl
+            .child_by_field_name("body")
+            .map_or(decl.end_byte(), |body| body.start_byte());
+        // `export const x = <value>`: the name is the interface, not the value.
+        if matches!(decl.kind(), "lexical_declaration" | "variable_declaration")
+            && let Some(eq) = source[node.start_byte()..end].find('=')
+        {
+            end = node.start_byte() + eq;
+        }
+    }
+    one_line(&source[node.start_byte()..end], MAX_EXPORT_CHARS)
 }
 
 fn cap(text: &str, max: usize) -> String {
@@ -146,34 +150,19 @@ mod tests {
     }
 
     #[test]
-    fn export_header_stops_before_the_body() {
-        assert_eq!(
-            export_header("export function f(a: number) {\n  return a;\n}"),
-            "export function f(a: number)"
-        );
-        assert_eq!(export_header("export { a, b };"), "export { a, b }");
-        assert_eq!(
-            export_header("export function f(x: number) { return x; }"),
-            "export function f(x: number)"
-        );
-        assert_eq!(
-            export_header("export default class K {}"),
-            "export default class K"
-        );
-        assert_eq!(
-            export_header("export const cfg = { a: 1 };"),
-            "export const cfg"
-        );
-        assert_eq!(
-            export_header("export * from \"./x\";"),
-            "export * from \"./x\""
-        );
-    }
-
-    #[test]
     fn cap_marks_truncation_on_char_boundaries() {
         assert_eq!(cap("abc", 5), "abc");
         assert_eq!(cap("ééééé", 3), "ééé…");
+    }
+
+    #[test]
+    fn every_supported_extension_with_modules_has_a_rule() {
+        for ext in [
+            "rs", "py", "pyw", "pyi", "js", "mjs", "ts", "tsx", "go", "java", "c", "h", "cpp",
+            "hpp",
+        ] {
+            assert!(kinds_for(ext).is_some(), "{ext}");
+        }
     }
 
     #[test]
