@@ -404,13 +404,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 encoding,
                 &format!("{}0000000000000000\n\n", markdown::CONTENT_HASH_PREFIX),
             );
-            total_tokens += estimate_tokens(
-                encoding,
-                &format!(
-                    "## File Tree Structure\n\n{}\n\n",
-                    markdown::TREE_ORDER_NOTE
-                ),
+            let tree_header = format!(
+                "## File Tree Structure\n\n{}\n\n",
+                markdown::TREE_ORDER_NOTE
             );
+            total_tokens += estimate_tokens(encoding, &tree_header);
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
             // The `## Skipped` section is part of the generated report.
