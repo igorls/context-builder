@@ -962,36 +962,35 @@ fn generate_markdown_with_diff(
             .collect();
         for (idx, (path, file_state)) in present.iter().enumerate() {
             let section = diff_file_section(path, file_state, args, ts_config, None)?;
-            let Some((max, encoding, _)) = budget else {
-                output.push_str(&section);
-                continue;
-            };
-            let section_tokens = estimate_tokens(encoding, &section);
-            if tokens_used + section_tokens <= max {
+            let section_tokens =
+                budget.map_or(0, |(_, encoding, _)| estimate_tokens(encoding, &section));
+            let fits = budget.is_none_or(|(max, _, _)| tokens_used + section_tokens <= max);
+            if fits {
                 tokens_used += section_tokens;
                 output.push_str(&section);
-                continue;
+            } else if let Some((max, encoding, _)) = budget {
+                // Crossing file: clamp it into the remaining allowance, else omit it.
+                let remaining_tokens = max.saturating_sub(tokens_used);
+                let fitted = markdown::fit_chunk_to_budget(remaining_tokens, encoding, |limit| {
+                    diff_file_section(path, file_state, args, ts_config, limit).ok()
+                });
+                let omitted = present.len() - idx - usize::from(fitted.is_some());
+                if let Some((chunk, _)) = fitted {
+                    output.push_str(&chunk);
+                }
+                output.push_str("---\n\n");
+                output.push_str(&budget_notice(max, omitted));
+                break;
             }
-            // Crossing file: clamp it into the remaining allowance, else omit it.
-            let remaining_tokens = max.saturating_sub(tokens_used);
-            let fitted = markdown::fit_chunk_to_budget(remaining_tokens, encoding, |limit| {
-                diff_file_section(path, file_state, args, ts_config, limit).ok()
-            });
-            let emitted = fitted.is_some();
-            if let Some((chunk, _)) = fitted {
-                output.push_str(&chunk);
-            }
-            output.push_str("---\n\n");
-            output.push_str(&format!(
-                "_⚠️ Token budget ({}) reached. {} remaining files omitted._\n\n",
-                max,
-                present.len() - idx - usize::from(emitted)
-            ));
-            break;
         }
     }
 
     Ok(output)
+}
+
+/// The notice that ends a document whose budget ran out.
+fn budget_notice(max: usize, omitted: usize) -> String {
+    format!("_⚠️ Token budget ({max}) reached. {omitted} remaining files omitted._\n\n")
 }
 
 /// One `### File:` section of the auto-diff document. `content_limit` clamps
@@ -1006,16 +1005,16 @@ fn diff_file_section(
     content_limit: Option<usize>,
 ) -> io::Result<String> {
     let mut output = String::new();
-    output.push_str(&format!(
-        "### File: {}\n\n",
-        fences::inline_code(&path.display().to_string())
-    ));
+    let heading = fences::inline_code(&path.display().to_string());
+    output.push_str(&format!("### File: {heading}\n\n"));
     // Same opt-in as the standard renderer. Off by default so an
     // mtime-only change does not rewrite the document. The cache
     // compares content hashes (file bytes), not mtime.
     if args.file_metadata {
-        output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-        output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+        let (size, modified) = (file_state.size, file_state.modified);
+        output.push_str(&format!(
+            "- Size: {size} bytes\n- Modified: {modified:?}\n\n"
+        ));
     }
 
     // Determine language from file extension (canonical map —
@@ -1045,11 +1044,9 @@ fn diff_file_section(
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         output.push_str(rendered);
         if truncated {
+            let (shown, total, mode) = (content.len(), full.len(), &ts_config.truncate);
             output.push_str(&format!(
-                "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n\n",
-                content.len(),
-                full.len(),
-                ts_config.truncate
+                "\n_⚠️ File content truncated: {shown} of {total} bytes (mode: {mode})._\n\n"
             ));
         }
     }
