@@ -1,11 +1,11 @@
 //! Python `--signatures` blocks must not contain `//` comments (#22 B16),
 //! and `--help` must not promise imports/exports that `--structure` lacks.
-#![cfg(feature = "tree-sitter-base")]
-
+#[cfg(feature = "tree-sitter-python")]
 use std::fs;
 use std::process::Command;
 
 #[test]
+#[cfg(feature = "tree-sitter-python")]
 fn python_signature_block_uses_hash_comment_headings() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
