@@ -23,6 +23,12 @@ fn init_does_not_suggest_asset_secret_or_oversized_types() {
         )
         .unwrap();
     }
+    // Regular files next to their minified/oversized counterparts: suggesting
+    // `js`/`css`/`json` would opt the skipped ones back in.
+    fs::write(base.join("app.js"), "let a = 1;\n").unwrap();
+    fs::write(base.join("app.css"), "a { color: red }\n").unwrap();
+    fs::write(base.join("small.json"), "{}\n").unwrap();
+    fs::write(base.join("app.min.css"), "a{color:red}\n").unwrap();
     fs::write(base.join("dump.json"), "x".repeat(300 * 1024)).unwrap();
 
     let out = bin().arg("--init").current_dir(base).output().unwrap();
@@ -37,7 +43,7 @@ fn init_does_not_suggest_asset_secret_or_oversized_types() {
         .lines()
         .find(|l| l.starts_with("filter ="))
         .expect("filter line");
-    for bad in ["png", "js", "pem", "json"] {
+    for bad in ["png", "js", "css", "pem", "json"] {
         assert!(
             !filter_line.contains(&format!("\"{bad}\"")),
             "filter must not contain {bad}: {filter_line}"

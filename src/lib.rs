@@ -1124,12 +1124,23 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
     // `filter` entry for an asset type (`png`, `pdf`, …) opts those files back
     // in, so suggesting one would undo the default asset/size/secret skips.
     let policy = ContentPolicy::new(DEFAULT_MAX_FILE_SIZE_SPEC, &[], false);
-    let (files, _skipped) = content_filter::partition(files, Path::new("."), &policy);
+    let (files, skipped) = content_filter::partition(files, Path::new("."), &policy);
+    // An extension that also names a skipped file (`app.js` next to `app.min.js`,
+    // `logo.svg` over the size limit) is left out: an explicit filter entry for
+    // it would opt the skipped files back in, even though the regular ones are fine.
+    let skipped_exts: std::collections::HashSet<String> = skipped
+        .iter()
+        .filter_map(|file| Path::new(&file.path).extension())
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+        .collect();
 
     // Count extensions from the filtered file list
     for entry in files {
         let path = entry.path();
         if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+            if skipped_exts.contains(&extension.to_ascii_lowercase()) {
+                continue;
+            }
             // Count the extension occurrences
             *extension_counts.entry(extension.to_string()).or_insert(0) += 1;
         }
