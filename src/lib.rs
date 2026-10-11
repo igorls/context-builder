@@ -1039,6 +1039,25 @@ pub fn run() -> io::Result<()> {
     // default, so the value alone can't reveal an intent to override a
     // non-default config (see resolver).
     let matches = Args::command().get_matches();
+    run_matches(&matches, std::env::args_os().len())
+}
+
+/// [`run`] with an explicit argument vector (program name first) instead of
+/// the process arguments, so the whole command line path can run in-process.
+/// A bad command line is returned as `InvalidInput` instead of exiting.
+pub fn run_from<I, T>(argv: I) -> io::Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
+    let matches = Args::command()
+        .try_get_matches_from(&argv)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+    run_matches(&matches, argv.len())
+}
+
+fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
         visibility: matches.value_source("visibility")
@@ -1051,8 +1070,8 @@ pub fn run() -> io::Result<()> {
         // `-o` is used verbatim (no output_folder / timestamp rewrite).
         output: matches.value_source("output") == Some(clap::parser::ValueSource::CommandLine),
     };
-    let args = Args::from_arg_matches(&matches)
-        .expect("arguments were already validated by get_matches()");
+    let args =
+        Args::from_arg_matches(matches).expect("arguments were already validated by get_matches()");
 
     // Handle init command first
     if args.init {
@@ -1077,7 +1096,7 @@ pub fn run() -> io::Result<()> {
         return Ok(());
     }
 
-    if std::env::args().len() == 1 && config.is_none() {
+    if argc == 1 && config.is_none() {
         Args::command().print_help()?;
         return Ok(());
     }
