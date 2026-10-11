@@ -307,12 +307,15 @@ pub fn generate_markdown(
                                             );
                                             if let Some(limited_tokens) = fits {
                                                 if let Err(e) = output.write_all(&limited_buf) {
-                                                    pipe_closed |=
-                                                        e.kind() == io::ErrorKind::BrokenPipe;
-                                                    errors.push(format!(
-                                                        "Failed to write output for file index {}: {}",
-                                                        next_index, e
-                                                    ));
+                                                    note_write_failure(
+                                                        &mut errors,
+                                                        &mut pipe_closed,
+                                                        format!(
+                                                            "Failed to write output for file index {}",
+                                                            next_index
+                                                        ),
+                                                        &e,
+                                                    );
                                                 }
                                                 tokens_used += limited_tokens;
                                             }
@@ -324,12 +327,12 @@ pub fn generate_markdown(
                                                 max, remaining
                                             );
                                             if let Err(e) = output.write_all(notice.as_bytes()) {
-                                                pipe_closed |=
-                                                    e.kind() == io::ErrorKind::BrokenPipe;
-                                                errors.push(format!(
-                                                    "Failed to write truncation notice: {}",
-                                                    e
-                                                ));
+                                                note_write_failure(
+                                                    &mut errors,
+                                                    &mut pipe_closed,
+                                                    "Failed to write truncation notice".to_string(),
+                                                    &e,
+                                                );
                                             }
                                             budget_exceeded = true;
                                             next_index += 1;
@@ -338,11 +341,15 @@ pub fn generate_markdown(
 
                                         tokens_used += chunk_tokens;
                                         if let Err(e) = output.write_all(&buf) {
-                                            pipe_closed |= e.kind() == io::ErrorKind::BrokenPipe;
-                                            errors.push(format!(
-                                                "Failed to write output for file index {}: {}",
-                                                next_index, e
-                                            ));
+                                            note_write_failure(
+                                                &mut errors,
+                                                &mut pipe_closed,
+                                                format!(
+                                                    "Failed to write output for file index {}",
+                                                    next_index
+                                                ),
+                                                &e,
+                                            );
                                         }
                                     }
                                     Err(e) => {
@@ -359,9 +366,7 @@ pub fn generate_markdown(
                     }
                 }
 
-                if pipe_closed {
-                    return Err(io::Error::from(io::ErrorKind::BrokenPipe));
-                }
+                fail_if_pipe_closed(pipe_closed)?;
 
                 if !errors.is_empty() {
                     error!(
@@ -817,6 +822,27 @@ pub fn process_file_with_content_limit(
     }
 
     Ok(())
+}
+
+/// Records a failed write. A closed pipe is remembered separately so the run
+/// can end quietly (`head`-style consumers) instead of reporting an error.
+fn note_write_failure(
+    errors: &mut Vec<String>,
+    pipe_closed: &mut bool,
+    what: String,
+    e: &io::Error,
+) {
+    *pipe_closed |= e.kind() == io::ErrorKind::BrokenPipe;
+    errors.push(format!("{what}: {e}"));
+}
+
+/// `Err(BrokenPipe)` when the reader went away, so callers stop early.
+fn fail_if_pipe_closed(pipe_closed: bool) -> io::Result<()> {
+    if pipe_closed {
+        Err(io::Error::from(io::ErrorKind::BrokenPipe))
+    } else {
+        Ok(())
+    }
 }
 
 /// Compute the byte cut point for truncating `content` to `limit` bytes,
@@ -2895,5 +2921,38 @@ mod tests {
             );
             assert!(crate::fences::unmatched_backtick_fence_len(&rendered).is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod write_failure_tests {
+    use super::*;
+
+    #[test]
+    fn broken_pipe_is_remembered_and_still_listed() {
+        let mut errors = Vec::new();
+        let mut pipe_closed = false;
+        let e = io::Error::from(io::ErrorKind::BrokenPipe);
+        note_write_failure(&mut errors, &mut pipe_closed, "Failed to write".into(), &e);
+        assert!(pipe_closed);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].starts_with("Failed to write: "), "{errors:?}");
+    }
+
+    #[test]
+    fn other_write_errors_do_not_mark_the_pipe_closed() {
+        let mut errors = Vec::new();
+        let mut pipe_closed = false;
+        let e = io::Error::from(io::ErrorKind::PermissionDenied);
+        note_write_failure(&mut errors, &mut pipe_closed, "x".into(), &e);
+        assert!(!pipe_closed);
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn closed_pipe_ends_the_run_with_broken_pipe() {
+        assert!(fail_if_pipe_closed(false).is_ok());
+        let err = fail_if_pipe_closed(true).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 }
