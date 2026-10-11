@@ -1004,6 +1004,13 @@ fn generate_markdown_with_diff(
     Ok(output)
 }
 
+/// `CB_SILENT=1|true` suppresses user-facing console output.
+fn silent_requested() -> bool {
+    std::env::var("CB_SILENT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 pub fn run() -> io::Result<()> {
     env_logger::init();
     // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
@@ -1067,8 +1074,10 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let project_root = Path::new(&args.input);
     let config = match config::try_load_config(project_root)? {
         Some((config, warnings)) => {
-            for warning in &warnings {
-                eprintln!("⚠️  {warning}");
+            if !silent_requested() {
+                for warning in &warnings {
+                    eprintln!("⚠️  {warning}");
+                }
             }
             Some(config)
         }
@@ -1098,9 +1107,7 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let resolution = crate::config_resolver::resolve_final_config(args, config.clone(), explicit);
 
     // Print warnings if any
-    let silent = std::env::var("CB_SILENT")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let silent = silent_requested();
 
     if !silent {
         for warning in &resolution.warnings {

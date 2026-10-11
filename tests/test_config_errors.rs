@@ -34,6 +34,7 @@ fn project(config: &str) -> tempfile::TempDir {
 fn bin(dir: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_context-builder"))
         .args(["-d", ".", "-o", "-", "-y"])
+        .env_remove("CB_SILENT")
         .current_dir(dir)
         .output()
         .unwrap()
@@ -86,4 +87,45 @@ fn valid_config_is_silent() {
     let out = bin(dir.path());
     assert!(out.status.success());
     assert!(!String::from_utf8_lossy(&out.stderr).contains("unknown key"));
+}
+
+#[test]
+fn unknown_key_warning_honors_cb_silent() {
+    let dir = project("filters = [\"rs\"]\n");
+    let out = Command::new(env!("CARGO_BIN_EXE_context-builder"))
+        .args(["-d", ".", "-o", "-", "-y"])
+        .env("CB_SILENT", "1")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("unknown key"));
+}
+
+#[test]
+#[serial]
+fn unknown_key_warning_in_process_with_silent_set() {
+    let dir = project("filters = [\"rs\"]\n");
+    let _cwd = CwdGuard::enter(dir.path());
+    // SAFETY: serialized with the other env-touching tests in this file.
+    unsafe { std::env::set_var("CB_SILENT", "1") };
+    let result = run_from(["context-builder", "-d", ".", "-y"]);
+    unsafe { std::env::remove_var("CB_SILENT") };
+    result.unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_config_is_an_error_not_no_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project("line_numbers = true\n");
+    let cfg = dir.path().join("context-builder.toml");
+    fs::set_permissions(&cfg, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root ignores permission bits; only assert when the file is really unreadable.
+    if fs::read_to_string(&cfg).is_err() {
+        let out = bin(dir.path());
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read config"));
+    }
+    fs::set_permissions(&cfg, fs::Permissions::from_mode(0o644)).unwrap();
 }

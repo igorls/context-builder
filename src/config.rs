@@ -273,15 +273,18 @@ pub const KNOWN_KEYS: &[&str] = &[
 /// does not pass unnoticed.
 pub fn try_load_config(project_root: &Path) -> io::Result<Option<(Config, Vec<String>)>> {
     let path = project_root.join("context-builder.toml");
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = fs::read_to_string(&path).map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("cannot read config '{}': {e}", path.display()),
-        )
-    })?;
+    // Read directly: `exists()` is false for an unreadable path too, which
+    // would quietly mean "no config". Only NotFound means that.
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(io::Error::new(
+                e.kind(),
+                format!("cannot read config '{}': {e}", path.display()),
+            ));
+        }
+    };
     let config: Config = toml::from_str(&content).map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
