@@ -229,6 +229,23 @@ impl RustSupport {
                     "function_signature_item" => {
                         self.extract_function_sig_item(source, &member, visibility)
                     }
+                    // Associated consts and types are part of the interface too.
+                    "const_item" | "type_item" | "associated_type" => {
+                        let text = self.node_text(source, &member);
+                        let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let one_line = one_line.trim_end_matches(';').to_string();
+                        // Trait items inherit the trait's visibility; impl items
+                        // are public only with an explicit `pub`.
+                        let in_trait = container.kind() == "trait_item";
+                        let shown = in_trait
+                            || visibility == Visibility::All
+                            || (visibility == Visibility::Public && one_line.starts_with("pub "))
+                            || (visibility == Visibility::Private && !one_line.starts_with("pub"));
+                        if shown {
+                            out.push(one_line);
+                        }
+                        continue;
+                    }
                     _ => None,
                 };
                 if let Some(sig) = sig {

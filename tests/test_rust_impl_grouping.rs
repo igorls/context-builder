@@ -108,3 +108,47 @@ fn binary_groups_methods() {
     assert!(doc.contains("impl A {\n    pub fn new() -> A"), "{doc}");
     assert!(doc.contains("impl B {\n    pub fn new() -> B\n}"), "{doc}");
 }
+
+#[test]
+fn associated_consts_and_types_stay_with_their_trait_and_impl() {
+    let src = "pub trait T {\n    const N: usize;\n    type Out;\n    fn f(&self) -> Self::Out;\n}\nimpl T for S {\n    const N: usize = 3;\n    type Out = u8;\n    fn f(&self) -> u8 { 0 }\n}\nimpl S {\n    pub const MAX: u32 = 9;\n    const HIDDEN: u32 = 1;\n}\n";
+    let all: Vec<String> = extract_signatures_for_file(src, "rs", Visibility::All)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.full_signature)
+        .collect();
+    assert!(
+        all.contains(
+            &"pub trait T {\n    const N: usize\n    type Out\n    fn f(&self) -> Self::Out\n}"
+                .to_string()
+        ),
+        "{all:?}"
+    );
+    assert!(
+        all.contains(
+            &"impl T for S {\n    const N: usize = 3\n    type Out = u8\n    fn f(&self) -> u8\n}"
+                .to_string()
+        ),
+        "{all:?}"
+    );
+    let public: Vec<String> = extract_signatures_for_file(src, "rs", Visibility::Public)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.full_signature)
+        .collect();
+    assert!(
+        public.contains(&"impl S {\n    pub const MAX: u32 = 9\n}".to_string()),
+        "{public:?}"
+    );
+    let private: Vec<String> = extract_signatures_for_file(src, "rs", Visibility::Private)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.full_signature)
+        .collect();
+    assert!(
+        private
+            .iter()
+            .any(|s| s.contains("const HIDDEN") && !s.contains("MAX")),
+        "{private:?}"
+    );
+}
