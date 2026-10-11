@@ -4,10 +4,12 @@
 # Recommended: download the script from a release tag, read it, then run it.
 # Piping a remote script straight into a shell trusts whatever the URL serves
 # at that moment, so avoid that, and never let an automated agent do it.
+# CONTEXT_BUILDER_VERSION is honored by the copy in the first release after
+# v0.11.0 and later; older tags always install the latest release.
 #
-#   curl -fsSLO https://raw.githubusercontent.com/igorls/context-builder/v0.11.0/install.sh
+#   curl -fsSLO https://raw.githubusercontent.com/igorls/context-builder/<TAG>/install.sh
 #   less install.sh
-#   CONTEXT_BUILDER_VERSION=0.11.0 sh install.sh
+#   CONTEXT_BUILDER_VERSION=<VERSION> sh install.sh
 #
 # Environment:
 #   CONTEXT_BUILDER_VERSION      release to install, e.g. 0.11.0 (default: latest)

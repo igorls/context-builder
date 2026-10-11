@@ -91,24 +91,19 @@ It's a command-line utility that recursively processes directories and creates c
 
 Pre-built binaries include full Tree-Sitter AST support. The installer verifies SHA256 checksums before installing.
 
-Download the installer from a release tag, read it, then run it. Pin the version so the binary you get is the one you reviewed:
+The checksum-verified manual steps below need no script and pin the exact release. (`install.sh` can also pin with `CONTEXT_BUILDER_VERSION=x.y.z` from the first release after v0.11.0 onward; download it from that release's tag, read it, then run it. Do not run it from `master`.)
 
-```bash
-curl -fsSLO https://raw.githubusercontent.com/igorls/context-builder/v0.11.0/install.sh
-less install.sh   # review before running
-CONTEXT_BUILDER_VERSION=0.11.0 sh install.sh
-```
-
-Without `CONTEXT_BUILDER_VERSION` the installer takes the latest release. The tag URL does not move; `master` does.
-
-Prefer no script at all? Download the archive and `SHA256SUMS` from the [release page](https://github.com/igorls/context-builder/releases/tag/v0.11.0) and verify them yourself:
+Download the archive and `SHA256SUMS` from the [release page](https://github.com/igorls/context-builder/releases/tag/v0.11.0) and verify them yourself:
 
 ```bash
 V=0.11.0; T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin
 curl -fsSLO "https://github.com/igorls/context-builder/releases/download/v$V/context-builder-$T.tar.gz"
 curl -fsSLO "https://github.com/igorls/context-builder/releases/download/v$V/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
-tar xzf "context-builder-$T.tar.gz" && install -m 755 context-builder ~/.local/bin/
+sha256sum --ignore-missing -c SHA256SUMS \
+  && tar xzf "context-builder-$T.tar.gz" \
+  && mkdir -p ~/.local/bin \
+  && install -m 755 context-builder ~/.local/bin/
+# macOS: use `shasum -a 256 --ignore-missing -c SHA256SUMS` instead of sha256sum
 ```
 
 > **For agents and automation:** never pipe a remote script into a shell. Use a pinned `cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all`, or the checksum-verified steps above.
