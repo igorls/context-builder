@@ -24,7 +24,7 @@ use std::fs::File;
 
 use cache::CacheManager;
 use cli::Args;
-use config::{Config, load_config_from_path};
+use config::Config;
 use content_filter::{ContentPolicy, SkippedFile};
 use diff::render_per_file_diffs;
 #[cfg(test)]
@@ -1034,7 +1034,15 @@ pub fn run() -> io::Result<()> {
 
     // Determine project root first
     let project_root = Path::new(&args.input);
-    let config = load_config_from_path(project_root);
+    let config = match config::try_load_config(project_root)? {
+        Some((config, warnings)) => {
+            for warning in &warnings {
+                eprintln!("⚠️  {warning}");
+            }
+            Some(config)
+        }
+        None => None,
+    };
 
     // Handle early clear-cache request (runs even if no config or other args)
     if args.clear_cache {
