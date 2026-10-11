@@ -246,14 +246,30 @@ fn old_glibc_and_musl_systems_get_the_musl_build_new_glibc_gets_gnu() {
 }
 
 #[test]
-fn release_without_a_musl_archive_falls_back_to_gnu() {
+fn release_without_a_musl_archive_stops_instead_of_installing_an_unusable_gnu_binary() {
     // Releases cut before the musl build existed only list the gnu archive.
     let target = format!("{}-unknown-linux-gnu", host_arch());
     let (out, requests, tmp) = run_install("musl", &target, "from-install", None);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{stdout}");
+    assert!(!out.status.success(), "{stdout}");
     assert!(stdout.contains("no musl build"), "{stdout}");
-    assert!(requests.contains("-unknown-linux-gnu.tar.gz"), "{requests}");
-    assert!(!requests.contains("linux-musl.tar.gz"), "{requests}");
+    assert!(stdout.contains("cargo install context-builder"), "{stdout}");
+    assert!(
+        !requests.contains(".tar.gz"),
+        "no archive downloaded: {requests}"
+    );
+    assert!(!tmp.path().join("install/context-builder").exists());
+}
+
+#[test]
+fn forcing_gnu_installs_the_gnu_build_even_where_musl_was_detected() {
+    let target = format!("{}-unknown-linux-gnu", host_arch());
+    let (out, requests, tmp) = run_install("gnu", &target, "forced", None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(requests.contains("linux-gnu.tar.gz"), "{requests}");
     assert!(tmp.path().join("install/context-builder").exists());
 }

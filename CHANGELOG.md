@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-- **Installer picks the right libc and verifies what it installed (#21 P10, B23).** `install.sh` uses the static `musl` archive on Alpine and glibc older than 2.34 (`CONTEXT_BUILDER_LIBC=musl|gnu` overrides) and falls back to the gnu archive when a release has no musl build (none do yet; the musl release targets need a workflow change that is tracked separately). It runs `$INSTALL_DIR/context-builder --version` instead of whatever is first on `PATH`, and warns when the install is shadowed or not on `PATH`. README says `| sh`, matching the script.
+- **Installer picks the right libc and verifies what it installed (#21 P10, B23).** `install.sh` uses the static `musl` archive on Alpine and glibc older than 2.34 (`CONTEXT_BUILDER_LIBC=musl|gnu` overrides) and stops with instructions when a release has no musl build (none do yet; the musl release targets need a workflow change that is tracked separately) instead of installing a binary that cannot start. It runs `$INSTALL_DIR/context-builder --version` instead of whatever is first on `PATH`, and warns when the install is shadowed or not on `PATH`. README says `| sh`, matching the script.
 
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 

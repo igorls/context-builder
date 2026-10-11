@@ -61,13 +61,17 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 curl -sSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
 
-# Releases published before the musl build existed only have the gnu archive.
+# This host needs the musl build (Alpine, or glibc older than 2.34). Releases
+# published before the musl build existed only have the gnu archive, which will
+# not start here, so stop instead of replacing a working install with it.
 case "$TARGET" in
   *-linux-musl)
     if ! grep -q "$ARCHIVE" "$TMP/SHA256SUMS"; then
-      echo "Note: this release has no musl build; using the gnu build (needs glibc >= 2.34)."
-      TARGET="${TARGET_ARCH}-unknown-linux-gnu"
-      ARCHIVE="context-builder-${TARGET}.tar.gz"
+      echo "Error: this release has no musl build, and this system needs one"
+      echo "(musl libc, or glibc older than 2.34)."
+      echo "Install from source instead:  cargo install context-builder --locked"
+      echo "or try the gnu build anyway:  CONTEXT_BUILDER_LIBC=gnu sh install.sh"
+      exit 1
     fi
     ;;
 esac

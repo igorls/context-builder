@@ -95,7 +95,7 @@ Pre-built binaries include full Tree-Sitter AST support. The installer verifies 
 curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | sh
 ```
 
-> On Alpine and on glibc older than 2.34 the installer picks the static `musl` build automatically (force one with `CONTEXT_BUILDER_LIBC=musl` or `gnu`). It verifies the SHA256 checksum, and warns if another `context-builder` on your `PATH` shadows the one it installed.
+> On Alpine and on glibc older than 2.34 the installer needs the static `musl` build. Releases that do not include one make it stop with instructions (`cargo install context-builder --locked`) rather than install a binary that will not start; force a choice with `CONTEXT_BUILDER_LIBC=musl` or `gnu`. It verifies the SHA256 checksum, and warns if another `context-builder` on your `PATH` shadows the one it installed.
 
 > **Note:** piping remote scripts into `sh` is a matter of trust — some scanners flag the `curl | bash` pattern generically. If you prefer, review [install.sh](install.sh) first or use one of the alternatives below.
 
