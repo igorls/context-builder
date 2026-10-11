@@ -59,10 +59,10 @@ pub fn print_tree(tree: &FileTree, depth: usize) {
         let indent = "  ".repeat(depth);
         match node {
             FileNode::File => {
-                println!("{}- 📄 {}", indent, name);
+                outln!("{}- 📄 {}", indent, name);
             }
             FileNode::Directory(children) => {
-                println!("{}- 📁 {}", indent, name);
+                outln!("{}- 📁 {}", indent, name);
                 print_tree(children, depth + 1);
             }
         }

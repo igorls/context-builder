@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **A closed stderr or stdout pipe no longer aborts the run (#40).** `context-builder … 2>&1 | head -3` used to panic with exit code 101 and could leave the output file missing. Progress and warning lines now ignore write errors, and `-o - | head` ends with exit code 0.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

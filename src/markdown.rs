@@ -247,6 +247,9 @@ pub fn generate_markdown(
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
+                // The reader of `-o -` went away; remember it so the caller sees
+                // `BrokenPipe` instead of a wall of per-file write errors.
+                let mut pipe_closed = false;
                 let mut tokens_used: usize = header_tokens;
                 let mut budget_exceeded = false;
 
@@ -304,6 +307,8 @@ pub fn generate_markdown(
                                             );
                                             if let Some(limited_tokens) = fits {
                                                 if let Err(e) = output.write_all(&limited_buf) {
+                                                    pipe_closed |=
+                                                        e.kind() == io::ErrorKind::BrokenPipe;
                                                     errors.push(format!(
                                                         "Failed to write output for file index {}: {}",
                                                         next_index, e
@@ -331,6 +336,7 @@ pub fn generate_markdown(
 
                                         tokens_used += chunk_tokens;
                                         if let Err(e) = output.write_all(&buf) {
+                                            pipe_closed |= e.kind() == io::ErrorKind::BrokenPipe;
                                             errors.push(format!(
                                                 "Failed to write output for file index {}: {}",
                                                 next_index, e
@@ -349,6 +355,10 @@ pub fn generate_markdown(
                         }
                         Err(_) => break, // Channel closed
                     }
+                }
+
+                if pipe_closed {
+                    return Err(io::Error::from(io::ErrorKind::BrokenPipe));
                 }
 
                 if !errors.is_empty() {
@@ -981,11 +991,12 @@ pub fn write_tree_sitter_enrichment(
             // eprintln (not warn!/log) so it is visible without RUST_LOG —
             // env_logger defaults to error level, and a user-style default run
             // would otherwise never see this warning.
-            eprintln!(
+            errln!(
                 "⚠️  --visibility {} has no effect for '{}' files: the extractor \
                  does not classify visibility yet (planned for v0.11). \
                  Signatures will include all symbols.",
-                ts_config.visibility, extension
+                ts_config.visibility,
+                extension
             );
         }
 

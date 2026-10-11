@@ -753,7 +753,7 @@ fn can_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
 /// Prompts must not go to stdout: `-o -` and any caller capturing stdout would
 /// otherwise treat the question as document content.
 fn prompt_yes(prompt: &str) -> io::Result<bool> {
-    eprint!("{prompt}");
+    err!("{prompt}");
     io::stderr().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;

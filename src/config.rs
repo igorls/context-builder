@@ -222,7 +222,7 @@ pub fn load_config() -> Option<Config> {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!(
+                errln!(
                     "⚠️  Failed to parse context-builder.toml: {}. Config will be ignored.",
                     e
                 );
@@ -243,7 +243,7 @@ pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!(
+                errln!(
                     "⚠️  Failed to parse {}: {}. Config will be ignored.",
                     config_path.display(),
                     e
