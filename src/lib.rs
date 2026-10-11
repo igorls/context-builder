@@ -1029,7 +1029,7 @@ pub fn run() -> io::Result<()> {
 
     // Handle init command first
     if args.init {
-        return init_config();
+        return init_config_in(Path::new(&args.input));
     }
 
     // Determine project root first
@@ -1106,25 +1106,30 @@ pub fn run() -> io::Result<()> {
 }
 
 /// Detect major file types in the current directory respecting .gitignore and default ignore patterns
+#[cfg(test)]
 fn detect_major_file_types() -> io::Result<Vec<String>> {
+    detect_major_file_types_in(Path::new("."))
+}
+
+/// Same as [`detect_major_file_types`] for the project at `root`.
+fn detect_major_file_types_in(root: &Path) -> io::Result<Vec<String>> {
     use std::collections::HashMap;
     let mut extension_counts = HashMap::new();
 
     // Use the same default ignore patterns as the main application
     let default_ignores = vec![
-        "docs".to_string(),
         "target".to_string(),
         ".git".to_string(),
         "node_modules".to_string(),
     ];
 
     // Collect files using the same logic as the main application
-    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores, &[])?;
+    let files = crate::file_utils::collect_files(root, &[], &default_ignores, &[])?;
     // Only suggest what a default run would actually include. An explicit
     // `filter` entry for an asset type (`png`, `pdf`, …) opts those files back
     // in, so suggesting one would undo the default asset/size/secret skips.
     let policy = ContentPolicy::new(DEFAULT_MAX_FILE_SIZE_SPEC, &[], false);
-    let (files, skipped) = content_filter::partition(files, Path::new("."), &policy);
+    let (files, skipped) = content_filter::partition(files, root, &policy);
     // An extension that also names a skipped file (`app.js` next to `app.min.js`,
     // `logo.svg` over the size limit) is left out: an explicit filter entry for
     // it would opt the skipped files back in, even though the regular ones are fine.
@@ -1157,8 +1162,15 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
 }
 
 /// Initialize a new context-builder.toml config file in the current directory with sensible defaults
+#[cfg(test)]
 fn init_config() -> io::Result<()> {
-    let config_path = Path::new("context-builder.toml");
+    init_config_in(Path::new("."))
+}
+
+/// Write `context-builder.toml` into the project at `root` (`-d` target).
+fn init_config_in(root: &Path) -> io::Result<()> {
+    let config_path_buf = root.join("context-builder.toml");
+    let config_path = config_path_buf.as_path();
 
     if config_path.exists() {
         println!("Config file already exists at {}", config_path.display());
@@ -1167,7 +1179,7 @@ fn init_config() -> io::Result<()> {
     }
 
     // Detect major file types in the current directory
-    let filter_suggestions = match detect_major_file_types() {
+    let filter_suggestions = match detect_major_file_types_in(root) {
         Ok(extensions) => extensions,
         _ => vec!["rs".to_string(), "toml".to_string()], // fallback to defaults
     };
@@ -1185,8 +1197,10 @@ fn init_config() -> io::Result<()> {
 # Output file name (or base name when timestamped_output is true)
 output = "context.md"
 
-# Optional folder to place the generated output file(s) in
-output_folder = "docs"
+# Optional folder (relative to this project) to place the generated output in.
+# Kept out of the files scanned, so reports are never fed back in. Consider
+# adding `.context-builder/` to your .gitignore.
+output_folder = ".context-builder/out"
 
 # Append a UTC timestamp to the output file name (before extension)
 timestamped_output = true
@@ -1201,7 +1215,7 @@ diff_only = false
 filter = {}
 
 # Paths or gitignore-style globs to ignore (names, paths like "crates/core", globs like "*.lock")
-ignore = ["docs", "target", ".git", "node_modules"]
+ignore = ["target", ".git", "node_modules"]
 
 # Dependency lockfiles are skipped by default, including when `filter` matches
 # their type (for example toml or lock). Set true or pass --include-lockfiles.

@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **`--init` honors `-d` and no longer drops docs (#17 B11).** The config is written to, and file types detected from, the `-d` directory. The generated `ignore` no longer lists `docs`, and `output_folder` is `.context-builder/out` instead of `docs`.
 - **`--init` no longer suggests asset, secret or oversized types in `filter` (#39).** The generated `filter` used to list every common extension, including `png` or `pem`; an explicit filter of such a type opts those files back in, which undid the v0.11.0 default skips. Detection now counts only files a default run would include.
 
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
