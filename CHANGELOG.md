@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Python `--signatures`: no nested functions, overloads keep their return types (#22 B16).** Functions and classes defined inside a function are no longer listed; `@overload def f(...) -> T: ...` used to lose the decorator and `-> T` (the one-line body defeated the slicer) and now keeps both, with decorator lines no longer carrying stray indentation.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):
