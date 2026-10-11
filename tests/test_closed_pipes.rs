@@ -87,3 +87,35 @@ fn error_exit_code_is_unchanged_for_real_failures() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
 }
+
+#[test]
+fn closed_stdout_pipe_with_a_token_budget_ends_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+
+    let (reader, writer) = pipe().unwrap();
+    drop(reader);
+    // A tiny budget makes the run write the truncation notice as well.
+    let output = bin()
+        .args([
+            "-d",
+            dir.path().to_str().unwrap(),
+            "-o",
+            "-",
+            "--max-tokens",
+            "300",
+        ])
+        .current_dir(dir.path())
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "exit status was {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Failed to write"), "{stderr}");
+}

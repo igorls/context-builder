@@ -324,6 +324,8 @@ pub fn generate_markdown(
                                                 max, remaining
                                             );
                                             if let Err(e) = output.write_all(notice.as_bytes()) {
+                                                pipe_closed |=
+                                                    e.kind() == io::ErrorKind::BrokenPipe;
                                                 errors.push(format!(
                                                     "Failed to write truncation notice: {}",
                                                     e
