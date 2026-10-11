@@ -72,7 +72,8 @@ pub struct Args {
     #[clap(long)]
     pub clear_cache: bool,
 
-    /// Initialize a new context-builder.toml config file in the current directory
+    /// Initialize a new context-builder.toml in the --input directory (default: the current
+    /// directory), with file types detected there
     #[clap(long)]
     pub init: bool,
 

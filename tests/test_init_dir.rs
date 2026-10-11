@@ -11,6 +11,8 @@ fn init_targets_the_directory_given_with_d() {
     fs::create_dir_all(proj.path().join("docs")).unwrap();
     fs::write(proj.path().join("src/a.py"), "x = 1\n").unwrap();
     fs::write(proj.path().join("src/b.py"), "y = 1\n").unwrap();
+    // Markdown in the filter makes a re-ingested `.md` report detectable below.
+    fs::write(proj.path().join("README.md"), "# proj\n").unwrap();
     fs::write(proj.path().join("docs/index.rst"), "Title\n=====\n").unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_context-builder"))
@@ -37,6 +39,7 @@ fn init_targets_the_directory_given_with_d() {
     };
     assert!(line("filter =").contains("\"py\""), "{toml}");
     assert!(line("filter =").contains("\"rst\""), "{toml}");
+    assert!(line("filter =").contains("\"md\""), "{toml}");
     assert!(!line("ignore =").contains("docs"), "{toml}");
     assert!(!line("output_folder =").contains("\"docs\""), "{toml}");
 
