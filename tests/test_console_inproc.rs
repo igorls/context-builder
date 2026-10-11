@@ -170,3 +170,56 @@ fn unwritable_state_cache_only_warns() {
     };
     let _ = run_with_args(args(dir.path(), &out), config, &TestPrompter);
 }
+
+struct Declines;
+
+impl Prompter for Declines {
+    fn confirm_overwrite(&self, _file_path: &str) -> io::Result<bool> {
+        Ok(false)
+    }
+}
+
+#[test]
+#[serial]
+fn declining_the_overwrite_prompt_cancels_without_touching_the_file() {
+    let dir = small_project();
+    let out = dir.path().join("out.md");
+    fs::write(&out, "keep me").unwrap();
+    let mut a = args(dir.path(), &out);
+    a.yes = false;
+    let err = run_with_args(a, Config::default(), &Declines).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Interrupted);
+    assert_eq!(fs::read_to_string(&out).unwrap(), "keep me");
+}
+
+#[test]
+#[serial]
+fn an_output_directory_that_cannot_be_created_is_a_clean_error() {
+    let dir = small_project();
+    fs::write(dir.path().join("blocker"), "a file, not a directory").unwrap();
+    let out = dir.path().join("blocker").join("sub").join("out.md");
+    let err = run_with_args(args(dir.path(), &out), Config::default(), &TestPrompter);
+    assert!(err.is_err());
+}
+
+#[test]
+#[serial]
+fn clearing_a_missing_cache_reports_and_succeeds() {
+    let dir = small_project();
+    context_builder::run_from([
+        "context-builder",
+        "-d",
+        dir.path().to_str().unwrap(),
+        "--clear-cache",
+    ])
+    .unwrap();
+    fs::create_dir_all(dir.path().join(".context-builder/cache")).unwrap();
+    context_builder::run_from([
+        "context-builder",
+        "-d",
+        dir.path().to_str().unwrap(),
+        "--clear-cache",
+    ])
+    .unwrap();
+    assert!(!dir.path().join(".context-builder/cache").exists());
+}
