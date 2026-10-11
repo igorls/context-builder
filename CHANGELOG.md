@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **`--init` no longer suggests asset, secret or oversized types in `filter` (#39).** The generated `filter` used to list every common extension, including `png` or `pem`; an explicit filter of such a type opts those files back in, which undid the v0.11.0 default skips. Detection now counts only files a default run would include.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

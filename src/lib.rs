@@ -25,7 +25,7 @@ use std::fs::File;
 use cache::CacheManager;
 use cli::Args;
 use config::{Config, load_config_from_path};
-use content_filter::{ContentPolicy, SkippedFile};
+use content_filter::{ContentPolicy, DEFAULT_MAX_FILE_SIZE_SPEC, SkippedFile};
 use diff::render_per_file_diffs;
 #[cfg(test)]
 use file_utils::collect_files;
@@ -1120,6 +1120,11 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
 
     // Collect files using the same logic as the main application
     let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores, &[])?;
+    // Only suggest what a default run would actually include. An explicit
+    // `filter` entry for an asset type (`png`, `pdf`, …) opts those files back
+    // in, so suggesting one would undo the default asset/size/secret skips.
+    let policy = ContentPolicy::new(DEFAULT_MAX_FILE_SIZE_SPEC, &[], false);
+    let (files, _skipped) = content_filter::partition(files, Path::new("."), &policy);
 
     // Count extensions from the filtered file list
     for entry in files {
