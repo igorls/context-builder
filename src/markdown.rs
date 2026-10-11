@@ -2916,3 +2916,59 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod counting_writer_error_tests {
+    use super::*;
+
+    struct Failing;
+
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        }
+    }
+
+    #[test]
+    fn failed_write_and_flush_name_the_output_file_and_keep_the_kind() {
+        let mut w = CountingWriter {
+            inner: Failing,
+            count: 0,
+            path: Some(std::path::PathBuf::from("out/report.md")),
+        };
+        for err in [w.write(b"x").unwrap_err(), w.flush().unwrap_err()] {
+            assert_eq!(err.kind(), io::ErrorKind::StorageFull);
+            assert!(
+                err.to_string().contains("cannot write 'out/report.md'"),
+                "{err}"
+            );
+        }
+        assert_eq!(w.count, 0);
+    }
+
+    #[test]
+    fn stdout_writer_errors_pass_through_unchanged() {
+        let mut w = CountingWriter {
+            inner: Failing,
+            count: 0,
+            path: None,
+        };
+        let err = w.write(b"x").unwrap_err();
+        assert!(!err.to_string().contains("cannot write"), "{err}");
+    }
+
+    #[test]
+    fn successful_writes_are_counted() {
+        let mut w = CountingWriter {
+            inner: Vec::new(),
+            count: 0,
+            path: None,
+        };
+        w.write_all(b"hello").unwrap();
+        w.flush().unwrap();
+        assert_eq!(w.count, 5);
+    }
+}
