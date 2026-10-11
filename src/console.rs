@@ -3,34 +3,27 @@
 //! `eprintln!` / `println!` panic when the stream is closed (for example
 //! `context-builder … 2>&1 | head -3`), which killed the run with exit
 //! code 101 before the document was finished. Diagnostics and progress lines
-//! are best-effort, so these macros drop the write error instead. Document
+//! are best-effort, so these helpers drop the write error instead. Document
 //! content written to stdout (`-o -`) still reports errors through `io::Result`.
 
-macro_rules! errln {
-    () => {{
-        use ::std::io::Write as _;
-        let _ = ::std::writeln!(::std::io::stderr());
-    }};
-    ($($arg:tt)*) => {{
-        use ::std::io::Write as _;
-        let _ = ::std::writeln!(::std::io::stderr(), $($arg)*);
-    }};
+use std::fmt::Arguments;
+use std::io::Write;
+
+/// Best-effort line on stderr; a closed stream is ignored.
+pub(crate) fn errln(args: Arguments<'_>) {
+    let mut err = std::io::stderr();
+    let _ = err.write_fmt(args);
+    let _ = err.write_all(b"\n");
 }
 
-macro_rules! err {
-    ($($arg:tt)*) => {{
-        use ::std::io::Write as _;
-        let _ = ::std::write!(::std::io::stderr(), $($arg)*);
-    }};
+/// Best-effort text on stderr, no newline.
+pub(crate) fn err(args: Arguments<'_>) {
+    let _ = std::io::stderr().write_fmt(args);
 }
 
-macro_rules! outln {
-    () => {{
-        use ::std::io::Write as _;
-        let _ = ::std::writeln!(::std::io::stdout());
-    }};
-    ($($arg:tt)*) => {{
-        use ::std::io::Write as _;
-        let _ = ::std::writeln!(::std::io::stdout(), $($arg)*);
-    }};
+/// Best-effort line on stdout; a closed stream is ignored.
+pub(crate) fn outln(args: Arguments<'_>) {
+    let mut out = std::io::stdout();
+    let _ = out.write_fmt(args);
+    let _ = out.write_all(b"\n");
 }

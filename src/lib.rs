@@ -187,9 +187,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !matches!(strat.as_str(), "detect" | "strict" | "skip")
         && !silent
     {
-        errln!(
+        crate::console::errln(format_args!(
             "⚠️  Unknown encoding_strategy '{strat}' in config; expected one of: detect, strict, skip. Falling back to 'detect'."
-        );
+        ));
     }
     // Resolve base path. If input is '.' but current working directory lost the project context
     // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
@@ -265,7 +265,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent
         && let Some(notice) = crate::file_utils::lockfile_skip_notice(collected.skipped_lockfiles)
     {
-        errln!("{notice}");
+        crate::console::errln(format_args!("{notice}"));
     }
     let files = collected.files;
     let policy = ContentPolicy::new(
@@ -279,7 +279,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // write the (empty) document. Name the filters when any were given.
     if !silent && files.is_empty() && skipped.is_empty() {
         if final_args.filter.is_empty() {
-            errln!("Warning: No files matched; check .gitignore, --ignore, and --filter");
+            crate::console::errln(format_args!(
+                "Warning: No files matched; check .gitignore, --ignore, and --filter"
+            ));
         } else {
             let quoted = final_args
                 .filter
@@ -292,17 +294,23 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             } else {
                 "filters"
             };
-            errln!("Warning: no files matched {noun} {quoted}.");
+            crate::console::errln(format_args!("Warning: no files matched {noun} {quoted}."));
         }
     }
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
-        errln!("[DEBUG][CONFIG] Args: {:?}", final_args);
-        errln!("[DEBUG][CONFIG] Raw Config: {:?}", config);
-        errln!("[DEBUG][CONFIG] Auto-ignores: {:?}", auto_ignores);
-        errln!("[DEBUG][CONFIG] Collected {} files", files.len());
+        crate::console::errln(format_args!("[DEBUG][CONFIG] Args: {:?}", final_args));
+        crate::console::errln(format_args!("[DEBUG][CONFIG] Raw Config: {:?}", config));
+        crate::console::errln(format_args!(
+            "[DEBUG][CONFIG] Auto-ignores: {:?}",
+            auto_ignores
+        ));
+        crate::console::errln(format_args!(
+            "[DEBUG][CONFIG] Collected {} files",
+            files.len()
+        ));
         for f in &files {
-            errln!("[DEBUG][CONFIG]  - {}", f.path().display());
+            crate::console::errln(format_args!("[DEBUG][CONFIG]  - {}", f.path().display()));
         }
     }
 
@@ -330,29 +338,29 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         if !large_files.is_empty() {
             large_files.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by size descending
-            errln!(
+            crate::console::errln(format_args!(
                 "\n⚠  {} large file(s) detected (>{} KB):",
                 large_files.len(),
                 LARGE_FILE_THRESHOLD / 1024
-            );
+            ));
             for (path, size) in large_files.iter().take(5) {
-                errln!("   {:>8} KB  {}", size / 1024, path);
+                crate::console::errln(format_args!("   {:>8} KB  {}", size / 1024, path));
             }
             if large_files.len() > 5 {
-                errln!("   ... and {} more", large_files.len() - 5);
+                crate::console::errln(format_args!("   ... and {} more", large_files.len() - 5));
             }
-            errln!(
+            crate::console::errln(format_args!(
                 "   Total context size: {} KB across {} files\n",
                 total_size / 1024,
                 files.len()
-            );
+            ));
         }
     }
     let file_tree = build_file_tree(&files, base_path);
 
     if final_args.preview {
         if !silent {
-            outln!("\n# File Tree Structure (Preview)\n");
+            crate::console::outln(format_args!("\n# File Tree Structure (Preview)\n"));
             print_tree(&file_tree, 0);
         }
         if !final_args.token_count {
@@ -373,7 +381,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 file_metadata: final_args.file_metadata,
             };
             let enc_strategy = config.encoding_strategy.as_deref();
-            outln!("\n# Token Count Estimation\n");
+            crate::console::outln(format_args!("\n# Token Count Estimation\n"));
             let mut total_tokens = 0;
             total_tokens +=
                 estimate_tokens(encoding, &format!("{}\n\n", markdown::REPORT_TITLE_LINE));
@@ -427,9 +435,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 })
                 .sum();
             total_tokens += file_tokens;
-            outln!("Estimated total tokens: {}", total_tokens);
-            outln!("File tree tokens: {}", tree_tokens);
-            outln!("File content tokens: {}", file_tokens);
+            crate::console::outln(format_args!("Estimated total tokens: {}", total_tokens));
+            crate::console::outln(format_args!("File tree tokens: {}", tree_tokens));
+            crate::console::outln(format_args!("File content tokens: {}", file_tokens));
         }
         return Ok(());
     }
@@ -441,10 +449,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // B8: --diff-only only takes effect together with auto_diff (+ timestamped
     // output). Warn instead of silently emitting full file contents.
     if final_args.diff_only && !config.auto_diff.unwrap_or(false) && !silent {
-        errln!(
+        crate::console::errln(format_args!(
             "⚠️  --diff-only has no effect without auto_diff (it also needs timestamped_output). \
              Full file contents will be emitted. Enable auto_diff = true + timestamped_output = true to use diff-only mode."
-        );
+        ));
     }
 
     // Graceful degradation (before the auto-diff branch so both paths warn): warn if tree-sitter flags are used without the feature.
@@ -456,9 +464,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent && (final_args.signatures || final_args.structure || smart_truncate_requested) {
         #[cfg(not(feature = "tree-sitter-base"))]
         {
-            errln!("⚠️  --signatures/--structure/--truncate smart require tree-sitter support.");
-            errln!("   Install with: cargo install context-builder --features tree-sitter-all");
-            errln!("   Falling back to standard output.\n");
+            crate::console::errln(format_args!(
+                "⚠️  --signatures/--structure/--truncate smart require tree-sitter support."
+            ));
+            crate::console::errln(format_args!(
+                "   Install with: cargo install context-builder --features tree-sitter-all"
+            ));
+            crate::console::errln(format_args!("   Falling back to standard output.\n"));
         }
     }
 
@@ -503,10 +515,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             Ok(state) => state,
             Err(e) => {
                 if !silent {
-                    errln!(
+                    crate::console::errln(format_args!(
                         "Warning: Failed to read cache (proceeding without diff): {}",
                         e
-                    );
+                    ));
                 }
                 None
             }
@@ -532,35 +544,41 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
         if debug_autodiff {
-            errln!(
+            crate::console::errln(format_args!(
                 "[DEBUG][AUTODIFF] cache file: {}",
                 cache_manager.debug_cache_file_path().display()
-            );
-            errln!(
+            ));
+            crate::console::errln(format_args!(
                 "[DEBUG][AUTODIFF] config_hash current={} prev={:?} invalidated={}",
                 current_state.config_hash,
                 previous_state.as_ref().map(|s| s.config_hash.clone()),
                 effective_previous.is_none() && previous_state.is_some()
-            );
-            errln!("[DEBUG][AUTODIFF] effective_config: {:?}", effective_config);
+            ));
+            crate::console::errln(format_args!(
+                "[DEBUG][AUTODIFF] effective_config: {:?}",
+                effective_config
+            ));
             if let Some(prev) = previous_state.as_ref() {
-                errln!("[DEBUG][AUTODIFF] raw previous files: {}", prev.files.len());
+                crate::console::errln(format_args!(
+                    "[DEBUG][AUTODIFF] raw previous files: {}",
+                    prev.files.len()
+                ));
             }
             if let Some(prev) = effective_previous {
-                errln!(
+                crate::console::errln(format_args!(
                     "[DEBUG][AUTODIFF] effective previous files: {}",
                     prev.files.len()
-                );
+                ));
                 for k in prev.files.keys() {
-                    errln!("  PREV: {}", k.display());
+                    crate::console::errln(format_args!("  PREV: {}", k.display()));
                 }
             }
-            errln!(
+            crate::console::errln(format_args!(
                 "[DEBUG][AUTODIFF] current files: {}",
                 current_state.files.len()
-            );
+            ));
             for k in current_state.files.keys() {
-                errln!("  CURR: {}", k.display());
+                crate::console::errln(format_args!("  CURR: {}", k.display()));
             }
         }
 
@@ -659,31 +677,30 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if let Err(e) = cache_manager.write_cache(&current_state)
             && !silent
         {
-            errln!("Warning: failed to update state cache: {}", e);
+            crate::console::errln(format_args!("Warning: failed to update state cache: {}", e));
         }
 
         let duration = start_time.elapsed();
         if !silent && !to_stdout {
             if let Some(comp) = &comparison {
                 if comp.summary.has_changes() {
-                    outln!(
+                    crate::console::outln(format_args!(
                         "Documentation created successfully with {} changes: {}",
-                        comp.summary.total_changes,
-                        final_args.output
-                    );
+                        comp.summary.total_changes, final_args.output
+                    ));
                 } else {
-                    outln!(
+                    crate::console::outln(format_args!(
                         "Documentation created successfully (no changes detected): {}",
                         final_args.output
-                    );
+                    ));
                 }
             } else {
-                outln!(
+                crate::console::outln(format_args!(
                     "Documentation created successfully (initial state): {}",
                     final_args.output
-                );
+                ));
             }
-            outln!("Processing time: {:.2?}", duration);
+            crate::console::outln(format_args!("Processing time: {:.2?}", duration));
         }
         if !silent {
             // Non-blocking. File count is not a cost proxy; this estimate is.
@@ -727,8 +744,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     let duration = start_time.elapsed();
     if !silent && !to_stdout {
-        outln!("Documentation created successfully: {}", final_args.output);
-        outln!("Processing time: {:.2?}", duration);
+        crate::console::outln(format_args!(
+            "Documentation created successfully: {}",
+            final_args.output
+        ));
+        crate::console::outln(format_args!("Processing time: {:.2?}", duration));
     }
     if !silent {
         // Non-blocking. File count is not a cost proxy; this estimate is.
@@ -760,7 +780,10 @@ fn print_context_window_warning(
     let estimated_tokens = output_bytes / 4;
 
     // Stderr only: this notice must never mix into a captured or piped document.
-    errln!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+    crate::console::errln(format_args!(
+        "Estimated tokens: ~{}K",
+        estimated_tokens / 1000
+    ));
 
     // If the user already set --max-tokens, they're managing their budget
     if max_tokens.is_some() {
@@ -775,17 +798,19 @@ fn print_context_window_warning(
 
     let paths: Vec<&Path> = files.iter().map(|entry| entry.path()).collect();
 
-    errln!();
-    errln!(
+    crate::console::errln(format_args!(""));
+    crate::console::errln(format_args!(
         "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
         estimated_tokens / 1000
-    );
-    errln!("   Large contexts degrade response quality. Consider narrowing the scope:");
-    errln!();
+    ));
+    crate::console::errln(format_args!(
+        "   Large contexts degrade response quality. Consider narrowing the scope:"
+    ));
+    crate::console::errln(format_args!(""));
     for line in context_window_suggestions(&paths) {
-        errln!("   • {line}");
+        crate::console::errln(format_args!("   • {line}"));
     }
-    errln!();
+    crate::console::errln(format_args!(""));
 }
 
 /// `--filter` extensions to suggest for this run: the most common extensions
@@ -1040,6 +1065,25 @@ pub fn run() -> io::Result<()> {
     // default, so the value alone can't reveal an intent to override a
     // non-default config (see resolver).
     let matches = Args::command().get_matches();
+    run_matches(&matches, std::env::args_os().len())
+}
+
+/// [`run`] with an explicit argument vector (program name first) instead of
+/// the process arguments, so the whole command line path can run in-process.
+/// A bad command line is returned as `InvalidInput` instead of exiting.
+pub fn run_from<I, T>(argv: I) -> io::Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
+    let matches = Args::command()
+        .try_get_matches_from(&argv)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+    run_matches(&matches, argv.len())
+}
+
+fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
         visibility: matches.value_source("visibility")
@@ -1052,8 +1096,8 @@ pub fn run() -> io::Result<()> {
         // `-o` is used verbatim (no output_folder / timestamp rewrite).
         output: matches.value_source("output") == Some(clap::parser::ValueSource::CommandLine),
     };
-    let args = Args::from_arg_matches(&matches)
-        .expect("arguments were already validated by get_matches()");
+    let args =
+        Args::from_arg_matches(matches).expect("arguments were already validated by get_matches()");
 
     // Handle init command first
     if args.init {
@@ -1069,16 +1113,25 @@ pub fn run() -> io::Result<()> {
         let cache_path = project_root.join(".context-builder").join("cache");
         if cache_path.exists() {
             match fs::remove_dir_all(&cache_path) {
-                Ok(()) => outln!("Cache cleared: {}", cache_path.display()),
-                Err(e) => errln!("Failed to clear cache ({}): {}", cache_path.display(), e),
+                Ok(()) => {
+                    crate::console::outln(format_args!("Cache cleared: {}", cache_path.display()))
+                }
+                Err(e) => crate::console::errln(format_args!(
+                    "Failed to clear cache ({}): {}",
+                    cache_path.display(),
+                    e
+                )),
             }
         } else {
-            outln!("No cache directory found at {}", cache_path.display());
+            crate::console::outln(format_args!(
+                "No cache directory found at {}",
+                cache_path.display()
+            ));
         }
         return Ok(());
     }
 
-    if std::env::args().len() == 1 && config.is_none() {
+    if argc == 1 && config.is_none() {
         Args::command().print_help()?;
         return Ok(());
     }
@@ -1093,7 +1146,7 @@ pub fn run() -> io::Result<()> {
 
     if !silent {
         for warning in &resolution.warnings {
-            errln!("Warning: {}", warning);
+            crate::console::errln(format_args!("Warning: {}", warning));
         }
     }
 
@@ -1173,8 +1226,13 @@ fn init_config() -> io::Result<()> {
     let config_path = Path::new("context-builder.toml");
 
     if config_path.exists() {
-        outln!("Config file already exists at {}", config_path.display());
-        outln!("If you want to replace it, please remove it manually first.");
+        crate::console::outln(format_args!(
+            "Config file already exists at {}",
+            config_path.display()
+        ));
+        crate::console::outln(format_args!(
+            "If you want to replace it, please remove it manually first."
+        ));
         return Ok(());
     }
 
@@ -1243,9 +1301,17 @@ file_metadata = false
     let mut file = File::create(config_path)?;
     file.write_all(default_config_content.as_bytes())?;
 
-    outln!("Config file created at {}", config_path.display());
-    outln!("Detected file types: {}", filter_suggestions.join(", "));
-    outln!("You can now customize it according to your project needs.");
+    crate::console::outln(format_args!(
+        "Config file created at {}",
+        config_path.display()
+    ));
+    crate::console::outln(format_args!(
+        "Detected file types: {}",
+        filter_suggestions.join(", ")
+    ));
+    crate::console::outln(format_args!(
+        "You can now customize it according to your project needs."
+    ));
 
     Ok(())
 }

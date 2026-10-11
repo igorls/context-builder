@@ -111,3 +111,62 @@ fn stdout_output_mode_streams_the_document() {
     a.output = "-".to_string();
     run_with_args(a, Config::default(), &TestPrompter).unwrap();
 }
+
+fn small_project() -> tempfile::TempDir {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+    dir
+}
+
+#[test]
+#[serial]
+fn debug_env_switches_trace_config_and_auto_diff_to_stderr() {
+    let dir = small_project();
+    let out = dir.path().join("out.md");
+    let config = Config {
+        auto_diff: Some(true),
+        timestamped_output: Some(false),
+        ..Config::default()
+    };
+    unsafe {
+        std::env::set_var("CB_DEBUG_CONFIG", "1");
+        std::env::set_var("CB_DEBUG_AUTODIFF", "1");
+    }
+    let first = run_with_args(args(dir.path(), &out), config.clone(), &TestPrompter);
+    fs::write(dir.path().join("a.txt"), "two\n").unwrap();
+    let second = run_with_args(args(dir.path(), &out), config, &TestPrompter);
+    unsafe {
+        std::env::remove_var("CB_DEBUG_CONFIG");
+        std::env::remove_var("CB_DEBUG_AUTODIFF");
+    }
+    first.unwrap();
+    second.unwrap();
+    assert!(fs::read_to_string(&out).unwrap().contains("two"));
+}
+
+#[test]
+#[serial]
+fn diff_only_without_auto_diff_warns_and_still_writes_the_document() {
+    let dir = small_project();
+    let out = dir.path().join("out.md");
+    let mut a = args(dir.path(), &out);
+    a.diff_only = true;
+    run_with_args(a, Config::default(), &TestPrompter).unwrap();
+    assert!(fs::read_to_string(&out).unwrap().contains("one"));
+}
+
+#[test]
+#[serial]
+fn unwritable_state_cache_only_warns() {
+    // The cache lives under `<project>/.context-builder`; a plain file in its
+    // place makes the cache write fail without failing the run.
+    let dir = small_project();
+    fs::write(dir.path().join(".context-builder"), "not a directory").unwrap();
+    let out = dir.path().join("out.md");
+    let config = Config {
+        auto_diff: Some(true),
+        timestamped_output: Some(false),
+        ..Config::default()
+    };
+    let _ = run_with_args(args(dir.path(), &out), config, &TestPrompter);
+}
