@@ -20,7 +20,8 @@ fn doc_go_package_is_ranked_with_source_but_doc_markdown_stays_docs() {
         .output()
         .unwrap();
     assert!(out.status.success());
-    let doc = String::from_utf8_lossy(&out.stdout);
+    // Windows prints `\` in paths; compare with `/`.
+    let doc = String::from_utf8_lossy(&out.stdout).replace('\\', "/");
     let pos = |needle: &str| {
         doc.find(needle)
             .unwrap_or_else(|| panic!("{needle} missing"))
