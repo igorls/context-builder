@@ -53,3 +53,31 @@ fn preview_carries_the_same_note() {
     let out = run(dir.path(), &["--preview"]);
     assert!(out.contains("The tree is alphabetical"), "{out}");
 }
+
+#[test]
+fn auto_diff_full_report_carries_the_note_but_diff_only_does_not() {
+    let dir = fixture();
+    fs::write(
+        dir.path().join("context-builder.toml"),
+        "output_folder = \"out\"\ntimestamped_output = true\nauto_diff = true\n",
+    )
+    .unwrap();
+    let report = |dir: &std::path::Path| {
+        let mut files: Vec<_> = fs::read_dir(dir.join("out")).unwrap().flatten().collect();
+        files.sort_by_key(|e| e.file_name());
+        fs::read_to_string(files.last().unwrap().path()).unwrap()
+    };
+    run(dir.path(), &["-y"]);
+    assert!(report(dir.path()).contains("The tree is alphabetical"));
+
+    // Diff-only output has no file bodies, so no note.
+    fs::write(dir.path().join("src/lib.rs"), "pub fn g() {}\n").unwrap();
+    fs::write(
+        dir.path().join("context-builder.toml"),
+        "output_folder = \"out\"\ntimestamped_output = true\nauto_diff = true\ndiff_only = true\n",
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    run(dir.path(), &["-y"]);
+    assert!(!report(dir.path()).contains("The tree is alphabetical"));
+}

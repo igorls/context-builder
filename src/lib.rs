@@ -940,6 +940,11 @@ fn generate_markdown_with_diff(
 
     // File tree
     output.push_str("## File Tree Structure\n\n");
+    // Bodies follow only when not diff-only; the note explains their order.
+    if !diff_config.diff_only {
+        output.push_str(markdown::TREE_ORDER_NOTE);
+        output.push_str("\n\n");
+    }
     let mut tree_output = Vec::new();
     tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
     output.push_str(&String::from_utf8_lossy(&tree_output));

@@ -12,13 +12,13 @@ use encoding_rs::{Encoding, UTF_8};
 /// First line of every generated report. A blank line follows it.
 pub(crate) const REPORT_TITLE_LINE: &str = "# Directory Structure Report";
 
-/// Prefix of the header line that fingerprints a generated report.
-/// The writer appends 16 lowercase hex digits (`{:016x}`).
 /// One line under the tree heading. The tree is alphabetical (the usual way to
 /// read a directory) while file bodies follow the relevance ranking, so say so
 /// instead of letting the two orders look like a mistake.
 pub(crate) const TREE_ORDER_NOTE: &str = "_The tree is alphabetical. File contents below are ordered by relevance: root README and manifests first, then source, tests, docs._";
 
+/// Prefix of the header line that fingerprints a generated report.
+/// The writer appends 16 lowercase hex digits (`{:016x}`).
 pub(crate) const CONTENT_HASH_PREFIX: &str = "Content hash: ";
 
 #[cfg(feature = "parallel")]
