@@ -408,7 +408,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             total_tokens += tree_tokens;
             // The `## Skipped` section is part of the generated report.
             total_tokens += skipped_section_tokens(encoding, &skipped)?;
-            let file_tokens: usize = files
+            let per_file: Vec<usize> = files
                 .iter()
                 .map(|entry| {
                     count_file_tokens(
@@ -420,11 +420,38 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                         &ts_config,
                     )
                 })
-                .sum();
+                .collect();
+            // With `--max-tokens` the document stops at the budget: files are
+            // taken in order, the first one that does not fit is cut to the
+            // remaining budget, and the rest are omitted.
+            let mut file_tokens = 0usize;
+            let mut omitted = 0usize;
+            match final_args.max_tokens {
+                Some(budget) => {
+                    let mut remaining = budget.saturating_sub(total_tokens);
+                    let mut exhausted = false;
+                    for tokens in &per_file {
+                        if exhausted {
+                            omitted += 1;
+                        } else if *tokens <= remaining {
+                            file_tokens += tokens;
+                            remaining -= tokens;
+                        } else {
+                            file_tokens += remaining;
+                            remaining = 0;
+                            exhausted = true;
+                        }
+                    }
+                }
+                None => file_tokens = per_file.iter().sum(),
+            }
             total_tokens += file_tokens;
             println!("Estimated total tokens: {}", total_tokens);
             println!("File tree tokens: {}", tree_tokens);
             println!("File content tokens: {}", file_tokens);
+            if let Some(budget) = final_args.max_tokens {
+                println!("Token budget: {} (files omitted: {})", budget, omitted);
+            }
         }
         return Ok(());
     }
