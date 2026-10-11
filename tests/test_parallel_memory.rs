@@ -208,9 +208,9 @@ fn test_parallel_error_handling() {
     assert!(output_content.contains("fn good1()"));
     assert!(output_content.contains("fn good2()"));
 
-    // Verify binary file is handled with placeholder
-    assert!(output_content.contains("### File: `binary.rs`"));
-    assert!(output_content.contains("<Binary file or unsupported encoding:"));
+    // The binary file is left out of the body and reported under `## Skipped`.
+    assert!(!output_content.contains("### File: `binary.rs`"));
+    assert!(output_content.contains("- `binary.rs` — binary"));
 }
 
 #[cfg(feature = "parallel")]

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Binary files are reported, not dumped; the header no longer leaks absolute paths (#21 P11).** A file with NUL bytes in its first 8 KiB (UTF-16/32 text with a BOM excepted) is listed under `## Skipped` as `binary` instead of a `<Binary file or unsupported encoding>` block in the body (a repo without `.git` produced hundreds of those). The header says `from the `my proj` directory` rather than the absolute path passed with `-d`.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

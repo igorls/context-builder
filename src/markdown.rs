@@ -90,16 +90,7 @@ pub fn generate_markdown(
     };
     let mut output = CountingWriter { inner, count: 0 };
 
-    let input_dir_name = if input_dir == "." {
-        let current_dir = std::env::current_dir()?;
-        current_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_else(|| current_dir.to_str().unwrap_or("project"))
-            .to_string()
-    } else {
-        input_dir.to_string()
-    };
+    let input_dir_name = directory_display_name(input_dir);
 
     // --- Header + file tree (buffered) --- //
     // Build the header and tree into a buffer first so we can (a) write them in
@@ -1037,6 +1028,19 @@ fn first_visibility_warning_for(ext: &str) -> bool {
     let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
     // `insert` returns true when the value was newly added (first time).
     guard.insert(ext.to_string())
+}
+
+/// The name shown for the input directory in the document header: its last
+/// path component, never the absolute path (which leaks the user's home
+/// directory and username into a document that is meant to be shared).
+pub(crate) fn directory_display_name(input_dir: &str) -> String {
+    let path = Path::new(input_dir);
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    resolved
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| input_dir.to_string())
 }
 
 /// Bytes read from the start of a file when deciding text vs binary.
