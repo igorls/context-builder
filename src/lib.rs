@@ -302,14 +302,22 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     }
 
     // Smart large-file detection: warn about files that may bloat the context.
-    // Skipped when the output is already reduced (token budget, signatures,
-    // structure): the input sizes would only suggest a problem that is not there.
-    if !silent && !output_is_reduced(&final_args) {
+    // Not shown when the output is already reduced (a token budget caps it;
+    // outlined files are not written in full): the input sizes would only
+    // suggest a problem that is not there. `--preview` writes nothing, so it
+    // always reports the input.
+    let report_input_size = final_args.preview || final_args.max_tokens.is_none();
+    if !silent && report_input_size {
         const LARGE_FILE_THRESHOLD: u64 = 100 * 1024; // 100 KB
         let mut large_files: Vec<(String, u64)> = Vec::new();
         let mut total_size: u64 = 0;
 
+        let mut counted_files = 0usize;
         for entry in &files {
+            if !final_args.preview && body_is_outlined(&final_args, entry.path()) {
+                continue;
+            }
+            counted_files += 1;
             if let Ok(metadata) = entry.path().metadata() {
                 let size = metadata.len();
                 total_size += size;
@@ -341,7 +349,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             eprintln!(
                 "   Total context size: {} KB across {} files\n",
                 total_size / 1024,
-                files.len()
+                counted_files
             );
         }
     }
@@ -739,13 +747,15 @@ fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Re
     Ok(estimate_tokens(encoding, &String::from_utf8_lossy(&buf)))
 }
 
-/// True when the document will be much smaller than the input files: a token
-/// budget caps it, or `--signatures` / `--structure` replace bodies with an
-/// outline (only when tree-sitter support is compiled in; otherwise the full
-/// content is written).
-fn output_is_reduced(args: &Args) -> bool {
-    args.max_tokens.is_some()
-        || (cfg!(feature = "tree-sitter-base") && (args.signatures || args.structure))
+/// True when a file's body will be replaced by an outline: `--signatures` or
+/// `--structure` on an extension tree-sitter supports (always false without
+/// tree-sitter support compiled in, where the full content is written).
+fn body_is_outlined(args: &Args, path: &Path) -> bool {
+    (args.signatures || args.structure)
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(tree_sitter::is_supported_extension)
 }
 
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output

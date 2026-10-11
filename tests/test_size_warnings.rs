@@ -78,3 +78,25 @@ fn preview_still_reports_the_input_size() {
     let stderr = run(dir.path(), &["--preview"]);
     assert!(stderr.contains("large file(s) detected"), "{stderr}");
 }
+
+#[test]
+fn preview_with_a_token_budget_still_reports_the_input_size() {
+    let dir = tempfile::tempdir().unwrap();
+    big_fixture(dir.path());
+    let stderr = run(dir.path(), &["--preview", "--max-tokens", "20000"]);
+    assert!(stderr.contains("large file(s) detected"), "{stderr}");
+}
+
+#[cfg(feature = "tree-sitter-base")]
+#[test]
+fn signatures_run_still_reports_files_that_are_written_in_full() {
+    let dir = tempfile::tempdir().unwrap();
+    // Not a tree-sitter language, so `--signatures` leaves it whole.
+    let notes = "plain text line\n".repeat(8_000);
+    fs::write(dir.path().join("notes.txt"), notes).unwrap();
+    fs::write(dir.path().join("lib.rs"), "pub fn f() {}\n".repeat(9_000)).unwrap();
+    let stderr = run(dir.path(), &["--signatures"]);
+    assert!(stderr.contains("1 large file(s) detected"), "{stderr}");
+    assert!(stderr.contains("notes.txt"), "{stderr}");
+    assert!(!stderr.contains("lib.rs"), "{stderr}");
+}
