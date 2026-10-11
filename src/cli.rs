@@ -10,7 +10,7 @@ pub struct Args {
     #[clap(short = 'd', long, default_value = ".")]
     pub input: String,
 
-    /// Output file path
+    /// Output file path; `-` writes the document to stdout (notices go to stderr)
     #[clap(short, long, default_value = "output.md")]
     pub output: String,
 

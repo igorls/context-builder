@@ -131,8 +131,12 @@ cargo install --path .
 # Initialize a new context-builder.toml config file with automatically detected file types (respecting .gitignore)
 context-builder --init
 
-# Process current directory and create output.md
-context-builder
+# Process the current directory and create output.md
+# (a bare `context-builder` with no flags and no context-builder.toml just prints help)
+context-builder -d .
+
+# Write the document to stdout instead of a file (notices go to stderr)
+context-builder -d . -o -
 
 # Process a specific directory
 context-builder -d /path/to/project
@@ -316,6 +320,8 @@ When using `timestamped_output = true` together with `auto_diff = true`, Context
 
 If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files” section is omitted to conserve tokens: you get just the header + tree, the Change Summary, and per-file diffs for modified files.
 
+The diff sections use a simple `+ ` / `- ` line format with `  ...` separators, written for LLMs to read. It is not a unified diff: `patch` and `git apply` cannot consume it.
+
 **Note:** Command-line arguments will always override the settings in the configuration file.
 
 ### Command Line Options
@@ -344,6 +350,18 @@ If you also set `diff_only = true` (or pass `--diff-only`), the full “## Files
 - `--init` - Initialize a new `context-builder.toml` config file.
 - `-h, --help` - Show help information.
 ---
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `RUST_LOG` | Log verbosity (`env_logger`), e.g. `RUST_LOG=warn` to see per-file warnings such as encoding fallbacks |
+| `CB_SILENT` | `1`/`true` suppresses progress and warning output |
+| `CB_DEBUG_CONFIG` | Any value: print the merged configuration and collected files to stderr |
+| `CB_DEBUG_AUTODIFF` | Any value: print auto-diff cache decisions to stderr |
+| `CB_DIFF_CONTEXT_LINES` | Number of unchanged context lines around each diff hunk |
+
+Hidden files and directories are skipped unless you pass `--hidden`. Symbolic links are neither followed nor listed.
 
 ## Token Counting
 
