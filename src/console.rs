@@ -27,3 +27,15 @@ pub(crate) fn outln(args: Arguments<'_>) {
     let _ = out.write_fmt(args);
     let _ = out.write_all(b"\n");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn helpers_write_without_panicking() {
+        err(format_args!(""));
+        errln(format_args!("console test (stderr)"));
+        outln(format_args!("console test (stdout)"));
+    }
+}
