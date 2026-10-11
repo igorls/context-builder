@@ -43,17 +43,28 @@ pub struct TreeSitterConfig {
 struct CountingWriter<W> {
     inner: W,
     count: usize,
+    /// Output file, so a failed write names it (`None` for stdout).
+    path: Option<std::path::PathBuf>,
+}
+
+impl<W> CountingWriter<W> {
+    fn with_path(&self, e: io::Error) -> io::Error {
+        match &self.path {
+            Some(path) => crate::write_error(path, e),
+            None => e,
+        }
+    }
 }
 
 impl<W: Write> Write for CountingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.inner.write(buf)?;
+        let n = self.inner.write(buf).map_err(|e| self.with_path(e))?;
         self.count += n;
         Ok(n)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        self.inner.flush().map_err(|e| self.with_path(e))
     }
 }
 
@@ -84,11 +95,18 @@ pub fn generate_markdown(
         if let Some(parent) = Path::new(output_path).parent()
             && !parent.exists()
         {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| crate::write_error(parent, e))?;
         }
-        Box::new(fs::File::create(output_path)?)
+        Box::new(
+            fs::File::create(output_path)
+                .map_err(|e| crate::write_error(Path::new(output_path), e))?,
+        )
     };
-    let mut output = CountingWriter { inner, count: 0 };
+    let mut output = CountingWriter {
+        inner,
+        count: 0,
+        path: (output_path != "-").then(|| std::path::PathBuf::from(output_path)),
+    };
 
     let input_dir_name = if input_dir == "." {
         let current_dir = std::env::current_dir()?;
@@ -1517,6 +1535,7 @@ mod tests {
         let mut writer = CountingWriter {
             inner: Vec::new(),
             count: 0,
+            path: None,
         };
         writer.write_all(b"hello ").unwrap();
         writer.write_all(b"world").unwrap();
@@ -2922,6 +2941,62 @@ mod tests {
             );
             assert!(crate::fences::unmatched_backtick_fence_len(&rendered).is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod counting_writer_error_tests {
+    use super::*;
+
+    struct Failing;
+
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        }
+    }
+
+    #[test]
+    fn failed_write_and_flush_name_the_output_file_and_keep_the_kind() {
+        let mut w = CountingWriter {
+            inner: Failing,
+            count: 0,
+            path: Some(std::path::PathBuf::from("out/report.md")),
+        };
+        for err in [w.write(b"x").unwrap_err(), w.flush().unwrap_err()] {
+            assert_eq!(err.kind(), io::ErrorKind::StorageFull);
+            assert!(
+                err.to_string().contains("cannot write 'out/report.md'"),
+                "{err}"
+            );
+        }
+        assert_eq!(w.count, 0);
+    }
+
+    #[test]
+    fn stdout_writer_errors_pass_through_unchanged() {
+        let mut w = CountingWriter {
+            inner: Failing,
+            count: 0,
+            path: None,
+        };
+        let err = w.write(b"x").unwrap_err();
+        assert!(!err.to_string().contains("cannot write"), "{err}");
+    }
+
+    #[test]
+    fn successful_writes_are_counted() {
+        let mut w = CountingWriter {
+            inner: Vec::new(),
+            count: 0,
+            path: None,
+        };
+        w.write_all(b"hello").unwrap();
+        w.flush().unwrap();
+        assert_eq!(w.count, 5);
     }
 }
 
