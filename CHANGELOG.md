@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Rust `--signatures` group methods under their `impl`/`trait` (#22 B16).** Methods used to be listed flat after `impl A`, leaving several `pub fn new` ambiguous. Each impl/trait is now one entry: `impl A { pub fn new() -> A … }`. Library: members are part of the impl/trait signature's `full_signature` and no longer separate `Signature`s.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

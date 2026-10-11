@@ -153,13 +153,26 @@ impl RustSupport {
                 }
             }
             "trait_item" => {
-                if let Some(sig) = self.extract_trait_signature(source, node, visibility) {
+                if let Some(mut sig) = self.extract_trait_signature(source, node, visibility) {
+                    let members = self.member_signatures(source, node, visibility);
+                    sig.full_signature = Self::group_members(&sig.full_signature, &members);
                     signatures.push(sig);
+                    // Members are listed under the trait, not again flat.
+                    return;
                 }
             }
             "impl_item" => {
-                if let Some(sig) = self.extract_impl_signature(source, node) {
+                if let Some(mut sig) = self.extract_impl_signature(source, node) {
+                    let members = self.member_signatures(source, node, visibility);
+                    // `--visibility` hides members; an impl left with none of
+                    // them has nothing to show.
+                    if members.is_empty() && visibility != Visibility::All {
+                        return;
+                    }
+                    sig.full_signature = Self::group_members(&sig.full_signature, &members);
                     signatures.push(sig);
+                    // Methods are listed under their impl, not again flat.
+                    return;
                 }
             }
             "mod_item" => {
@@ -194,6 +207,53 @@ impl RustSupport {
         for child in node.children(&mut cursor) {
             self.extract_signatures_from_node(source, &child, visibility, signatures);
         }
+    }
+
+    /// Signatures of the functions declared in an `impl`/`trait` body, in order.
+    fn member_signatures(
+        &self,
+        source: &str,
+        container: &tree_sitter::Node,
+        visibility: Visibility,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cursor = container.walk();
+        for body in container.children(&mut cursor) {
+            if body.kind() != "declaration_list" {
+                continue;
+            }
+            let mut inner = body.walk();
+            for member in body.children(&mut inner) {
+                let sig = match member.kind() {
+                    "function_item" => self.extract_function_signature(source, &member, visibility),
+                    "function_signature_item" => {
+                        self.extract_function_sig_item(source, &member, visibility)
+                    }
+                    _ => None,
+                };
+                if let Some(sig) = sig {
+                    out.push(sig.full_signature);
+                }
+            }
+        }
+        out
+    }
+
+    /// `header { member; member }` with each member on its own indented line.
+    fn group_members(header: &str, members: &[String]) -> String {
+        if members.is_empty() {
+            return header.to_string();
+        }
+        let mut out = format!("{header} {{\n");
+        for member in members {
+            for line in member.lines() {
+                out.push_str("    ");
+                out.push_str(line.trim_start());
+                out.push('\n');
+            }
+        }
+        out.push('}');
+        out
     }
 
     fn extract_structure_from_node(
@@ -692,17 +752,25 @@ pub trait Drawable {
 }
 "#;
 
+        // Members are listed under their trait, in one signature.
         let signatures = RustSupport.extract_signatures(source, Visibility::All);
-        assert!(
-            signatures.iter().any(|s| s.name == "draw"),
-            "bodiless trait method `draw` should be extracted"
-        );
-        let area = signatures
+        let drawable = signatures
             .iter()
-            .find(|s| s.name == "area")
-            .expect("bodiless trait method `area` should be extracted");
-        assert!(area.full_signature.contains("-> f64"));
-        assert!(!area.full_signature.ends_with(';'));
+            .find(|s| s.name == "Drawable")
+            .expect("trait should be extracted");
+        assert!(drawable.full_signature.contains("    fn draw(&self)"));
+        assert!(
+            drawable
+                .full_signature
+                .contains("    fn area(&self) -> f64")
+        );
+        assert!(!drawable.full_signature.contains(';'));
+        assert!(
+            !signatures
+                .iter()
+                .any(|s| s.name == "draw" || s.name == "area"),
+            "members are not repeated as flat signatures"
+        );
     }
 
     #[test]
@@ -723,16 +791,23 @@ trait Hidden {
 "#;
 
         let public_only = RustSupport.extract_signatures(source, Visibility::Public);
+        let drawable = public_only
+            .iter()
+            .find(|s| s.name == "Drawable")
+            .expect("public trait should be listed");
         assert!(
-            public_only.iter().any(|s| s.name == "draw"),
+            drawable.full_signature.contains("fn draw(&self)")
+                && drawable.full_signature.contains("fn area(&self) -> f64"),
             "a public trait's required methods must pass the `public` filter"
         );
         assert!(
-            public_only.iter().any(|s| s.name == "area"),
-            "a public trait's required methods must pass the `public` filter"
+            !public_only.iter().any(|s| s.name == "Hidden"),
+            "a private trait must NOT pass the `public` filter"
         );
         assert!(
-            !public_only.iter().any(|s| s.name == "secret"),
+            !public_only
+                .iter()
+                .any(|s| s.full_signature.contains("secret")),
             "a private trait's methods must NOT pass the `public` filter"
         );
     }
