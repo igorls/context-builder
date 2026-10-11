@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Snapshots (#20 B10, B9).** Timestamped outputs written within the same second get `-1`, `-2`, … suffixes instead of prompting/cancelling or overwriting the previous snapshot. The auto-diff renderer prints `Modified:` as `YYYY-MM-DD HH:MM:SS UTC` (it printed a Debug `SystemTime { … }`) when `--file-metadata` is on.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

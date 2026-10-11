@@ -316,15 +316,25 @@ fn resolve_output_path(
 
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
 
-        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
-
-        let new_output = if let Some(ref folder) = anchored_folder {
-            folder.join(new_filename).to_string_lossy().to_string()
-        } else {
-            path.with_file_name(new_filename)
-                .to_string_lossy()
-                .to_string()
+        // Two runs in the same second must not share a name (the second would
+        // either prompt/cancel or silently overwrite the first snapshot): add
+        // `-1`, `-2`, … until the name is free. Still matches `stem_*.ext`.
+        let candidate = |suffix: &str| {
+            let new_filename = format!("{}_{}{}.{}", stem, timestamp, suffix, extension);
+            if let Some(ref folder) = anchored_folder {
+                folder.join(new_filename).to_string_lossy().to_string()
+            } else {
+                path.with_file_name(new_filename)
+                    .to_string_lossy()
+                    .to_string()
+            }
         };
+        let mut new_output = candidate("");
+        let mut n = 1;
+        while Path::new(&new_output).exists() {
+            new_output = candidate(&format!("-{n}"));
+            n += 1;
+        }
         args.output = new_output;
     }
 
