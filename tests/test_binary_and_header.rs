@@ -125,3 +125,49 @@ fn binary_prints_summary_with_binary_count_and_clean_header() {
     assert!(!doc.contains(&parent), "{doc}");
     assert!(!doc.contains("<Binary file"));
 }
+
+#[test]
+fn header_keeps_a_symlink_name_and_never_falls_back_to_a_path() {
+    let dir = project();
+    let cwd = dir.path().join("sub");
+    fs::create_dir(&cwd).unwrap();
+    fs::write(cwd.join("x.txt"), "x").unwrap();
+    // `..` resolves to the parent's name; `/` has no name and must not print `/`.
+    let out = dir.path().join("out.md");
+    let mut a = args(&cwd.join(".."), &out);
+    a.input = format!("{}/..", cwd.display());
+    run_with_args(a, Config::default(), &Yes).unwrap();
+    let doc = fs::read_to_string(&out).unwrap();
+    let name = dir
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        doc.contains(&format!("from the `{name}` directory")),
+        "{doc}"
+    );
+
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("alias-name");
+        std::os::unix::fs::symlink(&cwd, &link).unwrap();
+        let out2 = dir.path().join("out2.md");
+        run_with_args(args(&link, &out2), Config::default(), &Yes).unwrap();
+        let doc2 = fs::read_to_string(&out2).unwrap();
+        assert!(doc2.contains("from the `alias-name` directory"), "{doc2}");
+    }
+}
+
+#[test]
+fn several_binaries_are_summarized_in_the_plural() {
+    let dir = project();
+    fs::write(dir.path().join("two.dat"), [0u8, 9, 9]).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_context-builder"))
+        .args(["-d", dir.path().to_str().unwrap(), "-o", "-", "-y"])
+        .current_dir(std::env::temp_dir())
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("(2 binaries)"));
+}

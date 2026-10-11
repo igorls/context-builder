@@ -1034,13 +1034,20 @@ fn first_visibility_warning_for(ext: &str) -> bool {
 /// path component, never the absolute path (which leaks the user's home
 /// directory and username into a document that is meant to be shared).
 pub(crate) fn directory_display_name(input_dir: &str) -> String {
+    use std::path::Component;
     let path = Path::new(input_dir);
-    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    resolved
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| input_dir.to_string())
+    // The lexical name the user typed wins (a symlink keeps its own name).
+    let last = path.components().next_back();
+    if let Some(Component::Normal(name)) = last
+        && let Some(name) = name.to_str()
+    {
+        return name.to_string();
+    }
+    // `.`, `..`, `/`, `C:\`: resolve, and never fall back to a path.
+    fs::canonicalize(path)
+        .ok()
+        .and_then(|p| p.file_name().and_then(|n| n.to_str().map(str::to_string)))
+        .unwrap_or_else(|| "project".to_string())
 }
 
 /// Bytes read from the start of a file when deciding text vs binary.

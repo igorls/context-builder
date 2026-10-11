@@ -495,7 +495,7 @@ pub fn summary_line(skipped: &[SkippedFile]) -> Option<String> {
         parts.push(count_phrase(secrets, "secret", "secrets"));
     }
     if binaries > 0 {
-        parts.push(count_phrase(binaries, "binary", "binary"));
+        parts.push(count_phrase(binaries, "binary", "binaries"));
     }
     let noun = if skipped.len() == 1 { "file" } else { "files" };
     Some(format!(
