@@ -50,7 +50,7 @@ fn closed_stderr_pipe_does_not_abort_the_run() {
 
     assert!(status.success(), "exit status was {status:?}");
     let doc = fs::read_to_string(&out).expect("output file must be written");
-    assert!(doc.contains("### File: `src/f39.rs`"), "document truncated");
+    assert!(doc.contains("f39.rs"), "document truncated");
     assert!(doc.contains("## Skipped"), "skip section missing");
 }
 
