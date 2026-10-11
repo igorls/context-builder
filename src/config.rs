@@ -66,6 +66,11 @@ pub struct Config {
     /// If true, append a UTC timestamp to the output file name (before extension)
     pub timestamped_output: Option<bool>,
 
+    /// With `timestamped_output`, keep only the newest N snapshots of the output
+    /// (older `<name>_<timestamp>.<ext>` files in the same folder are deleted).
+    /// Unset or 0 keeps everything.
+    pub keep_last: Option<usize>,
+
     /// Assume "yes" for the overwrite prompt.
     ///
     /// Still accepted after the >100-file confirmation was removed in v0.11.0.

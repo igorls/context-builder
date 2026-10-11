@@ -666,6 +666,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             // Stderr so `-o -` stays a clean document.
             print_context_window_warning(final_doc.len(), final_args.max_tokens, &files);
         }
+        prune_snapshots(&final_args.output, &config, silent);
         return Ok(());
     }
 
@@ -715,8 +716,78 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         // Stderr so `-o -` stays a clean document.
         print_context_window_warning(output_bytes, final_args.max_tokens, &files);
     }
+    prune_snapshots(&final_args.output, &config, silent);
 
     Ok(())
+}
+
+/// Split `<stem>_<14-digit timestamp>[-<n>].<ext>` into (stem, ext, sort key).
+fn parse_snapshot_name(name: &str) -> Option<(String, String, (u64, u32))> {
+    let (base, ext) = name.rsplit_once('.')?;
+    let (head, suffix) = match base.rsplit_once('-') {
+        Some((h, n)) if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() => {
+            (h, n.parse::<u32>().ok()?)
+        }
+        _ => (base, 0),
+    };
+    let (stem, stamp) = head.rsplit_once('_')?;
+    if stamp.len() != 14 || !stamp.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((
+        stem.to_string(),
+        ext.to_string(),
+        (stamp.parse().ok()?, suffix),
+    ))
+}
+
+/// `keep_last = N`: delete all but the newest N timestamped snapshots that sit
+/// next to the file just written and share its stem and extension. Only names of
+/// exactly the generated form are touched, so unrelated files are never removed.
+fn prune_snapshots(output: &str, config: &Config, silent: bool) {
+    let keep = match (config.timestamped_output, config.keep_last) {
+        (Some(true), Some(n)) if n > 0 => n,
+        _ => return,
+    };
+    if output == "-" {
+        return;
+    }
+    let path = Path::new(output);
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let Some((stem, ext, _)) = parse_snapshot_name(name) else {
+        return;
+    };
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut snapshots: Vec<((u64, u32), PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().into_string().ok()?;
+            let (s, x, key) = parse_snapshot_name(&n)?;
+            (s == stem && x == ext && e.path().is_file()).then(|| (key, e.path()))
+        })
+        .collect();
+    snapshots.sort();
+    let excess = snapshots.len().saturating_sub(keep);
+    for (_, old) in snapshots.into_iter().take(excess) {
+        if old != path
+            && let Err(e) = fs::remove_file(&old)
+            && !silent
+        {
+            eprintln!(
+                "Warning: could not remove old snapshot {}: {}",
+                old.display(),
+                e
+            );
+        }
+    }
 }
 
 /// Print context window overflow warnings with actionable recommendations.
