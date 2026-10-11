@@ -747,11 +747,12 @@ fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Re
     Ok(estimate_tokens(encoding, &String::from_utf8_lossy(&buf)))
 }
 
-/// True when a file's body will be replaced by an outline: `--signatures` or
-/// `--structure` on an extension tree-sitter supports (always false without
-/// tree-sitter support compiled in, where the full content is written).
+/// True when a file's body will be replaced by an outline: `--signatures` on
+/// an extension tree-sitter supports (always false without tree-sitter support
+/// compiled in, where the full content is written). `--structure` only appends
+/// a summary after the full body, so it does not shrink the output.
 fn body_is_outlined(args: &Args, path: &Path) -> bool {
-    (args.signatures || args.structure)
+    args.signatures
         && path
             .extension()
             .and_then(|ext| ext.to_str())

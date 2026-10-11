@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-- **Size warnings match what the run writes (#41).** The `large file(s) detected … Total context size` block is no longer printed when `--max-tokens` caps the output, and leaves out files that `--signatures`/`--structure` replace with an outline (it still appears for full runs and `--preview`). The >128K advice omits `--filter …` when a filter was already given.
+- **Size warnings match what the run writes (#41).** The `large file(s) detected … Total context size` block is no longer printed when `--max-tokens` caps the output, and leaves out files that `--signatures` replaces with an outline (`--structure` only appends a summary, so those files still count) (it still appears for full runs and `--preview`). The >128K advice omits `--filter …` when a filter was already given.
 
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 

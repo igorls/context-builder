@@ -100,3 +100,13 @@ fn signatures_run_still_reports_files_that_are_written_in_full() {
     assert!(stderr.contains("notes.txt"), "{stderr}");
     assert!(!stderr.contains("lib.rs"), "{stderr}");
 }
+
+#[test]
+fn structure_run_still_reports_large_files() {
+    // `--structure` appends a summary after the full body; nothing shrinks,
+    // so the large-file block must stay.
+    let dir = tempfile::tempdir().unwrap();
+    big_fixture(dir.path());
+    let stderr = run(dir.path(), &["--structure"]);
+    assert!(stderr.contains("large file(s) detected"), "{stderr}");
+}
