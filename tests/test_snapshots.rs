@@ -44,7 +44,10 @@ fn rapid_timestamped_runs_keep_every_snapshot_and_print_utc_times() {
     for report in reports {
         let doc = fs::read_to_string(&report).unwrap();
         assert!(!doc.contains("SystemTime"), "{}", report.display());
-        for line in doc.lines().filter(|l| l.starts_with("- Modified:") && !l.contains('`')) {
+        for line in doc
+            .lines()
+            .filter(|l| l.starts_with("- Modified:") && !l.contains('`'))
+        {
             saw_modified = true;
             assert!(line.ends_with(" UTC"), "{line}");
         }
