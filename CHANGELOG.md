@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Auto-diff honors `--max-tokens` like the standard renderer (#20 B14).** The auto-diff path used a bytes/4 cut over the finished document (mid-file, ignoring `--encoding`, omissions unreported). Files are now budgeted one by one with the real tokenizer: a file that would cross the budget is clamped at a `--truncate` boundary (and says so) or omitted, and the notice counts the omitted files. The budget search is shared (`markdown::fit_chunk_to_budget`) with the standard path.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):
