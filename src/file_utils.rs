@@ -188,6 +188,9 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
 
     match first {
         "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
+        // `doc/` is also a real Go package directory (cobra's `doc`): Go files
+        // there are source, not documentation.
+        "doc" if file_extension(name) == Some("go") => 1,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
         // Build/CI infrastructure — useful context but not core source.
         ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
