@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::fs;
+use std::io;
 use std::path::Path;
 
 use crate::content_filter::{self, DEFAULT_MAX_FILE_SIZE_BYTES};
@@ -232,6 +233,24 @@ pub fn load_config() -> Option<Config> {
     } else {
         None
     }
+}
+
+/// Load the config file the user named with `--config`. Unlike the implicit
+/// `context-builder.toml`, an explicit path must exist and parse: silently
+/// falling back to defaults would hide the mistake.
+pub fn load_config_file(path: &Path) -> io::Result<Config> {
+    let content = fs::read_to_string(path).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("cannot read config '{}': {e}", path.display()),
+        )
+    })?;
+    toml::from_str(&content).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid config '{}': {e}", path.display()),
+        )
+    })
 }
 
 /// Load configuration from `context-builder.toml` in the specified project root directory.

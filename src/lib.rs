@@ -1011,7 +1011,25 @@ pub fn run() -> io::Result<()> {
     // `--encoding o200k_base` and `-o output.md` carry the same value as the
     // default, so the value alone can't reveal an intent to override a
     // non-default config (see resolver).
-    let matches = Args::command().get_matches();
+    // `--config` / `--no-config` are read straight from the matches, so the many
+    // `Args { .. }` literals (library users, tests) do not need new fields.
+    let matches = Args::command()
+        .arg(
+            clap::Arg::new("config")
+                .long("config")
+                .value_name("PATH")
+                .conflicts_with("no_config")
+                .help("Use this config file instead of <input>/context-builder.toml"),
+        )
+        .arg(
+            clap::Arg::new("no_config")
+                .long("no-config")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "Ignore any context-builder.toml; use only command-line options and defaults",
+                ),
+        )
+        .get_matches();
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
         visibility: matches.value_source("visibility")
@@ -1034,7 +1052,13 @@ pub fn run() -> io::Result<()> {
 
     // Determine project root first
     let project_root = Path::new(&args.input);
-    let config = load_config_from_path(project_root);
+    let config = if matches.get_flag("no_config") {
+        None
+    } else if let Some(path) = matches.get_one::<String>("config") {
+        Some(crate::config::load_config_file(Path::new(path))?)
+    } else {
+        load_config_from_path(project_root)
+    };
 
     // Handle early clear-cache request (runs even if no config or other args)
     if args.clear_cache {
