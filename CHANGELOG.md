@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## Unreleased
 
 - **`--init` no longer suggests asset, secret or oversized types in `filter` (#39).** The generated `filter` used to list every common extension, including `png` or `pem`; an explicit filter of such a type opts those files back in, which undid the v0.11.0 default skips. Detection now counts only files a default run would include.
+- **Diagnostics (#21: B13, B17, B18).** The tree-sitter notice no longer prints on every default run: only for `--signatures`/`--structure`, or `--truncate smart` with `--max-tokens`, and it suggests `cargo install context-builder --features tree-sitter-all`. Errors print once as `Error: <message>` (not Debug), and output-path errors name the path. In builds without tree-sitter, truncation notices say `mode: byte`.
+- **A closed stderr or stdout pipe no longer aborts the run (#40).** `context-builder … 2>&1 | head -3` used to panic with exit code 101 and could leave the output file missing. Progress and warning lines now ignore write errors, and `-o - | head` ends with exit code 0.
 
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 

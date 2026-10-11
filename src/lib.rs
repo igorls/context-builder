@@ -155,6 +155,17 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     out
 }
 
+/// Maps the result of [`run`] to the process result.
+///
+/// The reader of `-o -` going away (`context-builder -o - | head`) ends a
+/// pipeline; it is not a failure of ours, so `BrokenPipe` is success.
+pub fn finish(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
+}
+
 pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
     let start_time = Instant::now();
 
@@ -174,7 +185,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !matches!(strat.as_str(), "detect" | "strict" | "skip")
         && !silent
     {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "⚠️  Unknown encoding_strategy '{strat}' in config; expected one of: detect, strict, skip. Falling back to 'detect'."
         );
     }
@@ -197,12 +209,6 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     let base_path = resolved_base.as_path();
 
     if !base_path.exists() || !base_path.is_dir() {
-        if !silent {
-            eprintln!(
-                "Error: The specified input directory '{}' does not exist or is not a directory.",
-                final_args.input
-            );
-        }
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
@@ -229,9 +235,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !final_args.yes
         && !prompter.confirm_overwrite(&final_args.output)?
     {
-        if !silent {
-            eprintln!("Operation cancelled.");
-        }
+        // No separate message: `main` prints the error once.
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "Operation cancelled by user",
@@ -260,7 +264,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent
         && let Some(notice) = crate::file_utils::lockfile_skip_notice(collected.skipped_lockfiles)
     {
-        eprintln!("{notice}");
+        let _ = writeln!(std::io::stderr(), "{notice}");
     }
     let files = collected.files;
     let policy = ContentPolicy::new(
@@ -274,7 +278,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // write the (empty) document. Name the filters when any were given.
     if !silent && files.is_empty() && skipped.is_empty() {
         if final_args.filter.is_empty() {
-            eprintln!("Warning: No files matched; check .gitignore, --ignore, and --filter");
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: No files matched; check .gitignore, --ignore, and --filter"
+            );
         } else {
             let quoted = final_args
                 .filter
@@ -287,17 +294,36 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             } else {
                 "filters"
             };
-            eprintln!("Warning: no files matched {noun} {quoted}.");
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: no files matched {noun} {quoted}."
+            );
         }
     }
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
-        eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
-        eprintln!("[DEBUG][CONFIG] Raw Config: {:?}", config);
-        eprintln!("[DEBUG][CONFIG] Auto-ignores: {:?}", auto_ignores);
-        eprintln!("[DEBUG][CONFIG] Collected {} files", files.len());
+        let _ = writeln!(std::io::stderr(), "[DEBUG][CONFIG] Args: {:?}", final_args);
+        let _ = writeln!(
+            std::io::stderr(),
+            "[DEBUG][CONFIG] Raw Config: {:?}",
+            config
+        );
+        let _ = writeln!(
+            std::io::stderr(),
+            "[DEBUG][CONFIG] Auto-ignores: {:?}",
+            auto_ignores
+        );
+        let _ = writeln!(
+            std::io::stderr(),
+            "[DEBUG][CONFIG] Collected {} files",
+            files.len()
+        );
         for f in &files {
-            eprintln!("[DEBUG][CONFIG]  - {}", f.path().display());
+            let _ = writeln!(
+                std::io::stderr(),
+                "[DEBUG][CONFIG]  - {}",
+                f.path().display()
+            );
         }
     }
 
@@ -325,18 +351,24 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         if !large_files.is_empty() {
             large_files.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by size descending
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "\n⚠  {} large file(s) detected (>{} KB):",
                 large_files.len(),
                 LARGE_FILE_THRESHOLD / 1024
             );
             for (path, size) in large_files.iter().take(5) {
-                eprintln!("   {:>8} KB  {}", size / 1024, path);
+                let _ = writeln!(std::io::stderr(), "   {:>8} KB  {}", size / 1024, path);
             }
             if large_files.len() > 5 {
-                eprintln!("   ... and {} more", large_files.len() - 5);
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "   ... and {} more",
+                    large_files.len() - 5
+                );
             }
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "   Total context size: {} KB across {} files\n",
                 total_size / 1024,
                 files.len()
@@ -347,7 +379,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     if final_args.preview {
         if !silent {
-            println!("\n# File Tree Structure (Preview)\n");
+            let _ = writeln!(std::io::stdout(), "\n# File Tree Structure (Preview)\n");
             print_tree(&file_tree, 0);
         }
         if !final_args.token_count {
@@ -368,7 +400,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 file_metadata: final_args.file_metadata,
             };
             let enc_strategy = config.encoding_strategy.as_deref();
-            println!("\n# Token Count Estimation\n");
+            let _ = writeln!(std::io::stdout(), "\n# Token Count Estimation\n");
             let mut total_tokens = 0;
             total_tokens +=
                 estimate_tokens(encoding, &format!("{}\n\n", markdown::REPORT_TITLE_LINE));
@@ -422,9 +454,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 })
                 .sum();
             total_tokens += file_tokens;
-            println!("Estimated total tokens: {}", total_tokens);
-            println!("File tree tokens: {}", tree_tokens);
-            println!("File content tokens: {}", file_tokens);
+            let _ = writeln!(
+                std::io::stdout(),
+                "Estimated total tokens: {}",
+                total_tokens
+            );
+            let _ = writeln!(std::io::stdout(), "File tree tokens: {}", tree_tokens);
+            let _ = writeln!(std::io::stdout(), "File content tokens: {}", file_tokens);
         }
         return Ok(());
     }
@@ -436,10 +472,32 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // B8: --diff-only only takes effect together with auto_diff (+ timestamped
     // output). Warn instead of silently emitting full file contents.
     if final_args.diff_only && !config.auto_diff.unwrap_or(false) && !silent {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "⚠️  --diff-only has no effect without auto_diff (it also needs timestamped_output). \
              Full file contents will be emitted. Enable auto_diff = true + timestamped_output = true to use diff-only mode."
         );
+    }
+
+    // Graceful degradation (before the auto-diff branch so both paths warn): warn if tree-sitter flags are used without the feature.
+    // `--truncate` defaults to "smart", so it only matters (and only warns) when a
+    // token budget is actually being applied; a plain default run stays quiet.
+    #[cfg_attr(feature = "tree-sitter-base", allow(unused_variables))]
+    let smart_truncate_requested =
+        final_args.truncate == "smart" && final_args.max_tokens.is_some();
+    if !silent && (final_args.signatures || final_args.structure || smart_truncate_requested) {
+        #[cfg(not(feature = "tree-sitter-base"))]
+        {
+            let _ = writeln!(
+                std::io::stderr(),
+                "⚠️  --signatures/--structure/--truncate smart require tree-sitter support."
+            );
+            let _ = writeln!(
+                std::io::stderr(),
+                "   Install with: cargo install context-builder --features tree-sitter-all"
+            );
+            let _ = writeln!(std::io::stderr(), "   Falling back to standard output.\n");
+        }
     }
 
     if config.auto_diff.unwrap_or(false) {
@@ -483,7 +541,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             Ok(state) => state,
             Err(e) => {
                 if !silent {
-                    eprintln!(
+                    let _ = writeln!(
+                        std::io::stderr(),
                         "Warning: Failed to read cache (proceeding without diff): {}",
                         e
                     );
@@ -512,35 +571,47 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
         if debug_autodiff {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] cache file: {}",
                 cache_manager.debug_cache_file_path().display()
             );
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] config_hash current={} prev={:?} invalidated={}",
                 current_state.config_hash,
                 previous_state.as_ref().map(|s| s.config_hash.clone()),
                 effective_previous.is_none() && previous_state.is_some()
             );
-            eprintln!("[DEBUG][AUTODIFF] effective_config: {:?}", effective_config);
+            let _ = writeln!(
+                std::io::stderr(),
+                "[DEBUG][AUTODIFF] effective_config: {:?}",
+                effective_config
+            );
             if let Some(prev) = previous_state.as_ref() {
-                eprintln!("[DEBUG][AUTODIFF] raw previous files: {}", prev.files.len());
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "[DEBUG][AUTODIFF] raw previous files: {}",
+                    prev.files.len()
+                );
             }
             if let Some(prev) = effective_previous {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "[DEBUG][AUTODIFF] effective previous files: {}",
                     prev.files.len()
                 );
                 for k in prev.files.keys() {
-                    eprintln!("  PREV: {}", k.display());
+                    let _ = writeln!(std::io::stderr(), "  PREV: {}", k.display());
                 }
             }
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] current files: {}",
                 current_state.files.len()
             );
             for k in current_state.files.keys() {
-                eprintln!("  CURR: {}", k.display());
+                let _ = writeln!(std::io::stderr(), "  CURR: {}", k.display());
             }
         }
 
@@ -628,38 +699,49 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     e
                 )));
             }
-            let mut final_output = fs::File::create(output_path)?;
-            final_output.write_all(final_doc.as_bytes())?;
+            let mut final_output =
+                fs::File::create(output_path).map_err(|e| write_error(output_path, e))?;
+            final_output
+                .write_all(final_doc.as_bytes())
+                .map_err(|e| write_error(output_path, e))?;
         }
 
         // 6. Update cache with current state
         if let Err(e) = cache_manager.write_cache(&current_state)
             && !silent
         {
-            eprintln!("Warning: failed to update state cache: {}", e);
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: failed to update state cache: {}",
+                e
+            );
         }
 
         let duration = start_time.elapsed();
         if !silent && !to_stdout {
             if let Some(comp) = &comparison {
                 if comp.summary.has_changes() {
-                    println!(
+                    let _ = writeln!(
+                        std::io::stdout(),
                         "Documentation created successfully with {} changes: {}",
-                        comp.summary.total_changes, final_args.output
+                        comp.summary.total_changes,
+                        final_args.output
                     );
                 } else {
-                    println!(
+                    let _ = writeln!(
+                        std::io::stdout(),
                         "Documentation created successfully (no changes detected): {}",
                         final_args.output
                     );
                 }
             } else {
-                println!(
+                let _ = writeln!(
+                    std::io::stdout(),
                     "Documentation created successfully (initial state): {}",
                     final_args.output
                 );
             }
-            println!("Processing time: {:.2?}", duration);
+            let _ = writeln!(std::io::stdout(), "Processing time: {:.2?}", duration);
         }
         if !silent {
             // Non-blocking. File count is not a cost proxy; this estimate is.
@@ -674,20 +756,16 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     let ts_config = markdown::TreeSitterConfig {
         signatures: final_args.signatures,
         structure: final_args.structure,
-        truncate: final_args.truncate.clone(),
+        // Without tree-sitter support "smart" truncation cannot happen; report the
+        // mode that is actually used (byte) in truncation notices.
+        truncate: if cfg!(feature = "tree-sitter-base") {
+            final_args.truncate.clone()
+        } else {
+            "byte".to_string()
+        },
         visibility: final_args.visibility.clone(),
         file_metadata: final_args.file_metadata,
     };
-
-    // Graceful degradation: warn if tree-sitter flags are used without the feature
-    if !silent && (ts_config.signatures || ts_config.structure || ts_config.truncate == "smart") {
-        #[cfg(not(feature = "tree-sitter-base"))]
-        {
-            eprintln!("⚠️  --signatures/--structure/--truncate smart require tree-sitter support.");
-            eprintln!("   Build with: cargo build --features tree-sitter-all");
-            eprintln!("   Falling back to standard output.\n");
-        }
-    }
 
     let output_bytes = generate_markdown(
         &final_args.output,
@@ -707,8 +785,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     let duration = start_time.elapsed();
     if !silent && !to_stdout {
-        println!("Documentation created successfully: {}", final_args.output);
-        println!("Processing time: {:.2?}", duration);
+        let _ = writeln!(
+            std::io::stdout(),
+            "Documentation created successfully: {}",
+            final_args.output
+        );
+        let _ = writeln!(std::io::stdout(), "Processing time: {:.2?}", duration);
     }
     if !silent {
         // Non-blocking. File count is not a cost proxy; this estimate is.
@@ -740,7 +822,11 @@ fn print_context_window_warning(
     let estimated_tokens = output_bytes / 4;
 
     // Stderr only: this notice must never mix into a captured or piped document.
-    eprintln!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+    let _ = writeln!(
+        std::io::stderr(),
+        "Estimated tokens: ~{}K",
+        estimated_tokens / 1000
+    );
 
     // If the user already set --max-tokens, they're managing their budget
     if max_tokens.is_some() {
@@ -755,17 +841,21 @@ fn print_context_window_warning(
 
     let paths: Vec<&Path> = files.iter().map(|entry| entry.path()).collect();
 
-    eprintln!();
-    eprintln!(
+    let _ = writeln!(std::io::stderr());
+    let _ = writeln!(
+        std::io::stderr(),
         "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
         estimated_tokens / 1000
     );
-    eprintln!("   Large contexts degrade response quality. Consider narrowing the scope:");
-    eprintln!();
+    let _ = writeln!(
+        std::io::stderr(),
+        "   Large contexts degrade response quality. Consider narrowing the scope:"
+    );
+    let _ = writeln!(std::io::stderr());
     for line in context_window_suggestions(&paths) {
-        eprintln!("   • {line}");
+        let _ = writeln!(std::io::stderr(), "   • {line}");
     }
-    eprintln!();
+    let _ = writeln!(std::io::stderr());
 }
 
 /// `--filter` extensions to suggest for this run: the most common extensions
@@ -1004,6 +1094,14 @@ fn generate_markdown_with_diff(
     Ok(output)
 }
 
+/// An output-path error naming the path (the bare OS error does not).
+pub(crate) fn write_error(path: &Path, err: io::Error) -> io::Error {
+    io::Error::new(
+        err.kind(),
+        format!("cannot write '{}': {err}", path.display()),
+    )
+}
+
 pub fn run() -> io::Result<()> {
     env_logger::init();
     // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
@@ -1012,6 +1110,37 @@ pub fn run() -> io::Result<()> {
     // default, so the value alone can't reveal an intent to override a
     // non-default config (see resolver).
     let matches = Args::command().get_matches();
+    run_matches(&matches, std::env::args_os().len())
+}
+
+/// [`run`] with an explicit argument vector (program name first) instead of
+/// the process arguments, so the whole command line path can run in-process.
+/// A bad command line is returned as `InvalidInput` instead of exiting;
+/// `--help` and `--version` print and return `Ok`.
+pub fn run_from<I, T>(argv: I) -> io::Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
+    let matches = match Args::command().try_get_matches_from(&argv) {
+        Ok(matches) => matches,
+        // `--help` / `--version` are requests, not mistakes: print and succeed.
+        Err(e)
+            if matches!(
+                e.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            e.print()?;
+            return Ok(());
+        }
+        Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string())),
+    };
+    run_matches(&matches, argv.len())
+}
+
+fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
         visibility: matches.value_source("visibility")
@@ -1024,8 +1153,8 @@ pub fn run() -> io::Result<()> {
         // `-o` is used verbatim (no output_folder / timestamp rewrite).
         output: matches.value_source("output") == Some(clap::parser::ValueSource::CommandLine),
     };
-    let args = Args::from_arg_matches(&matches)
-        .expect("arguments were already validated by get_matches()");
+    let args =
+        Args::from_arg_matches(matches).expect("arguments were already validated by get_matches()");
 
     // Handle init command first
     if args.init {
@@ -1041,16 +1170,29 @@ pub fn run() -> io::Result<()> {
         let cache_path = project_root.join(".context-builder").join("cache");
         if cache_path.exists() {
             match fs::remove_dir_all(&cache_path) {
-                Ok(()) => println!("Cache cleared: {}", cache_path.display()),
-                Err(e) => eprintln!("Failed to clear cache ({}): {}", cache_path.display(), e),
+                Ok(()) => {
+                    let _ = writeln!(std::io::stdout(), "Cache cleared: {}", cache_path.display());
+                }
+                Err(e) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "Failed to clear cache ({}): {}",
+                        cache_path.display(),
+                        e
+                    );
+                }
             }
         } else {
-            println!("No cache directory found at {}", cache_path.display());
+            let _ = writeln!(
+                std::io::stdout(),
+                "No cache directory found at {}",
+                cache_path.display()
+            );
         }
         return Ok(());
     }
 
-    if std::env::args().len() == 1 && config.is_none() {
+    if argc == 1 && config.is_none() {
         Args::command().print_help()?;
         return Ok(());
     }
@@ -1065,7 +1207,7 @@ pub fn run() -> io::Result<()> {
 
     if !silent {
         for warning in &resolution.warnings {
-            eprintln!("Warning: {}", warning);
+            let _ = writeln!(std::io::stderr(), "Warning: {}", warning);
         }
     }
 
@@ -1161,8 +1303,15 @@ fn init_config() -> io::Result<()> {
     let config_path = Path::new("context-builder.toml");
 
     if config_path.exists() {
-        println!("Config file already exists at {}", config_path.display());
-        println!("If you want to replace it, please remove it manually first.");
+        let _ = writeln!(
+            std::io::stdout(),
+            "Config file already exists at {}",
+            config_path.display()
+        );
+        let _ = writeln!(
+            std::io::stdout(),
+            "If you want to replace it, please remove it manually first."
+        );
         return Ok(());
     }
 
@@ -1231,9 +1380,20 @@ file_metadata = false
     let mut file = File::create(config_path)?;
     file.write_all(default_config_content.as_bytes())?;
 
-    println!("Config file created at {}", config_path.display());
-    println!("Detected file types: {}", filter_suggestions.join(", "));
-    println!("You can now customize it according to your project needs.");
+    let _ = writeln!(
+        std::io::stdout(),
+        "Config file created at {}",
+        config_path.display()
+    );
+    let _ = writeln!(
+        std::io::stdout(),
+        "Detected file types: {}",
+        filter_suggestions.join(", ")
+    );
+    let _ = writeln!(
+        std::io::stdout(),
+        "You can now customize it according to your project needs."
+    );
 
     Ok(())
 }
