@@ -1146,6 +1146,7 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     }
 
     // Resolve final configuration using the new config resolver
+    let explicit_output = explicit.output;
     let resolution = crate::config_resolver::resolve_final_config(args, config.clone(), explicit);
 
     // Print warnings if any
@@ -1189,6 +1190,12 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let final_config = Config {
         auto_diff: Some(resolution.config.auto_diff),
         diff_context_lines: Some(resolution.config.diff_context_lines),
+        // An explicit `-o` is used verbatim, so its siblings are not ours to prune.
+        keep_last: if explicit_output {
+            None
+        } else {
+            config.as_ref().and_then(|c| c.keep_last)
+        },
         ..config.unwrap_or_default()
     };
 

@@ -102,3 +102,33 @@ fn without_keep_last_everything_is_kept() {
     run(base);
     assert_eq!(names(&base.join("out")).len(), 4);
 }
+
+#[test]
+fn explicit_output_never_prunes_its_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    fs::write(base.join("a.rs"), "fn a() {}\n").unwrap();
+    fs::write(
+        base.join("context-builder.toml"),
+        "timestamped_output = true\nkeep_last = 1\n",
+    )
+    .unwrap();
+    for day in 1..=3 {
+        fs::write(base.join(format!("output_2020010{day}000000.md")), "old").unwrap();
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_context-builder"))
+        .args(["-y", "-o", "output_20200101000000.md"])
+        .current_dir(base)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let snaps: Vec<_> = names(base)
+        .into_iter()
+        .filter(|n| n.starts_with("output_2"))
+        .collect();
+    assert_eq!(snaps.len(), 3, "{snaps:?}");
+}
