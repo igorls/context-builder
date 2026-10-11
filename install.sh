@@ -1,6 +1,17 @@
 #!/bin/sh
 # Context Builder Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | sh
+#
+# Recommended: download the script from a release tag, read it, then run it.
+# Piping a remote script straight into a shell trusts whatever the URL serves
+# at that moment, so avoid that, and never let an automated agent do it.
+#
+#   curl -fsSLO https://raw.githubusercontent.com/igorls/context-builder/v0.11.0/install.sh
+#   less install.sh
+#   CONTEXT_BUILDER_VERSION=0.11.0 sh install.sh
+#
+# Environment:
+#   CONTEXT_BUILDER_VERSION      release to install, e.g. 0.11.0 (default: latest)
+#   CONTEXT_BUILDER_INSTALL_DIR  target directory (default: ~/.local/bin)
 set -e
 
 REPO="igorls/context-builder"
@@ -24,9 +35,16 @@ esac
 
 TARGET="${TARGET_ARCH}-${TARGET_OS}"
 ARCHIVE="context-builder-${TARGET}.tar.gz"
-BASE_URL="https://github.com/${REPO}/releases/latest/download"
+VERSION_REQUESTED="${CONTEXT_BUILDER_VERSION:-}"
+if [ -n "$VERSION_REQUESTED" ]; then
+  # Accept both "0.11.0" and "v0.11.0".
+  VERSION_REQUESTED="${VERSION_REQUESTED#v}"
+  BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION_REQUESTED}"
+else
+  BASE_URL="https://github.com/${REPO}/releases/latest/download"
+fi
 
-echo "Installing context-builder for ${TARGET}..."
+echo "Installing context-builder ${VERSION_REQUESTED:-(latest)} for ${TARGET}..."
 
 # Ensure install directory exists (user-local, no sudo needed)
 mkdir -p "$INSTALL_DIR"
@@ -36,8 +54,8 @@ SUDO=""
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 echo "Downloading ${ARCHIVE}..."
-curl -sSL "${BASE_URL}/${ARCHIVE}" -o "$TMP/$ARCHIVE"
-curl -sSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
+curl -fsSL "${BASE_URL}/${ARCHIVE}" -o "$TMP/$ARCHIVE"
+curl -fsSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
 
 # Verify SHA256 checksum (fail closed — never install unverified binaries)
 echo "Verifying checksum..."
@@ -76,7 +94,7 @@ $SUDO chmod +x "$INSTALL_DIR/context-builder"
 # $TMP is cleaned up automatically by the EXIT trap
 
 # Verify
-VERSION="$(context-builder --version 2>/dev/null || true)"
+VERSION="$("$INSTALL_DIR/context-builder" --version 2>/dev/null || true)"
 if [ -n "$VERSION" ]; then
   echo "✓ Installed: $VERSION"
 else

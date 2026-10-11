@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Install docs no longer suggest `curl | sh` from `master` (#37).** The README and `install.sh` header now show download, review, run from a release tag; `install.sh` honors `CONTEXT_BUILDER_VERSION` to pin the release (and `curl -f`, and reports the version of the binary it just installed); a no-script, checksum-verified path is documented. `SKILL.md` and the README pin `cargo install … --version 0.11.0 --locked`. **Release checklist:** bump these pinned versions with each release.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):
