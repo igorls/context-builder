@@ -44,3 +44,19 @@ fn negated_ignore_keeps_a_default_ignored_directory() {
     let both = doc(base, &["-i", "!build,!vendor", "-i", "nothing"]);
     assert!(both.contains("vendor/lib/k.go") && both.contains("src/build/mod.rs"));
 }
+
+#[test]
+fn dot_prefixed_defaults_need_hidden_as_well() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    fs::create_dir_all(base.join(".next")).unwrap();
+    fs::write(base.join("a.rs"), "fn a() {}\n").unwrap();
+    fs::write(base.join(".next/page.js"), "export {}\n").unwrap();
+
+    assert!(!doc(base, &["-i", "!.next"]).contains(".next/page.js"));
+    assert!(doc(base, &["-i", "!.next", "--hidden"]).contains(".next/page.js"));
+    assert!(
+        !doc(base, &["--hidden"]).contains(".next/page.js"),
+        "still ignored by default"
+    );
+}
