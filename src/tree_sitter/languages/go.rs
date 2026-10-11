@@ -266,7 +266,8 @@ impl GoSupport {
     ) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "type_spec"
+            // `type A B` is a `type_spec`; `type A = B` is a `type_alias`.
+            if matches!(child.kind(), "type_spec" | "type_alias")
                 && let Some(name) = self.find_child_text(&child, "type_identifier", source)
             {
                 let is_exported = self.is_exported(&name);
@@ -286,7 +287,8 @@ impl GoSupport {
                     // declaration itself, not the word "type".
                     _ => {
                         let text = &source[child.start_byte()..child.end_byte()];
-                        format!("type {}", text.lines().next().unwrap_or(&name).trim_end())
+                        let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        format!("type {one_line}")
                     }
                 };
 

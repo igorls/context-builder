@@ -23,6 +23,13 @@ func (c *Command) Reset() { }
 func New(a int, b string) *Command { return nil }
 
 type Runner interface{ Run() error }
+
+type ID = int64
+
+type Handler func(
+	ctx context.Context,
+	arg int,
+) error
 "#;
 
 fn sigs() -> Vec<String> {
@@ -93,5 +100,15 @@ fn binary_prints_return_types() {
     assert!(
         doc.contains("type FParseErrWhitelist flag.ParseErrorsWhitelist"),
         "{doc}"
+    );
+}
+
+#[test]
+fn equals_aliases_and_multiline_declarations_are_complete() {
+    let sigs = sigs();
+    assert!(sigs.contains(&"type ID = int64".to_string()), "{sigs:?}");
+    assert!(
+        sigs.contains(&"type Handler func( ctx context.Context, arg int, ) error".to_string()),
+        "{sigs:?}"
     );
 }
