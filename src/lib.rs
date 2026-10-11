@@ -1056,16 +1056,28 @@ pub fn run() -> io::Result<()> {
 
 /// [`run`] with an explicit argument vector (program name first) instead of
 /// the process arguments, so the whole command line path can run in-process.
-/// A bad command line is returned as `InvalidInput` instead of exiting.
+/// A bad command line is returned as `InvalidInput` instead of exiting;
+/// `--help` and `--version` print and return `Ok`.
 pub fn run_from<I, T>(argv: I) -> io::Result<()>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
     let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
-    let matches = Args::command()
-        .try_get_matches_from(&argv)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+    let matches = match Args::command().try_get_matches_from(&argv) {
+        Ok(matches) => matches,
+        // `--help` / `--version` are requests, not mistakes: print and succeed.
+        Err(e)
+            if matches!(
+                e.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            e.print()?;
+            return Ok(());
+        }
+        Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string())),
+    };
     run_matches(&matches, argv.len())
 }
 
