@@ -219,3 +219,18 @@ fn binary_with_auto_diff_config_respects_the_budget() {
     assert!(tokens <= 3000, "{tokens}");
     assert!(doc.contains("remaining files omitted"), "{doc}");
 }
+
+#[test]
+#[serial]
+fn file_metadata_is_rendered_in_budgeted_sections() {
+    let dir = project();
+    let _cwd = CwdGuard::enter(dir.path());
+    let out = dir.path().join("out.md");
+    let mut a = args(dir.path(), &out, Some(100_000), "o200k_base");
+    a.file_metadata = true;
+    run_with_args(a, auto_diff(), &Yes).unwrap();
+    let doc = fs::read_to_string(&out).unwrap();
+    assert!(doc.contains("- Size: "), "{doc}");
+    assert!(doc.contains("- Modified: "), "{doc}");
+    assert!(!doc.contains("Token budget"), "plenty of room, nothing cut");
+}
