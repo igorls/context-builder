@@ -597,3 +597,34 @@ filter = ["rs"]
         assert_eq!(config.output, Some("context.md".to_string()));
     }
 }
+
+#[cfg(test)]
+mod load_config_file_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn invalid_toml_is_invalid_data_naming_the_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "line_numbers = [oops").unwrap();
+        let err = load_config_file(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("invalid config"), "{err}");
+        assert!(err.to_string().contains("bad.toml"), "{err}");
+    }
+
+    #[test]
+    fn missing_file_keeps_its_error_kind() {
+        let err = load_config_file(Path::new("/definitely/not/here.toml")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn valid_file_loads() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("ok.toml");
+        std::fs::write(&path, "line_numbers = true\n").unwrap();
+        assert_eq!(load_config_file(&path).unwrap().line_numbers, Some(true));
+    }
+}

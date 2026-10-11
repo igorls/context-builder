@@ -1004,16 +1004,11 @@ fn generate_markdown_with_diff(
     Ok(output)
 }
 
-pub fn run() -> io::Result<()> {
-    env_logger::init();
-    // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
-    // value-bearing flags were *explicitly* passed or left at their clap default.
-    // `--encoding o200k_base` and `-o output.md` carry the same value as the
-    // default, so the value alone can't reveal an intent to override a
-    // non-default config (see resolver).
-    // `--config` / `--no-config` are read straight from the matches, so the many
-    // `Args { .. }` literals (library users, tests) do not need new fields.
-    let matches = Args::command()
+/// The CLI definition plus `--config` / `--no-config`. They are read straight
+/// from the matches, so the many `Args { .. }` literals (library users, tests)
+/// do not need new fields.
+fn command_with_config_flags() -> clap::Command {
+    Args::command()
         .arg(
             clap::Arg::new("config")
                 .long("config")
@@ -1029,7 +1024,30 @@ pub fn run() -> io::Result<()> {
                     "Ignore any context-builder.toml; use only command-line options and defaults",
                 ),
         )
-        .get_matches();
+}
+
+/// Which config applies: none (`--no-config`), the named file (`--config`,
+/// which must exist and parse), or `<project_root>/context-builder.toml`.
+fn select_config(matches: &clap::ArgMatches, project_root: &Path) -> io::Result<Option<Config>> {
+    if matches.get_flag("no_config") {
+        Ok(None)
+    } else if let Some(path) = matches.get_one::<String>("config") {
+        Ok(Some(crate::config::load_config_file(Path::new(path))?))
+    } else {
+        Ok(load_config_from_path(project_root))
+    }
+}
+
+pub fn run() -> io::Result<()> {
+    env_logger::init();
+    // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
+    // value-bearing flags were *explicitly* passed or left at their clap default.
+    // `--encoding o200k_base` and `-o output.md` carry the same value as the
+    // default, so the value alone can't reveal an intent to override a
+    // non-default config (see resolver).
+    // `--config` / `--no-config` are read straight from the matches, so the many
+    // `Args { .. }` literals (library users, tests) do not need new fields.
+    let matches = command_with_config_flags().get_matches();
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
         visibility: matches.value_source("visibility")
@@ -1052,13 +1070,7 @@ pub fn run() -> io::Result<()> {
 
     // Determine project root first
     let project_root = Path::new(&args.input);
-    let config = if matches.get_flag("no_config") {
-        None
-    } else if let Some(path) = matches.get_one::<String>("config") {
-        Some(crate::config::load_config_file(Path::new(path))?)
-    } else {
-        load_config_from_path(project_root)
-    };
+    let config = select_config(&matches, project_root)?;
 
     // Handle early clear-cache request (runs even if no config or other args)
     if args.clear_cache {
@@ -3273,5 +3285,70 @@ mod tests {
         assert_eq!(info, "text");
         assert_eq!(fence.len(), 4, "{doc}");
         assert_eq!(body, "before\n```\nafter\n");
+    }
+}
+
+#[cfg(test)]
+mod config_selection_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn select(argv: &[&str], root: &Path) -> io::Result<Option<Config>> {
+        let mut full = vec!["context-builder"];
+        full.extend_from_slice(argv);
+        let matches = command_with_config_flags()
+            .try_get_matches_from(full)
+            .unwrap();
+        select_config(&matches, root)
+    }
+
+    #[test]
+    fn project_config_applies_by_default_and_no_config_ignores_it() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("context-builder.toml"),
+            "line_numbers = true\n",
+        )
+        .unwrap();
+        let cfg = select(&[], dir.path()).unwrap().unwrap();
+        assert_eq!(cfg.line_numbers, Some(true));
+        assert!(select(&["--no-config"], dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn explicit_config_replaces_the_project_one() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("context-builder.toml"),
+            "line_numbers = true\n",
+        )
+        .unwrap();
+        let other = dir.path().join("other.toml");
+        fs::write(&other, "line_numbers = false\n").unwrap();
+        let cfg = select(&["--config", other.to_str().unwrap()], dir.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cfg.line_numbers, Some(false));
+    }
+
+    #[test]
+    fn explicit_config_that_is_missing_is_an_error() {
+        let dir = tempdir().unwrap();
+        let err = select(&["--config", "nope.toml"], dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("cannot read config 'nope.toml'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn config_and_no_config_conflict() {
+        let r = command_with_config_flags().try_get_matches_from([
+            "context-builder",
+            "--config",
+            "a.toml",
+            "--no-config",
+        ]);
+        assert!(r.is_err());
     }
 }
