@@ -11,6 +11,9 @@
 pub mod language_support;
 
 #[cfg(feature = "tree-sitter-base")]
+pub mod modules;
+
+#[cfg(feature = "tree-sitter-base")]
 pub mod signatures;
 
 #[cfg(feature = "tree-sitter-base")]
@@ -104,7 +107,9 @@ pub fn extract_signatures_for_file(
 #[cfg(feature = "tree-sitter-base")]
 pub fn extract_structure_for_file(source: &str, ext: &str) -> Option<CodeStructure> {
     let support = languages::get_language_support(ext)?;
-    Some(extract_structure(source, support))
+    let mut structure = extract_structure(source, support);
+    modules::fill(&mut structure, source, ext, support);
+    Some(structure)
 }
 
 /// Find a smart truncation point for a given file extension.
