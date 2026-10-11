@@ -1741,8 +1741,9 @@ mod tests {
         for path in sources {
             assert_eq!(category_of(path), 1, "{path}");
         }
-        // `doc/` is still documentation. Reclassifying that package is out of scope.
-        assert_eq!(category_of("doc/api.go"), 3);
+        // Go files in a `doc/` package are source; other files there are docs.
+        assert_eq!(category_of("doc/api.go"), 1);
+        assert_eq!(category_of("doc/guide.md"), 3);
     }
 
     #[test]
