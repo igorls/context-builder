@@ -88,3 +88,30 @@ fn unwritable_output_error_names_the_path_without_debug_formatting() {
     assert!(!stderr.contains("Os {"), "{stderr}");
     assert!(!stderr.contains("Custom {"), "{stderr}");
 }
+
+#[cfg(unix)]
+#[test]
+fn write_failure_after_open_names_the_output_path() {
+    let dir = project();
+    // `/dev/full` opens fine and fails every write with ENOSPC.
+    if !Path::new("/dev/full").exists() {
+        return;
+    }
+    let out = run(dir.path(), &["-o", "/dev/full"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = text(&out.stderr);
+    assert!(stderr.contains("/dev/full"), "{stderr}");
+}
+
+#[cfg(not(feature = "tree-sitter-base"))]
+#[test]
+fn auto_diff_runs_also_get_the_tree_sitter_notice() {
+    let dir = project();
+    fs::write(
+        dir.path().join("context-builder.toml"),
+        "output_folder = \"out\"\ntimestamped_output = true\nauto_diff = true\n",
+    )
+    .unwrap();
+    let stderr = text(&run(dir.path(), &["-y", "--signatures"]).stderr);
+    assert!(stderr.contains("require tree-sitter support"), "{stderr}");
+}

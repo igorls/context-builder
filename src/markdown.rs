@@ -43,17 +43,28 @@ pub struct TreeSitterConfig {
 struct CountingWriter<W> {
     inner: W,
     count: usize,
+    /// Output file, so a failed write names it (`None` for stdout).
+    path: Option<std::path::PathBuf>,
+}
+
+impl<W> CountingWriter<W> {
+    fn with_path(&self, e: io::Error) -> io::Error {
+        match &self.path {
+            Some(path) => crate::write_error(path, e),
+            None => e,
+        }
+    }
 }
 
 impl<W: Write> Write for CountingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.inner.write(buf)?;
+        let n = self.inner.write(buf).map_err(|e| self.with_path(e))?;
         self.count += n;
         Ok(n)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        self.inner.flush().map_err(|e| self.with_path(e))
     }
 }
 
@@ -91,7 +102,11 @@ pub fn generate_markdown(
                 .map_err(|e| crate::write_error(Path::new(output_path), e))?,
         )
     };
-    let mut output = CountingWriter { inner, count: 0 };
+    let mut output = CountingWriter {
+        inner,
+        count: 0,
+        path: (output_path != "-").then(|| std::path::PathBuf::from(output_path)),
+    };
 
     let input_dir_name = if input_dir == "." {
         let current_dir = std::env::current_dir()?;
@@ -1493,6 +1508,7 @@ mod tests {
         let mut writer = CountingWriter {
             inner: Vec::new(),
             count: 0,
+            path: None,
         };
         writer.write_all(b"hello ").unwrap();
         writer.write_all(b"world").unwrap();
