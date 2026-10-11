@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **`--structure` code-line counts (#22 B15).** TypeScript, JavaScript, Python, Go, Java and C/C++ no longer report `(0 code)`; blank lines and whole-line comments are excluded, as for Rust.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

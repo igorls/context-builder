@@ -104,7 +104,34 @@ pub fn extract_signatures_for_file(
 #[cfg(feature = "tree-sitter-base")]
 pub fn extract_structure_for_file(source: &str, ext: &str) -> Option<CodeStructure> {
     let support = languages::get_language_support(ext)?;
-    Some(extract_structure(source, support))
+    let mut structure = extract_structure(source, support);
+    // Only Rust fills this in itself; every other language reported `0 code`.
+    if structure.code_lines == 0 {
+        structure.code_lines = count_code_lines(source, ext);
+    }
+    Some(structure)
+}
+
+/// Non-blank lines that are not whole-line comments (`//`, `/* … */` bodies,
+/// or `#` for Python). A line-based approximation, like the Rust counter.
+#[cfg(feature = "tree-sitter-base")]
+fn count_code_lines(source: &str, ext: &str) -> usize {
+    let hash_comments = matches!(ext, "py" | "pyi");
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && if hash_comments {
+                    !line.starts_with('#')
+                } else {
+                    !(line.starts_with("//")
+                        || line.starts_with("/*")
+                        || line.starts_with('*')
+                        || line.starts_with("*/"))
+                }
+        })
+        .count()
 }
 
 /// Find a smart truncation point for a given file extension.
