@@ -348,6 +348,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if final_args.preview {
         if !silent {
             println!("\n# File Tree Structure (Preview)\n");
+            println!("{}\n", markdown::TREE_ORDER_NOTE);
             print_tree(&file_tree, 0);
         }
         if !final_args.token_count {
@@ -403,7 +404,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 encoding,
                 &format!("{}0000000000000000\n\n", markdown::CONTENT_HASH_PREFIX),
             );
-            total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
+            total_tokens += estimate_tokens(
+                encoding,
+                &format!(
+                    "## File Tree Structure\n\n{}\n\n",
+                    markdown::TREE_ORDER_NOTE
+                ),
+            );
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
             // The `## Skipped` section is part of the generated report.

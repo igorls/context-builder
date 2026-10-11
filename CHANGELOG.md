@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **The report says its file tree is alphabetical (#42).** File bodies follow the relevance ranking (root README and manifests first), so a one-line note under `## File Tree Structure` (and in `--preview`) now explains why the two orders differ.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

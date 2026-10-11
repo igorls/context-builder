@@ -14,6 +14,11 @@ pub(crate) const REPORT_TITLE_LINE: &str = "# Directory Structure Report";
 
 /// Prefix of the header line that fingerprints a generated report.
 /// The writer appends 16 lowercase hex digits (`{:016x}`).
+/// One line under the tree heading. The tree is alphabetical (the usual way to
+/// read a directory) while file bodies follow the relevance ranking, so say so
+/// instead of letting the two orders look like a mistake.
+pub(crate) const TREE_ORDER_NOTE: &str = "_The tree is alphabetical. File contents below are ordered by relevance: root README and manifests first, then source, tests, docs._";
+
 pub(crate) const CONTENT_HASH_PREFIX: &str = "Content hash: ";
 
 #[cfg(feature = "parallel")]
@@ -190,6 +195,7 @@ pub fn generate_markdown(
     writeln!(head_buf)?;
 
     writeln!(head_buf, "## File Tree Structure\n")?;
+    writeln!(head_buf, "{TREE_ORDER_NOTE}\n")?;
     write_tree_to_file(&mut head_buf, file_tree, 0)?;
     writeln!(head_buf)?;
     crate::content_filter::write_skipped_section(&mut head_buf, skipped)?;
