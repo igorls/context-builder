@@ -107,3 +107,18 @@ fn binary_lists_overloads_with_returns_and_skips_nested() {
     assert!(!doc.contains("def inner"), "{doc}");
     assert!(!doc.contains("def nested"), "{doc}");
 }
+
+#[test]
+fn tab_indented_decorated_methods_are_dedented_too() {
+    let src = "class K:\n\t@overload\n\tdef f(self, x: int) -> int: ...\n\t@overload\n\tdef f(self, x: str) -> str: ...\n";
+    let full: Vec<String> = extract_signatures_for_file(src, "py", Visibility::All)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.full_signature)
+        .collect();
+    assert!(
+        full.contains(&"@overload\ndef f(self, x: int) -> int:".to_string()),
+        "{full:?}"
+    );
+    assert!(full.iter().all(|s| !s.contains('\t')), "{full:?}");
+}

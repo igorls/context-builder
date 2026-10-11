@@ -12,7 +12,8 @@ pub struct PythonSupport;
 
 /// A signature sliced out of an indented block has its first line at column 0
 /// but the following lines (decorators, a wrapped parameter list) still carry
-/// the block's indentation; remove up to `indent` leading spaces from those.
+/// the block's indentation; remove up to `indent` leading spaces or tabs from
+/// those (tree-sitter columns are bytes, one per space or tab).
 #[cfg(feature = "tree-sitter-python")]
 fn dedent_continuation_lines(text: &str, indent: usize) -> String {
     let mut lines = text.lines();
@@ -22,7 +23,11 @@ fn dedent_continuation_lines(text: &str, indent: usize) -> String {
     }
     for line in lines {
         out.push('\n');
-        let spaces = line.chars().take_while(|c| *c == ' ').count().min(indent);
+        let spaces = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .count()
+            .min(indent);
         out.push_str(&line[spaces..]);
     }
     out
