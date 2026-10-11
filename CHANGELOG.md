@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Built-in ignores can be overridden (#16).** `--ignore '!build'` (also `!dist`, `!vendor`, …) keeps a directory the defaults would hide, so tracked sources such as `src/build/mod.rs` can be included.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

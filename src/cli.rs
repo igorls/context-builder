@@ -33,7 +33,8 @@ pub struct Args {
     #[clap(long, default_value_t = false)]
     pub include_lockfiles: bool,
 
-    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core)
+    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core).
+    /// Prefix a built-in ignore name with `!` to keep it (e.g. -i '!build,!vendor').
     #[clap(short = 'i', long, value_delimiter = ',', value_name = "PATTERN")]
     pub ignore: Vec<String>,
 
