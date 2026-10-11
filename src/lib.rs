@@ -157,6 +157,17 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     out
 }
 
+/// Maps the result of [`run`] to the process result.
+///
+/// The reader of `-o -` going away (`context-builder -o - | head`) ends a
+/// pipeline; it is not a failure of ours, so `BrokenPipe` is success.
+pub fn finish(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
+}
+
 pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
     let start_time = Instant::now();
 
