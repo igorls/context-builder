@@ -225,6 +225,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     if !final_args.preview
         && !final_args.token_count
+        && final_args.stats.is_none()
         && Path::new(&final_args.output).exists()
         && !final_args.yes
         && !prompter.confirm_overwrite(&final_args.output)?
@@ -939,14 +940,14 @@ fn render_stats(
     if let Some(max) = max_tokens {
         match cut_at {
             None => out.push_str(&format!(
-                "Budget: {} tokens: everything fits\n",
+                "Budget: {} tokens (estimate; the real run may differ by a few tokens): everything fits\n",
                 grouped(max)
             )),
             Some(i) => {
                 let dropped = per_file.len() - i - 1;
                 let lost: usize = per_file[i + 1..].iter().map(|(_, t)| t).sum();
                 out.push_str(&format!(
-                    "Budget: {} tokens: {} of {} files fit whole; `{}` is the first cut; {} more omitted ({} tokens)\n",
+                    "Budget: {} tokens (estimate; the real run may differ by a few tokens): {} of {} files fit whole; `{}` is the first cut; {} more omitted ({} tokens)\n",
                     grouped(max),
                     i,
                     per_file.len(),

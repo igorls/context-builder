@@ -96,3 +96,26 @@ fn piped_output_keeps_the_estimate() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("Estimated tokens: ~"), "{err}");
 }
+
+#[test]
+fn stats_never_asks_about_overwriting_an_existing_output() {
+    let dir = project();
+    fs::write(dir.path().join("output.md"), "keep me").unwrap();
+    // No -y, stdin closed: a prompt or cancel would fail or change the file.
+    let out = Command::new(env!("CARGO_BIN_EXE_context-builder"))
+        .args(["-d", ".", "--stats"])
+        .stdin(std::process::Stdio::null())
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("# Token Stats"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("output.md")).unwrap(),
+        "keep me"
+    );
+}
