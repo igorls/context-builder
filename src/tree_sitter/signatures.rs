@@ -171,7 +171,7 @@ mod tests {
         ];
         let output = format_signatures_as_markdown(&sigs, "python");
         // Both Class and Struct map to "Structs/Classes"
-        assert_eq!(output.matches("// Structs/Classes").count(), 1);
+        assert_eq!(output.matches("# Structs/Classes").count(), 1);
     }
 
     #[test]
