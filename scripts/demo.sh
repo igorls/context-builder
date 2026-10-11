@@ -58,16 +58,29 @@ printf '\033[2m    LLM context from your codebase, minus the noise\033[0m\n'
 echo ""
 sleep 1.5
 
+# Run a command, show only its first N output lines, and fail the whole demo if
+# the command itself fails (a pipe to `sed` would report sed's status instead).
+show_first() {
+  local n=$1 out rc=0
+  shift
+  out=$("$@" 2>&1) || rc=$?
+  printf '%s\n' "$out" | sed -n "1,${n}p"
+  if [ "$rc" -ne 0 ]; then
+    echo "demo: '$*' failed with exit code $rc" >&2
+    exit "$rc"
+  fi
+}
+
 # --- 1: Preview shows what is skipped ---
 section "1. Preview: lockfiles, assets, big files and secrets stay out"
 type_cmd "context-builder --preview 2>&1 | sed -n 1,18p"
-context-builder --preview 2>&1 | sed -n 1,18p || true
+show_first 18 context-builder --preview
 sleep 3
 
 # --- 2: Full context, README first, Skipped section ---
 section "2. Full context: root README first, skips are listed"
 type_cmd "context-builder -o full.md 2>&1 | sed -n 1,3p"
-context-builder -o full.md 2>&1 | sed -n 1,3p || true
+show_first 3 context-builder -o full.md
 sleep 1.5
 type_cmd "grep -A5 '^## Skipped' full.md"
 grep -A5 '^## Skipped' full.md
