@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **`--stats[=N]` per-file token breakdown; real token count after a run (#21 P7).** `--stats` lists the largest files by tokens (20 by default; `--stats=0` lists all) and, with `--max-tokens`, which files fit, which is cut first and what is omitted; it writes no document. The `Estimated tokens` line after a run is now the tokenizer's count of the written document (it was bytes/4, off by −11% to −75% on real code); output piped with `-o -` keeps the `~NK` estimate.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

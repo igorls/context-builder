@@ -99,6 +99,7 @@ fn test_deterministic_output_multiple_runs() {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         },
         Config::default(),
         &prompter,
@@ -132,6 +133,7 @@ fn test_deterministic_output_multiple_runs() {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         },
         Config::default(),
         &prompter,
@@ -290,6 +292,7 @@ fn test_deterministic_file_tree_order() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;
@@ -364,6 +367,7 @@ fn test_cache_collision_prevention() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     run_with_args(args1, Config::default(), &prompter).unwrap();
@@ -398,6 +402,7 @@ fn test_cache_collision_prevention() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     run_with_args(args2, Config::default(), &prompter).unwrap();
@@ -473,6 +478,7 @@ fn test_custom_ignores_performance() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;
@@ -538,6 +544,7 @@ fn test_configuration_affects_cache_key() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let args2 = Args {
@@ -563,6 +570,7 @@ fn test_configuration_affects_cache_key() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;
@@ -638,6 +646,7 @@ auto_diff = true
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;

@@ -350,12 +350,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             println!("\n# File Tree Structure (Preview)\n");
             print_tree(&file_tree, 0);
         }
-        if !final_args.token_count {
+        if !final_args.token_count && final_args.stats.is_none() {
             return Ok(());
         }
     }
 
-    if final_args.token_count {
+    if final_args.token_count || final_args.stats.is_some() {
         if !silent {
             let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
             // Render each file through the same path as the document so the
@@ -368,7 +368,9 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 file_metadata: final_args.file_metadata,
             };
             let enc_strategy = config.encoding_strategy.as_deref();
-            println!("\n# Token Count Estimation\n");
+            if final_args.stats.is_none() {
+                println!("\n# Token Count Estimation\n");
+            }
             let mut total_tokens = 0;
             total_tokens +=
                 estimate_tokens(encoding, &format!("{}\n\n", markdown::REPORT_TITLE_LINE));
@@ -408,23 +410,38 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             total_tokens += tree_tokens;
             // The `## Skipped` section is part of the generated report.
             total_tokens += skipped_section_tokens(encoding, &skipped)?;
-            let file_tokens: usize = files
+            let per_file: Vec<(String, usize)> = files
                 .iter()
                 .map(|entry| {
-                    count_file_tokens(
+                    let tokens = count_file_tokens(
                         base_path,
                         entry,
                         final_args.line_numbers,
                         encoding,
                         enc_strategy,
                         &ts_config,
-                    )
+                    );
+                    let relative = entry
+                        .path()
+                        .strip_prefix(base_path)
+                        .unwrap_or(entry.path())
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    (relative, tokens)
                 })
-                .sum();
-            total_tokens += file_tokens;
-            println!("Estimated total tokens: {}", total_tokens);
-            println!("File tree tokens: {}", tree_tokens);
-            println!("File content tokens: {}", file_tokens);
+                .collect();
+            let file_tokens: usize = per_file.iter().map(|(_, t)| t).sum();
+            if let Some(top) = final_args.stats {
+                print!(
+                    "{}",
+                    render_stats(&per_file, total_tokens, final_args.max_tokens, top)
+                );
+            } else {
+                total_tokens += file_tokens;
+                println!("Estimated total tokens: {}", total_tokens);
+                println!("File tree tokens: {}", tree_tokens);
+                println!("File content tokens: {}", file_tokens);
+            }
         }
         return Ok(());
     }
@@ -664,7 +681,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if !silent {
             // Non-blocking. File count is not a cost proxy; this estimate is.
             // Stderr so `-o -` stays a clean document.
-            print_context_window_warning(final_doc.len(), final_args.max_tokens, &files);
+            let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
+            print_token_report(
+                estimate_tokens(encoding, &final_doc),
+                true,
+                final_args.max_tokens,
+                &files,
+            );
         }
         return Ok(());
     }
@@ -713,13 +736,25 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent {
         // Non-blocking. File count is not a cost proxy; this estimate is.
         // Stderr so `-o -` stays a clean document.
-        print_context_window_warning(output_bytes, final_args.max_tokens, &files);
+        // Count the document that was written. Piped to stdout it is gone, so
+        // fall back to the ~4 bytes/token estimate there.
+        let counted = if to_stdout {
+            None
+        } else {
+            let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
+            fs::read(&final_args.output)
+                .ok()
+                .map(|bytes| estimate_tokens(encoding, &String::from_utf8_lossy(&bytes)))
+        };
+        match counted {
+            Some(tokens) => print_token_report(tokens, true, final_args.max_tokens, &files),
+            None => print_context_window_warning(output_bytes, final_args.max_tokens, &files),
+        }
     }
 
     Ok(())
 }
 
-/// Print context window overflow warnings with actionable recommendations.
 /// Tokens in the `## Skipped` section (zero when nothing was skipped).
 fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Result<usize> {
     let mut buf = Vec::new();
@@ -727,6 +762,7 @@ fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Re
     Ok(estimate_tokens(encoding, &String::from_utf8_lossy(&buf)))
 }
 
+/// Print context window overflow warnings with actionable recommendations.
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
 /// exceeds 128K tokens — beyond this size, context quality degrades
 /// significantly for most LLM use cases.
@@ -737,10 +773,23 @@ fn print_context_window_warning(
     max_tokens: Option<usize>,
     files: &[ignore::DirEntry],
 ) {
-    let estimated_tokens = output_bytes / 4;
+    print_token_report(output_bytes / 4, false, max_tokens, files);
+}
 
+/// The post-run token line and the >128K warning. `exact` says the count came
+/// from the tokenizer (shown in full) rather than the bytes/4 estimate (`~NK`).
+fn print_token_report(
+    estimated_tokens: usize,
+    exact: bool,
+    max_tokens: Option<usize>,
+    files: &[ignore::DirEntry],
+) {
     // Stderr only: this notice must never mix into a captured or piped document.
-    eprintln!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+    if exact {
+        eprintln!("Estimated tokens: {}", grouped(estimated_tokens));
+    } else {
+        eprintln!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+    }
 
     // If the user already set --max-tokens, they're managing their budget
     if max_tokens.is_some() {
@@ -829,6 +878,128 @@ const ADVICE: [(&str, &str); 3] = [
 fn advice_line(flag: &str, description: &str) -> String {
     let pad = if flag.len() >= 24 { 2 } else { 24 - flag.len() };
     format!("{flag}{}{description}", " ".repeat(pad))
+}
+
+/// Thousands separators for a count (`12345` -> `12,345`).
+fn grouped(n: usize) -> String {
+    let digits: Vec<char> = n.to_string().chars().collect();
+    let mut groups: Vec<String> = digits
+        .rchunks(3)
+        .map(|chunk| chunk.iter().collect())
+        .collect();
+    groups.reverse();
+    groups.join(",")
+}
+
+/// The `--stats` report: the largest files first and, with a budget, which
+/// files the document would keep. `fixed_tokens` is everything but the file
+/// sections (title, tree, skipped list); `top == 0` lists every file.
+fn render_stats(
+    per_file: &[(String, usize)],
+    fixed_tokens: usize,
+    max_tokens: Option<usize>,
+    top: usize,
+) -> String {
+    let file_tokens: usize = per_file.iter().map(|(_, t)| t).sum();
+    let total = fixed_tokens + file_tokens;
+
+    // Walk the files in document order against the budget, like the renderer.
+    // `Cut` is the first file that does not fit whole (clamped or dropped).
+    #[derive(Clone, Copy, PartialEq)]
+    enum Fate {
+        Fits,
+        Cut,
+        Omitted,
+    }
+    let mut fates = vec![Fate::Fits; per_file.len()];
+    let mut cut_at = None;
+    if let Some(max) = max_tokens {
+        let mut used = fixed_tokens;
+        for (i, (_, tokens)) in per_file.iter().enumerate() {
+            if cut_at.is_some() {
+                fates[i] = Fate::Omitted;
+            } else if used + tokens > max {
+                fates[i] = Fate::Cut;
+                cut_at = Some(i);
+            } else {
+                used += tokens;
+            }
+        }
+    }
+
+    let mut out = String::new();
+    out.push_str("\n# Token Stats\n\n");
+    out.push_str(&format!(
+        "Total: {} tokens (title, tree and skipped list: {}; {} files: {})\n",
+        grouped(total),
+        grouped(fixed_tokens),
+        per_file.len(),
+        grouped(file_tokens)
+    ));
+    if let Some(max) = max_tokens {
+        match cut_at {
+            None => out.push_str(&format!(
+                "Budget: {} tokens: everything fits\n",
+                grouped(max)
+            )),
+            Some(i) => {
+                let dropped = per_file.len() - i - 1;
+                let lost: usize = per_file[i + 1..].iter().map(|(_, t)| t).sum();
+                out.push_str(&format!(
+                    "Budget: {} tokens: {} of {} files fit whole; `{}` is the first cut; {} more omitted ({} tokens)\n",
+                    grouped(max),
+                    i,
+                    per_file.len(),
+                    per_file[i].0,
+                    dropped,
+                    grouped(lost)
+                ));
+            }
+        }
+    }
+
+    let mut order: Vec<usize> = (0..per_file.len()).collect();
+    order.sort_by(|a, b| per_file[*b].1.cmp(&per_file[*a].1).then(a.cmp(b)));
+    let shown = if top == 0 {
+        order.len()
+    } else {
+        top.min(order.len())
+    };
+    out.push_str(&format!(
+        "\n{} by tokens:\n\n",
+        if shown == order.len() {
+            format!("All {} files", shown)
+        } else {
+            format!("Top {shown} of {} files", order.len())
+        }
+    ));
+    for &i in order.iter().take(shown) {
+        let (path, tokens) = &per_file[i];
+        let share = (tokens * 100).checked_div(file_tokens).unwrap_or(0);
+        let status = match fates[i] {
+            _ if max_tokens.is_none() => String::new(),
+            Fate::Fits => format!("  {:<7}", "fits"),
+            Fate::Cut => format!("  {:<7}", "CUT"),
+            Fate::Omitted => format!("  {:<7}", "omitted"),
+        };
+        out.push_str(&format!(
+            "{:>10}  {:>3}%{}  {}\n",
+            grouped(*tokens),
+            share,
+            status,
+            path
+        ));
+    }
+    if shown < order.len() {
+        let rest: usize = order[shown..].iter().map(|&i| per_file[i].1).sum();
+        out.push_str(&format!(
+            "{:>10}  {:>3}%  … {} more files\n",
+            grouped(rest),
+            (rest * 100).checked_div(file_tokens).unwrap_or(0),
+            order.len() - shown
+        ));
+    }
+    out
 }
 
 /// Generate markdown document with diff annotations
@@ -1079,6 +1250,7 @@ pub fn run() -> io::Result<()> {
         file_metadata: resolution.config.file_metadata,
         preview: resolution.config.preview,
         token_count: resolution.config.token_count,
+        stats: resolution.config.stats,
         yes: resolution.config.yes,
         diff_only: resolution.config.diff_only,
         clear_cache: resolution.config.clear_cache,
@@ -1332,6 +1504,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1374,6 +1547,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1433,6 +1607,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1478,6 +1653,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1526,6 +1702,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(false); // Deny overwrite
@@ -1577,6 +1754,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1625,6 +1803,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1679,6 +1858,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1732,6 +1912,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1784,6 +1965,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -1839,6 +2021,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -1891,6 +2074,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let diff_config = DiffConfig::default();
@@ -2089,6 +2273,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2135,6 +2320,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2181,6 +2367,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2231,6 +2418,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2269,6 +2457,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2312,6 +2501,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2363,6 +2553,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config {
             auto_diff: Some(true),
@@ -2400,6 +2591,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let result = run_with_args(args2, config, &prompter);
@@ -2451,6 +2643,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let diff_config = DiffConfig {
@@ -2537,6 +2730,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let diff_config = DiffConfig {
@@ -2714,6 +2908,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2761,6 +2956,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2809,6 +3005,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config::default();
         let prompter = MockPrompter::new(true);
@@ -2855,6 +3052,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config1 = Config {
             auto_diff: Some(true),
@@ -2890,6 +3088,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config2 = Config {
             auto_diff: Some(true),
@@ -2944,6 +3143,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let diff_config = DiffConfig {
@@ -3025,6 +3225,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let diff_config = DiffConfig {
@@ -3133,6 +3334,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             include_lockfiles: false,
+            stats: None,
         };
         let diff_config = DiffConfig::default();
         let sorted_paths: Vec<PathBuf> = files
@@ -3222,6 +3424,7 @@ mod tests {
             hidden: false,
             include_secrets: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let doc = generate_markdown_with_diff(
@@ -3249,5 +3452,128 @@ mod tests {
         assert_eq!(info, "text");
         assert_eq!(fence.len(), 4, "{doc}");
         assert_eq!(body, "before\n```\nafter\n");
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    struct AlwaysYes;
+
+    impl Prompter for AlwaysYes {
+        fn confirm_overwrite(&self, _file_path: &str) -> io::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    fn files() -> Vec<(String, usize)> {
+        vec![
+            ("a.rs".to_string(), 100),
+            ("b.rs".to_string(), 5000),
+            ("c.rs".to_string(), 900),
+            ("d.rs".to_string(), 12_345),
+        ]
+    }
+
+    #[test]
+    fn grouped_inserts_thousands_separators() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1000), "1,000");
+        assert_eq!(grouped(12_345), "12,345");
+        assert_eq!(grouped(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn largest_files_come_first_with_shares_and_a_remainder_row() {
+        let out = render_stats(&files(), 50, None, 2);
+        assert!(out.contains("Total: 18,395 tokens"), "{out}");
+        assert!(out.contains("Top 2 of 4 files by tokens"), "{out}");
+        let d = out.find("d.rs").unwrap();
+        let b = out.find("b.rs").unwrap();
+        assert!(d < b, "{out}");
+        assert!(out.contains("… 2 more files"), "{out}");
+        assert!(!out.contains("fits"), "no budget, no status column: {out}");
+    }
+
+    #[test]
+    fn zero_lists_every_file() {
+        let out = render_stats(&files(), 0, None, 0);
+        assert!(out.contains("All 4 files by tokens"), "{out}");
+        assert!(!out.contains("more files"), "{out}");
+    }
+
+    #[test]
+    fn budget_marks_what_fits_the_first_cut_and_what_is_omitted() {
+        // Document order a, b, c, d with 6,000 left after the header: a and b
+        // fit (5,100), c would cross (6,000), d is dropped.
+        let out = render_stats(&files(), 100, Some(6000), 0);
+        assert!(
+            out.contains(
+                "2 of 4 files fit whole; `c.rs` is the first cut; 1 more omitted (12,345 tokens)"
+            ),
+            "{out}"
+        );
+        let line = |name: &str| out.lines().find(|l| l.ends_with(name)).unwrap().to_string();
+        assert!(line("a.rs").contains("fits"));
+        assert!(line("b.rs").contains("fits"));
+        assert!(line("c.rs").contains("CUT"));
+        assert!(line("d.rs").contains("omitted"));
+    }
+
+    #[test]
+    fn a_budget_that_covers_everything_says_so() {
+        let out = render_stats(&files(), 0, Some(1_000_000), 0);
+        assert!(out.contains("everything fits"), "{out}");
+    }
+
+    #[test]
+    fn no_files_is_not_a_division_by_zero() {
+        let out = render_stats(&[], 10, None, 20);
+        assert!(out.contains("Total: 10 tokens"), "{out}");
+        assert!(out.contains("All 0 files"), "{out}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stats_run_reports_without_writing_a_document() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let base_path = temp_dir.path();
+        fs::write(base_path.join("a.txt"), "Hello world ".repeat(50)).unwrap();
+        fs::write(base_path.join("b.txt"), "x").unwrap();
+        let output = base_path.join("never.md");
+        for budget in [None, Some(20)] {
+            let args = Args {
+                input: base_path.to_string_lossy().to_string(),
+                output: output.to_string_lossy().to_string(),
+                filter: vec![],
+                ignore: vec![],
+                line_numbers: false,
+                preview: false,
+                token_count: false,
+                yes: true,
+                diff_only: false,
+                clear_cache: false,
+                encoding: "o200k_base".to_string(),
+                init: false,
+                max_tokens: budget,
+                signatures: false,
+                structure: false,
+                truncate: "smart".to_string(),
+                visibility: "all".to_string(),
+                max_file_size: "256K".to_string(),
+                hidden: false,
+                include_secrets: false,
+                file_metadata: false,
+                include_lockfiles: false,
+                stats: Some(1),
+            };
+            unsafe {
+                std::env::remove_var("CB_SILENT");
+            }
+            run_with_args(args, Config::default(), &AlwaysYes).unwrap();
+        }
+        assert!(!output.exists());
     }
 }

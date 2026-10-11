@@ -45,6 +45,18 @@ pub struct Args {
     #[clap(long)]
     pub token_count: bool,
 
+    /// Per-file token breakdown: the largest files first, and with --max-tokens
+    /// what would be cut. Writes no document. `--stats` lists 20 files,
+    /// `--stats=N` lists N (`--stats=0` lists all).
+    #[clap(
+        long,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "20",
+        value_name = "N"
+    )]
+    pub stats: Option<usize>,
+
     /// Add line numbers to code blocks in the output
     #[clap(long)]
     pub line_numbers: bool,
