@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- **Malformed config is an error; unknown keys warn (#21 B19).** A `context-builder.toml` that cannot be parsed (or has a wrong value type) now stops the run with `invalid config '<path>': …` instead of silently using defaults. Unknown keys such as `filters` are reported with a suggestion (`did you mean 'filter'?`) and ignored. Library: new `config::try_load_config`; `load_config_from_path` keeps its old lenient behavior.
+
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
 v0.11.0 trims what a default run puts in the document and removes the surprises around it. **Breaking changes** (details below):

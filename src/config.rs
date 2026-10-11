@@ -681,11 +681,12 @@ mod try_load_tests {
     #[test]
     fn known_keys_match_the_config_struct() {
         let src = include_str!("config.rs");
-        let start = src.find("pub struct Config {").unwrap();
+        let start = src.find(concat!("pub struct ", "Config {")).unwrap();
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").unwrap()];
         let fields: Vec<&str> = body
             .lines()
+            .skip(1)
             .filter_map(|l| l.trim().strip_prefix("pub "))
             .filter_map(|l| l.split(':').next())
             .collect();
