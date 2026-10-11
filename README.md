@@ -92,8 +92,10 @@ It's a command-line utility that recursively processes directories and creates c
 Pre-built binaries include full Tree-Sitter AST support. The installer verifies SHA256 checksums before installing.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | sh
 ```
+
+> On Alpine and on glibc older than 2.34 the installer picks the static `musl` build automatically (force one with `CONTEXT_BUILDER_LIBC=musl` or `gnu`). It verifies the SHA256 checksum, and warns if another `context-builder` on your `PATH` shadows the one it installed.
 
 > **Note:** piping remote scripts into `sh` is a matter of trust — some scanners flag the `curl | bash` pattern generically. If you prefer, review [install.sh](install.sh) first or use one of the alternatives below.
 
