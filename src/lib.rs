@@ -5,8 +5,6 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
-#[macro_use]
-mod console;
 pub mod cache;
 pub mod cli;
 pub mod config;
@@ -187,9 +185,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !matches!(strat.as_str(), "detect" | "strict" | "skip")
         && !silent
     {
-        crate::console::errln(format_args!(
+        let _ = writeln!(
+            std::io::stderr(),
             "⚠️  Unknown encoding_strategy '{strat}' in config; expected one of: detect, strict, skip. Falling back to 'detect'."
-        ));
+        );
     }
     // Resolve base path. If input is '.' but current working directory lost the project context
     // (no context-builder.toml), attempt to infer project root from output path (parent of 'output' dir).
@@ -211,10 +210,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     if !base_path.exists() || !base_path.is_dir() {
         if !silent {
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "Error: The specified input directory '{}' does not exist or is not a directory.",
                 final_args.input
-            ));
+            );
         }
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -243,7 +243,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !prompter.confirm_overwrite(&final_args.output)?
     {
         if !silent {
-            crate::console::errln(format_args!("Operation cancelled."));
+            let _ = writeln!(std::io::stderr(), "Operation cancelled.");
         }
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -273,7 +273,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent
         && let Some(notice) = crate::file_utils::lockfile_skip_notice(collected.skipped_lockfiles)
     {
-        crate::console::errln(format_args!("{notice}"));
+        let _ = writeln!(std::io::stderr(), "{notice}");
     }
     let files = collected.files;
     let policy = ContentPolicy::new(
@@ -287,9 +287,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // write the (empty) document. Name the filters when any were given.
     if !silent && files.is_empty() && skipped.is_empty() {
         if final_args.filter.is_empty() {
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "Warning: No files matched; check .gitignore, --ignore, and --filter"
-            ));
+            );
         } else {
             let quoted = final_args
                 .filter
@@ -302,23 +303,36 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             } else {
                 "filters"
             };
-            crate::console::errln(format_args!("Warning: no files matched {noun} {quoted}."));
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: no files matched {noun} {quoted}."
+            );
         }
     }
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
-        crate::console::errln(format_args!("[DEBUG][CONFIG] Args: {:?}", final_args));
-        crate::console::errln(format_args!("[DEBUG][CONFIG] Raw Config: {:?}", config));
-        crate::console::errln(format_args!(
+        let _ = writeln!(std::io::stderr(), "[DEBUG][CONFIG] Args: {:?}", final_args);
+        let _ = writeln!(
+            std::io::stderr(),
+            "[DEBUG][CONFIG] Raw Config: {:?}",
+            config
+        );
+        let _ = writeln!(
+            std::io::stderr(),
             "[DEBUG][CONFIG] Auto-ignores: {:?}",
             auto_ignores
-        ));
-        crate::console::errln(format_args!(
+        );
+        let _ = writeln!(
+            std::io::stderr(),
             "[DEBUG][CONFIG] Collected {} files",
             files.len()
-        ));
+        );
         for f in &files {
-            crate::console::errln(format_args!("[DEBUG][CONFIG]  - {}", f.path().display()));
+            let _ = writeln!(
+                std::io::stderr(),
+                "[DEBUG][CONFIG]  - {}",
+                f.path().display()
+            );
         }
     }
 
@@ -346,29 +360,35 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         if !large_files.is_empty() {
             large_files.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by size descending
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "\n⚠  {} large file(s) detected (>{} KB):",
                 large_files.len(),
                 LARGE_FILE_THRESHOLD / 1024
-            ));
+            );
             for (path, size) in large_files.iter().take(5) {
-                crate::console::errln(format_args!("   {:>8} KB  {}", size / 1024, path));
+                let _ = writeln!(std::io::stderr(), "   {:>8} KB  {}", size / 1024, path);
             }
             if large_files.len() > 5 {
-                crate::console::errln(format_args!("   ... and {} more", large_files.len() - 5));
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "   ... and {} more",
+                    large_files.len() - 5
+                );
             }
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "   Total context size: {} KB across {} files\n",
                 total_size / 1024,
                 files.len()
-            ));
+            );
         }
     }
     let file_tree = build_file_tree(&files, base_path);
 
     if final_args.preview {
         if !silent {
-            crate::console::outln(format_args!("\n# File Tree Structure (Preview)\n"));
+            let _ = writeln!(std::io::stdout(), "\n# File Tree Structure (Preview)\n");
             print_tree(&file_tree, 0);
         }
         if !final_args.token_count {
@@ -389,7 +409,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 file_metadata: final_args.file_metadata,
             };
             let enc_strategy = config.encoding_strategy.as_deref();
-            crate::console::outln(format_args!("\n# Token Count Estimation\n"));
+            let _ = writeln!(std::io::stdout(), "\n# Token Count Estimation\n");
             let mut total_tokens = 0;
             total_tokens +=
                 estimate_tokens(encoding, &format!("{}\n\n", markdown::REPORT_TITLE_LINE));
@@ -443,9 +463,13 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 })
                 .sum();
             total_tokens += file_tokens;
-            crate::console::outln(format_args!("Estimated total tokens: {}", total_tokens));
-            crate::console::outln(format_args!("File tree tokens: {}", tree_tokens));
-            crate::console::outln(format_args!("File content tokens: {}", file_tokens));
+            let _ = writeln!(
+                std::io::stdout(),
+                "Estimated total tokens: {}",
+                total_tokens
+            );
+            let _ = writeln!(std::io::stdout(), "File tree tokens: {}", tree_tokens);
+            let _ = writeln!(std::io::stdout(), "File content tokens: {}", file_tokens);
         }
         return Ok(());
     }
@@ -457,10 +481,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // B8: --diff-only only takes effect together with auto_diff (+ timestamped
     // output). Warn instead of silently emitting full file contents.
     if final_args.diff_only && !config.auto_diff.unwrap_or(false) && !silent {
-        crate::console::errln(format_args!(
+        let _ = writeln!(
+            std::io::stderr(),
             "⚠️  --diff-only has no effect without auto_diff (it also needs timestamped_output). \
              Full file contents will be emitted. Enable auto_diff = true + timestamped_output = true to use diff-only mode."
-        ));
+        );
     }
 
     if config.auto_diff.unwrap_or(false) {
@@ -504,10 +529,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             Ok(state) => state,
             Err(e) => {
                 if !silent {
-                    crate::console::errln(format_args!(
+                    let _ = writeln!(
+                        std::io::stderr(),
                         "Warning: Failed to read cache (proceeding without diff): {}",
                         e
-                    ));
+                    );
                 }
                 None
             }
@@ -533,41 +559,47 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
         if debug_autodiff {
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] cache file: {}",
                 cache_manager.debug_cache_file_path().display()
-            ));
-            crate::console::errln(format_args!(
+            );
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] config_hash current={} prev={:?} invalidated={}",
                 current_state.config_hash,
                 previous_state.as_ref().map(|s| s.config_hash.clone()),
                 effective_previous.is_none() && previous_state.is_some()
-            ));
-            crate::console::errln(format_args!(
+            );
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] effective_config: {:?}",
                 effective_config
-            ));
+            );
             if let Some(prev) = previous_state.as_ref() {
-                crate::console::errln(format_args!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "[DEBUG][AUTODIFF] raw previous files: {}",
                     prev.files.len()
-                ));
+                );
             }
             if let Some(prev) = effective_previous {
-                crate::console::errln(format_args!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "[DEBUG][AUTODIFF] effective previous files: {}",
                     prev.files.len()
-                ));
+                );
                 for k in prev.files.keys() {
-                    crate::console::errln(format_args!("  PREV: {}", k.display()));
+                    let _ = writeln!(std::io::stderr(), "  PREV: {}", k.display());
                 }
             }
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] current files: {}",
                 current_state.files.len()
-            ));
+            );
             for k in current_state.files.keys() {
-                crate::console::errln(format_args!("  CURR: {}", k.display()));
+                let _ = writeln!(std::io::stderr(), "  CURR: {}", k.display());
             }
         }
 
@@ -663,30 +695,38 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if let Err(e) = cache_manager.write_cache(&current_state)
             && !silent
         {
-            crate::console::errln(format_args!("Warning: failed to update state cache: {}", e));
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: failed to update state cache: {}",
+                e
+            );
         }
 
         let duration = start_time.elapsed();
         if !silent && !to_stdout {
             if let Some(comp) = &comparison {
                 if comp.summary.has_changes() {
-                    crate::console::outln(format_args!(
+                    let _ = writeln!(
+                        std::io::stdout(),
                         "Documentation created successfully with {} changes: {}",
-                        comp.summary.total_changes, final_args.output
-                    ));
+                        comp.summary.total_changes,
+                        final_args.output
+                    );
                 } else {
-                    crate::console::outln(format_args!(
+                    let _ = writeln!(
+                        std::io::stdout(),
                         "Documentation created successfully (no changes detected): {}",
                         final_args.output
-                    ));
+                    );
                 }
             } else {
-                crate::console::outln(format_args!(
+                let _ = writeln!(
+                    std::io::stdout(),
                     "Documentation created successfully (initial state): {}",
                     final_args.output
-                ));
+                );
             }
-            crate::console::outln(format_args!("Processing time: {:.2?}", duration));
+            let _ = writeln!(std::io::stdout(), "Processing time: {:.2?}", duration);
         }
         if !silent {
             // Non-blocking. File count is not a cost proxy; this estimate is.
@@ -710,13 +750,15 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent && (ts_config.signatures || ts_config.structure || ts_config.truncate == "smart") {
         #[cfg(not(feature = "tree-sitter-base"))]
         {
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "⚠️  --signatures/--structure/--truncate smart require tree-sitter support."
-            ));
-            crate::console::errln(format_args!(
+            );
+            let _ = writeln!(
+                std::io::stderr(),
                 "   Build with: cargo build --features tree-sitter-all"
-            ));
-            crate::console::errln(format_args!("   Falling back to standard output.\n"));
+            );
+            let _ = writeln!(std::io::stderr(), "   Falling back to standard output.\n");
         }
     }
 
@@ -738,11 +780,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     let duration = start_time.elapsed();
     if !silent && !to_stdout {
-        crate::console::outln(format_args!(
+        let _ = writeln!(
+            std::io::stdout(),
             "Documentation created successfully: {}",
             final_args.output
-        ));
-        crate::console::outln(format_args!("Processing time: {:.2?}", duration));
+        );
+        let _ = writeln!(std::io::stdout(), "Processing time: {:.2?}", duration);
     }
     if !silent {
         // Non-blocking. File count is not a cost proxy; this estimate is.
@@ -774,10 +817,11 @@ fn print_context_window_warning(
     let estimated_tokens = output_bytes / 4;
 
     // Stderr only: this notice must never mix into a captured or piped document.
-    crate::console::errln(format_args!(
+    let _ = writeln!(
+        std::io::stderr(),
         "Estimated tokens: ~{}K",
         estimated_tokens / 1000
-    ));
+    );
 
     // If the user already set --max-tokens, they're managing their budget
     if max_tokens.is_some() {
@@ -792,19 +836,21 @@ fn print_context_window_warning(
 
     let paths: Vec<&Path> = files.iter().map(|entry| entry.path()).collect();
 
-    crate::console::errln(format_args!(""));
-    crate::console::errln(format_args!(
+    let _ = writeln!(std::io::stderr());
+    let _ = writeln!(
+        std::io::stderr(),
         "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
         estimated_tokens / 1000
-    ));
-    crate::console::errln(format_args!(
+    );
+    let _ = writeln!(
+        std::io::stderr(),
         "   Large contexts degrade response quality. Consider narrowing the scope:"
-    ));
-    crate::console::errln(format_args!(""));
+    );
+    let _ = writeln!(std::io::stderr());
     for line in context_window_suggestions(&paths) {
-        crate::console::errln(format_args!("   • {line}"));
+        let _ = writeln!(std::io::stderr(), "   • {line}");
     }
-    crate::console::errln(format_args!(""));
+    let _ = writeln!(std::io::stderr());
 }
 
 /// `--filter` extensions to suggest for this run: the most common extensions
@@ -1112,19 +1158,23 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
         if cache_path.exists() {
             match fs::remove_dir_all(&cache_path) {
                 Ok(()) => {
-                    crate::console::outln(format_args!("Cache cleared: {}", cache_path.display()))
+                    let _ = writeln!(std::io::stdout(), "Cache cleared: {}", cache_path.display());
                 }
-                Err(e) => crate::console::errln(format_args!(
-                    "Failed to clear cache ({}): {}",
-                    cache_path.display(),
-                    e
-                )),
+                Err(e) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "Failed to clear cache ({}): {}",
+                        cache_path.display(),
+                        e
+                    );
+                }
             }
         } else {
-            crate::console::outln(format_args!(
+            let _ = writeln!(
+                std::io::stdout(),
                 "No cache directory found at {}",
                 cache_path.display()
-            ));
+            );
         }
         return Ok(());
     }
@@ -1144,7 +1194,7 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
 
     if !silent {
         for warning in &resolution.warnings {
-            crate::console::errln(format_args!("Warning: {}", warning));
+            let _ = writeln!(std::io::stderr(), "Warning: {}", warning);
         }
     }
 
@@ -1224,13 +1274,15 @@ fn init_config() -> io::Result<()> {
     let config_path = Path::new("context-builder.toml");
 
     if config_path.exists() {
-        crate::console::outln(format_args!(
+        let _ = writeln!(
+            std::io::stdout(),
             "Config file already exists at {}",
             config_path.display()
-        ));
-        crate::console::outln(format_args!(
+        );
+        let _ = writeln!(
+            std::io::stdout(),
             "If you want to replace it, please remove it manually first."
-        ));
+        );
         return Ok(());
     }
 
@@ -1299,17 +1351,20 @@ file_metadata = false
     let mut file = File::create(config_path)?;
     file.write_all(default_config_content.as_bytes())?;
 
-    crate::console::outln(format_args!(
+    let _ = writeln!(
+        std::io::stdout(),
         "Config file created at {}",
         config_path.display()
-    ));
-    crate::console::outln(format_args!(
+    );
+    let _ = writeln!(
+        std::io::stdout(),
         "Detected file types: {}",
         filter_suggestions.join(", ")
-    ));
-    crate::console::outln(format_args!(
+    );
+    let _ = writeln!(
+        std::io::stdout(),
         "You can now customize it according to your project needs."
-    ));
+    );
 
     Ok(())
 }

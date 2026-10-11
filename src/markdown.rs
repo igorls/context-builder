@@ -1019,12 +1019,14 @@ pub fn write_tree_sitter_enrichment(
             // eprintln (not warn!/log) so it is visible without RUST_LOG —
             // env_logger defaults to error level, and a user-style default run
             // would otherwise never see this warning.
-            crate::console::errln(format_args!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "⚠️  --visibility {} has no effect for '{}' files: the extractor \
                  does not classify visibility yet (planned for v0.11). \
                  Signatures will include all symbols.",
-                ts_config.visibility, extension
-            ));
+                ts_config.visibility,
+                extension
+            );
         }
 
         if ts_config.structure
