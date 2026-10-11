@@ -593,23 +593,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         if let Some(max_tokens) = final_args.max_tokens {
             let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
             if estimate_tokens(encoding, &final_doc) > max_tokens {
-                let mut truncate_at = final_doc.len().min(max_tokens.saturating_mul(4));
-                while truncate_at > 0 && !final_doc.is_char_boundary(truncate_at) {
-                    truncate_at -= 1;
-                }
-                final_doc.truncate(truncate_at);
-
-                // Close any open code fence so the truncation notice is not
-                // swallowed by the block. The closer matches the opening
-                // fence's length — a fixed ``` would not close a longer fence
-                // chosen because the file itself contains ```.
-                fences::close_unmatched_backtick_fence(&mut final_doc);
-
-                final_doc.push_str("\n---\n\n");
-                final_doc.push_str(&format!(
-                    "_Output truncated: exceeded {} token budget._\n",
-                    max_tokens
-                ));
+                final_doc = truncate_to_token_budget(&final_doc, max_tokens, encoding);
             }
         }
 
@@ -988,6 +972,31 @@ fn generate_markdown_with_diff(
     Ok(output)
 }
 
+/// Cut `doc` so that, with its fence closed and the notice appended, the real
+/// token count is within `max_tokens`. Starts from the bytes/4 guess and
+/// shrinks until the tokenizer agrees (or nothing is left but the notice).
+fn truncate_to_token_budget(doc: &str, max_tokens: usize, encoding: Encoding) -> String {
+    let mut cut = doc.len().min(max_tokens.saturating_mul(4));
+    loop {
+        while cut > 0 && !doc.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut out = doc[..cut].to_string();
+        // Close any open code fence so the notice is not swallowed by the
+        // block. The closer matches the opening fence's length: a fixed ```
+        // would not close a longer fence chosen because the file contains ```.
+        fences::close_unmatched_backtick_fence(&mut out);
+        out.push_str("\n---\n\n");
+        out.push_str(&format!(
+            "_Output truncated: exceeded {max_tokens} token budget._\n"
+        ));
+        if cut == 0 || estimate_tokens(encoding, &out) <= max_tokens {
+            return out;
+        }
+        cut -= (cut / 10).max(1);
+    }
+}
+
 /// The notice that ends a document whose budget ran out.
 fn budget_notice(max: usize, omitted: usize) -> String {
     format!("_⚠️ Token budget ({max}) reached. {omitted} remaining files omitted._\n\n")
@@ -1043,12 +1052,14 @@ fn diff_file_section(
         let rendered = std::str::from_utf8(&rendered)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         output.push_str(rendered);
-        if truncated {
-            let (shown, total, mode) = (content.len(), full.len(), &ts_config.truncate);
-            output.push_str(&format!(
-                "\n_⚠️ File content truncated: {shown} of {total} bytes (mode: {mode})._\n\n"
-            ));
-        }
+    }
+    // The marker is about the file, not about whether its body is shown: with
+    // --signatures the signatures below are computed from the clamped content.
+    if truncated {
+        let (shown, total, mode) = (content.len(), full.len(), &ts_config.truncate);
+        output.push_str(&format!(
+            "\n_⚠️ File content truncated: {shown} of {total} bytes (mode: {mode})._\n\n"
+        ));
     }
 
     // Tree-sitter enrichment (same as standard path), over what is displayed

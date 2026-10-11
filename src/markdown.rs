@@ -773,15 +773,17 @@ pub fn process_file_with_content_limit(
 
             if !signatures_only {
                 write_text_content(output, content, language, line_numbers)?;
-                if truncated {
-                    writeln!(
-                        output,
-                        "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
-                        content.len(),
-                        original_len,
-                        ts_config.truncate
-                    )?;
-                }
+            }
+            // About the file, not about whether its body is shown: with
+            // --signatures the block below is computed from the clamped content.
+            if truncated {
+                writeln!(
+                    output,
+                    "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
+                    content.len(),
+                    original_len,
+                    ts_config.truncate
+                )?;
             }
 
             // Tree-sitter enrichment: signatures and/or structure

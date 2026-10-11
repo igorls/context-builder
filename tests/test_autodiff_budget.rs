@@ -234,3 +234,25 @@ fn file_metadata_is_rendered_in_budgeted_sections() {
     assert!(doc.contains("- Modified: "), "{doc}");
     assert!(!doc.contains("Token budget"), "plenty of room, nothing cut");
 }
+
+#[test]
+#[serial]
+fn truncation_marker_is_kept_when_signatures_replace_the_body() {
+    let dir = tempdir().unwrap();
+    let mut body = String::new();
+    for j in 0..300 {
+        body.push_str(&format!(
+            "fn function_number_{j}(a: u32) -> u32 {{ a + {j} }}\n"
+        ));
+    }
+    fs::write(dir.path().join("many.rs"), body).unwrap();
+    let _cwd = CwdGuard::enter(dir.path());
+    let out = dir.path().join("out.md");
+    let mut a = args(dir.path(), &out, Some(600), "o200k_base");
+    a.signatures = true;
+    run_with_args(a, auto_diff(), &Yes).unwrap();
+    let doc = fs::read_to_string(&out).unwrap();
+    assert!(doc.contains("File content truncated"), "{doc}");
+    assert!(doc.contains("**Signatures:**"), "{doc}");
+    assert!(estimate_tokens(Encoding::O200kBase, &doc) <= 600);
+}
