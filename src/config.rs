@@ -680,7 +680,8 @@ mod try_load_tests {
 
     #[test]
     fn known_keys_match_the_config_struct() {
-        let src = include_str!("config.rs");
+        // Checkouts on Windows may have CRLF line endings.
+        let src = include_str!("config.rs").replace("\r\n", "\n");
         let start = src.find(concat!("pub struct ", "Config {")).unwrap();
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").unwrap()];
