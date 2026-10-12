@@ -218,6 +218,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = NoPrompt;
@@ -272,6 +273,7 @@ fn bench_scenario(c: &mut Criterion, spec: DatasetSpec, line_numbers: bool) {
                     hidden: false,
                     include_secrets: false,
                     include_lockfiles: false,
+                    stats: None,
                 },
                 Config::default(),
                 &prompter,

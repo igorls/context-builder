@@ -445,7 +445,7 @@ pub fn report_skips(skipped: &[SkippedFile], silent: bool) {
         return;
     }
     for line in report_lines(skipped) {
-        eprintln!("{line}");
+        let _ = writeln!(std::io::stderr(), "{line}");
     }
 }
 

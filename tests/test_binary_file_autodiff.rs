@@ -113,6 +113,7 @@ fn test_binary_files_dont_crash_autodiff() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
@@ -202,6 +203,7 @@ fn test_mixed_text_and_binary_files_autodiff() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
@@ -275,6 +277,7 @@ fn test_large_binary_file_autodiff() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);

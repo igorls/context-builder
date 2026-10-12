@@ -9,7 +9,10 @@ pub fn extract_structure(source: &str, support: &dyn LanguageSupport) -> CodeStr
 
 /// Format structure as markdown summary.
 pub fn format_structure_as_markdown(structure: &CodeStructure) -> String {
-    if structure.total_symbols() == 0 {
+    if structure.total_symbols() == 0
+        && structure.imports.is_empty()
+        && structure.exports.is_empty()
+    {
         return String::new();
     }
 
@@ -46,9 +49,11 @@ pub fn format_structure_as_markdown(structure: &CodeStructure) -> String {
         parts.push(format!("{} macros", structure.macros));
     }
 
-    output.push_str("- ");
-    output.push_str(&parts.join(", "));
-    output.push('\n');
+    if !parts.is_empty() {
+        output.push_str("- ");
+        output.push_str(&parts.join(", "));
+        output.push('\n');
+    }
 
     if structure.total_lines > 0 {
         output.push_str(&format!(
@@ -57,7 +62,26 @@ pub fn format_structure_as_markdown(structure: &CodeStructure) -> String {
         ));
     }
 
+    write_list(&mut output, "Imports", &structure.imports);
+    write_list(&mut output, "Exports", &structure.exports);
+
     output
+}
+
+/// How many imports/exports are listed before "… and N more".
+const MAX_LISTED: usize = 20;
+
+fn write_list(output: &mut String, title: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    output.push_str(&format!("\n**{title}:**\n"));
+    for item in items.iter().take(MAX_LISTED) {
+        output.push_str(&format!("- {}\n", crate::fences::inline_code(item)));
+    }
+    if items.len() > MAX_LISTED {
+        output.push_str(&format!("- … and {} more\n", items.len() - MAX_LISTED));
+    }
 }
 
 #[cfg(test)]

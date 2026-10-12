@@ -6,10 +6,32 @@ use tree_sitter::{Parser, Tree};
 #[cfg(feature = "tree-sitter-python")]
 use crate::tree_sitter::language_support::{
     CodeStructure, LanguageSupport, Signature, SignatureKind, Visibility,
-    slice_signature_before_body,
 };
 
 pub struct PythonSupport;
+
+/// A signature sliced out of an indented block has its first line at column 0
+/// but the following lines (decorators, a wrapped parameter list) still carry
+/// the block's indentation; remove up to `indent` leading spaces or tabs from
+/// those (tree-sitter columns are bytes, one per space or tab).
+#[cfg(feature = "tree-sitter-python")]
+fn dedent_continuation_lines(text: &str, indent: usize) -> String {
+    let mut lines = text.lines();
+    let mut out = String::new();
+    if let Some(first) = lines.next() {
+        out.push_str(first);
+    }
+    for line in lines {
+        out.push('\n');
+        let spaces = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .count()
+            .min(indent);
+        out.push_str(&line[spaces..]);
+    }
+    out
+}
 
 #[cfg(feature = "tree-sitter-python")]
 impl PythonSupport {
@@ -128,6 +150,9 @@ impl PythonSupport {
                 {
                     signatures.push(sig);
                 }
+                // Functions defined inside a function are implementation
+                // detail, not part of the file's interface.
+                return;
             }
             "class_definition" => {
                 if let Some(sig) = self.extract_class_signature(source, node) {
@@ -198,8 +223,17 @@ impl PythonSupport {
         // If we have a decorator context, slice from there to preserve decorators.
         // Otherwise slice from the function_definition node.
         let slice_node = context_node.unwrap_or(node);
-        let full_sig =
-            slice_signature_before_body(source, slice_node, &["block"]).unwrap_or_else(|| {
+        // Everything before the body, found through the `body` field so that
+        // one-line bodies (`def f(x) -> int: ...`, as in overloads) work too.
+        let full_sig = node
+            .child_by_field_name("body")
+            .map(|body| {
+                dedent_continuation_lines(
+                    source[slice_node.start_byte()..body.start_byte()].trim_end(),
+                    slice_node.start_position().column,
+                )
+            })
+            .unwrap_or_else(|| {
                 let mut sig = String::new();
                 sig.push_str("def ");
                 sig.push_str(&name);

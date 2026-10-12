@@ -12,6 +12,11 @@ use encoding_rs::{Encoding, UTF_8};
 /// First line of every generated report. A blank line follows it.
 pub(crate) const REPORT_TITLE_LINE: &str = "# Directory Structure Report";
 
+/// One line under the tree heading. The tree is alphabetical (the usual way to
+/// read a directory) while file bodies follow the relevance ranking, so say so
+/// instead of letting the two orders look like a mistake.
+pub(crate) const TREE_ORDER_NOTE: &str = "_The tree is alphabetical. File contents below are ordered by relevance: root README and manifests first, then source, tests, docs._";
+
 /// Prefix of the header line that fingerprints a generated report.
 /// The writer appends 16 lowercase hex digits (`{:016x}`).
 pub(crate) const CONTENT_HASH_PREFIX: &str = "Content hash: ";
@@ -43,17 +48,28 @@ pub struct TreeSitterConfig {
 struct CountingWriter<W> {
     inner: W,
     count: usize,
+    /// Output file, so a failed write names it (`None` for stdout).
+    path: Option<std::path::PathBuf>,
+}
+
+impl<W> CountingWriter<W> {
+    fn with_path(&self, e: io::Error) -> io::Error {
+        match &self.path {
+            Some(path) => crate::write_error(path, e),
+            None => e,
+        }
+    }
 }
 
 impl<W: Write> Write for CountingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.inner.write(buf)?;
+        let n = self.inner.write(buf).map_err(|e| self.with_path(e))?;
         self.count += n;
         Ok(n)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        self.inner.flush().map_err(|e| self.with_path(e))
     }
 }
 
@@ -84,11 +100,18 @@ pub fn generate_markdown(
         if let Some(parent) = Path::new(output_path).parent()
             && !parent.exists()
         {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| crate::write_error(parent, e))?;
         }
-        Box::new(fs::File::create(output_path)?)
+        Box::new(
+            fs::File::create(output_path)
+                .map_err(|e| crate::write_error(Path::new(output_path), e))?,
+        )
     };
-    let mut output = CountingWriter { inner, count: 0 };
+    let mut output = CountingWriter {
+        inner,
+        count: 0,
+        path: (output_path != "-").then(|| std::path::PathBuf::from(output_path)),
+    };
 
     let input_dir_name = directory_display_name(input_dir);
 
@@ -181,6 +204,7 @@ pub fn generate_markdown(
     writeln!(head_buf)?;
 
     writeln!(head_buf, "## File Tree Structure\n")?;
+    writeln!(head_buf, "{TREE_ORDER_NOTE}\n")?;
     write_tree_to_file(&mut head_buf, file_tree, 0)?;
     writeln!(head_buf)?;
     crate::content_filter::write_skipped_section(&mut head_buf, skipped)?;
@@ -238,6 +262,9 @@ pub fn generate_markdown(
                 let mut completed_chunks = std::collections::BTreeMap::new();
                 let mut next_index = 0;
                 let mut errors = Vec::new();
+                // The reader of `-o -` went away; remember it so the caller sees
+                // `BrokenPipe` instead of a wall of per-file write errors.
+                let mut pipe_closed = false;
                 let mut tokens_used: usize = header_tokens;
                 let mut budget_exceeded = false;
 
@@ -295,10 +322,15 @@ pub fn generate_markdown(
                                             );
                                             if let Some(limited_tokens) = fits {
                                                 if let Err(e) = output.write_all(&limited_buf) {
-                                                    errors.push(format!(
-                                                        "Failed to write output for file index {}: {}",
-                                                        next_index, e
-                                                    ));
+                                                    note_write_failure(
+                                                        &mut errors,
+                                                        &mut pipe_closed,
+                                                        format!(
+                                                            "Failed to write output for file index {}",
+                                                            next_index
+                                                        ),
+                                                        &e,
+                                                    );
                                                 }
                                                 tokens_used += limited_tokens;
                                             }
@@ -310,10 +342,12 @@ pub fn generate_markdown(
                                                 max, remaining
                                             );
                                             if let Err(e) = output.write_all(notice.as_bytes()) {
-                                                errors.push(format!(
-                                                    "Failed to write truncation notice: {}",
-                                                    e
-                                                ));
+                                                note_write_failure(
+                                                    &mut errors,
+                                                    &mut pipe_closed,
+                                                    "Failed to write truncation notice".to_string(),
+                                                    &e,
+                                                );
                                             }
                                             budget_exceeded = true;
                                             next_index += 1;
@@ -322,10 +356,15 @@ pub fn generate_markdown(
 
                                         tokens_used += chunk_tokens;
                                         if let Err(e) = output.write_all(&buf) {
-                                            errors.push(format!(
-                                                "Failed to write output for file index {}: {}",
-                                                next_index, e
-                                            ));
+                                            note_write_failure(
+                                                &mut errors,
+                                                &mut pipe_closed,
+                                                format!(
+                                                    "Failed to write output for file index {}",
+                                                    next_index
+                                                ),
+                                                &e,
+                                            );
                                         }
                                     }
                                     Err(e) => {
@@ -341,6 +380,8 @@ pub fn generate_markdown(
                         Err(_) => break, // Channel closed
                     }
                 }
+
+                fail_if_pipe_closed(pipe_closed)?;
 
                 if !errors.is_empty() {
                     error!(
@@ -764,15 +805,17 @@ pub fn process_file_with_content_limit(
 
             if !signatures_only {
                 write_text_content(output, content, language, line_numbers)?;
-                if truncated {
-                    writeln!(
-                        output,
-                        "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
-                        content.len(),
-                        original_len,
-                        ts_config.truncate
-                    )?;
-                }
+            }
+            // About the file, not about whether its body is shown: with
+            // --signatures the block below is computed from the clamped content.
+            if truncated {
+                writeln!(
+                    output,
+                    "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
+                    content.len(),
+                    original_len,
+                    ts_config.truncate
+                )?;
             }
 
             // Tree-sitter enrichment: signatures and/or structure
@@ -796,6 +839,27 @@ pub fn process_file_with_content_limit(
     }
 
     Ok(())
+}
+
+/// Records a failed write. A closed pipe is remembered separately so the run
+/// can end quietly (`head`-style consumers) instead of reporting an error.
+fn note_write_failure(
+    errors: &mut Vec<String>,
+    pipe_closed: &mut bool,
+    what: String,
+    e: &io::Error,
+) {
+    *pipe_closed |= e.kind() == io::ErrorKind::BrokenPipe;
+    errors.push(format!("{what}: {e}"));
+}
+
+/// `Err(BrokenPipe)` when the reader went away, so callers stop early.
+fn fail_if_pipe_closed(pipe_closed: bool) -> io::Result<()> {
+    if pipe_closed {
+        Err(io::Error::from(io::ErrorKind::BrokenPipe))
+    } else {
+        Ok(())
+    }
 }
 
 /// Compute the byte cut point for truncating `content` to `limit` bytes,
@@ -868,27 +932,46 @@ pub fn render_truncated_to_fit(
     token_encoding: TokenEncoding,
     remaining_tokens: usize,
 ) -> Option<usize> {
+    let (chunk, tokens) = fit_chunk_to_budget(remaining_tokens, token_encoding, |limit| {
+        let mut probe: Vec<u8> = Vec::new();
+        process_file_with_content_limit(
+            base_path,
+            file_path,
+            &mut probe,
+            line_numbers,
+            encoding_strategy,
+            ts_config,
+            limit,
+        )
+        .ok()?;
+        Some(String::from_utf8_lossy(&probe).into_owned())
+    })?;
+    *buf = chunk.into_bytes();
+    Some(tokens)
+}
+
+/// The budget search shared by every renderer: find a rendering of one file
+/// section whose real token count fits `remaining_tokens`.
+///
+/// `render(limit)` returns the section with its content clamped to `limit`
+/// bytes (`None` = no clamp) or `None` if it cannot be rendered. The fixed
+/// header cost is measured with a zero-byte probe, the content allowance is
+/// what is left at ~4 bytes/token, and it shrinks proportionally (with
+/// margin) while the tokenizer says the chunk overshoots. Gives up (omit the
+/// file) when even an empty section does not fit.
+pub(crate) fn fit_chunk_to_budget(
+    remaining_tokens: usize,
+    token_encoding: TokenEncoding,
+    mut render: impl FnMut(Option<usize>) -> Option<String>,
+) -> Option<(String, usize)> {
     if remaining_tokens == 0 {
         return None;
     }
 
     // 1. Measure the fixed section cost (header + empty fence + marker) by
     //    rendering with a zero-byte content allowance.
-    let mut base_probe: Vec<u8> = Vec::new();
-    if process_file_with_content_limit(
-        base_path,
-        file_path,
-        &mut base_probe,
-        line_numbers,
-        encoding_strategy,
-        ts_config,
-        Some(0),
-    )
-    .is_err()
-    {
-        return None;
-    }
-    let base_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&base_probe));
+    let base_probe = render(Some(0))?;
+    let base_tokens = estimate_tokens(token_encoding, &base_probe);
 
     // Even an empty section would overdraw — omit the file instead.
     if base_tokens >= remaining_tokens {
@@ -902,25 +985,10 @@ pub fn render_truncated_to_fit(
     //    tokenizer; shrink proportionally on overshoot. Bounded attempts —
     //    if it still doesn't fit, omission is safer than an over-budget emit.
     for _ in 0..5 {
-        let mut probe: Vec<u8> = Vec::new();
-        if process_file_with_content_limit(
-            base_path,
-            file_path,
-            &mut probe,
-            line_numbers,
-            encoding_strategy,
-            ts_config,
-            Some(byte_allowance),
-        )
-        .is_err()
-        {
-            return None;
-        }
-
-        let chunk_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&probe));
+        let probe = render(Some(byte_allowance))?;
+        let chunk_tokens = estimate_tokens(token_encoding, &probe);
         if chunk_tokens <= remaining_tokens {
-            *buf = probe;
-            return Some(chunk_tokens);
+            return Some((probe, chunk_tokens));
         }
 
         if byte_allowance == 0 {
@@ -972,11 +1040,13 @@ pub fn write_tree_sitter_enrichment(
             // eprintln (not warn!/log) so it is visible without RUST_LOG —
             // env_logger defaults to error level, and a user-style default run
             // would otherwise never see this warning.
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "⚠️  --visibility {} has no effect for '{}' files: the extractor \
                  does not classify visibility yet (planned for v0.11). \
                  Signatures will include all symbols.",
-                ts_config.visibility, extension
+                ts_config.visibility,
+                extension
             );
         }
 
@@ -1488,6 +1558,7 @@ mod tests {
         let mut writer = CountingWriter {
             inner: Vec::new(),
             count: 0,
+            path: None,
         };
         writer.write_all(b"hello ").unwrap();
         writer.write_all(b"world").unwrap();
@@ -2893,5 +2964,94 @@ mod tests {
             );
             assert!(crate::fences::unmatched_backtick_fence_len(&rendered).is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod counting_writer_error_tests {
+    use super::*;
+
+    struct Failing;
+
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        }
+    }
+
+    #[test]
+    fn failed_write_and_flush_name_the_output_file_and_keep_the_kind() {
+        let mut w = CountingWriter {
+            inner: Failing,
+            count: 0,
+            path: Some(std::path::PathBuf::from("out/report.md")),
+        };
+        for err in [w.write(b"x").unwrap_err(), w.flush().unwrap_err()] {
+            assert_eq!(err.kind(), io::ErrorKind::StorageFull);
+            assert!(
+                err.to_string().contains("cannot write 'out/report.md'"),
+                "{err}"
+            );
+        }
+        assert_eq!(w.count, 0);
+    }
+
+    #[test]
+    fn stdout_writer_errors_pass_through_unchanged() {
+        let mut w = CountingWriter {
+            inner: Failing,
+            count: 0,
+            path: None,
+        };
+        let err = w.write(b"x").unwrap_err();
+        assert!(!err.to_string().contains("cannot write"), "{err}");
+    }
+
+    #[test]
+    fn successful_writes_are_counted() {
+        let mut w = CountingWriter {
+            inner: Vec::new(),
+            count: 0,
+            path: None,
+        };
+        w.write_all(b"hello").unwrap();
+        w.flush().unwrap();
+        assert_eq!(w.count, 5);
+    }
+}
+
+#[cfg(test)]
+mod write_failure_tests {
+    use super::*;
+
+    #[test]
+    fn broken_pipe_is_remembered_and_still_listed() {
+        let mut errors = Vec::new();
+        let mut pipe_closed = false;
+        let e = io::Error::from(io::ErrorKind::BrokenPipe);
+        note_write_failure(&mut errors, &mut pipe_closed, "Failed to write".into(), &e);
+        assert!(pipe_closed);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].starts_with("Failed to write: "), "{errors:?}");
+    }
+
+    #[test]
+    fn other_write_errors_do_not_mark_the_pipe_closed() {
+        let mut errors = Vec::new();
+        let mut pipe_closed = false;
+        let e = io::Error::from(io::ErrorKind::PermissionDenied);
+        note_write_failure(&mut errors, &mut pipe_closed, "x".into(), &e);
+        assert!(!pipe_closed);
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn closed_pipe_ends_the_run_with_broken_pipe() {
+        assert!(fail_if_pipe_closed(false).is_ok());
+        let err = fail_if_pipe_closed(true).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 }

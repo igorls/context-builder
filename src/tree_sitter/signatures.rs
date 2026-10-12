@@ -20,6 +20,8 @@ pub fn format_signatures_as_markdown(signatures: &[Signature], language: &str) -
     let mut body = String::new();
 
     let mut current_kind: Option<&str> = None;
+    // Section headings are comments in the block's own language.
+    let comment = if language == "python" { "# " } else { "// " };
 
     for sig in signatures {
         let kind_str = match sig.kind {
@@ -41,7 +43,7 @@ pub fn format_signatures_as_markdown(signatures: &[Signature], language: &str) -
             if current_kind.is_some() {
                 body.push('\n');
             }
-            body.push_str("// ");
+            body.push_str(comment);
             body.push_str(kind_str);
             body.push('\n');
             current_kind = Some(kind_str);
@@ -69,6 +71,14 @@ mod tests {
             line_number: 1,
             full_signature: full_sig.to_string(),
         }
+    }
+
+    #[test]
+    fn python_sections_use_hash_comments() {
+        let sigs = vec![make_sig(SignatureKind::Function, "f", "def f(x)")];
+        let output = format_signatures_as_markdown(&sigs, "python");
+        assert!(output.contains("# Functions\n"), "{output}");
+        assert!(!output.contains("// Functions"), "{output}");
     }
 
     #[test]
@@ -161,7 +171,7 @@ mod tests {
         ];
         let output = format_signatures_as_markdown(&sigs, "python");
         // Both Class and Struct map to "Structs/Classes"
-        assert_eq!(output.matches("// Structs/Classes").count(), 1);
+        assert_eq!(output.matches("# Structs/Classes").count(), 1);
     }
 
     #[test]
