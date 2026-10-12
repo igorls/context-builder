@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **`keep_last = N` snapshot retention (#20).** With timestamped output, only the newest N generated snapshots are kept.
 - **Docs (#21):** bare invocation, `-o -` in help, environment variables, hidden files/symlinks, diff format.
 - **`--config <path>` and `--no-config` (#21).** Use another config file, or ignore the project one, for a single run.
 - **`--token-count` honors `--max-tokens` (#21 B21).** It reports the capped size, the budget, and how many files would be omitted.

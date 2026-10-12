@@ -801,6 +801,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 !final_args.filter.is_empty(),
             );
         }
+        prune_snapshots(&final_args.output, &config, silent);
         return Ok(());
     }
 
@@ -855,8 +856,78 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             !final_args.filter.is_empty(),
         );
     }
+    prune_snapshots(&final_args.output, &config, silent);
 
     Ok(())
+}
+
+/// Split `<stem>_<14-digit timestamp>[-<n>].<ext>` into (stem, ext, sort key).
+fn parse_snapshot_name(name: &str) -> Option<(String, String, (u64, u32))> {
+    let (base, ext) = name.rsplit_once('.')?;
+    let (head, suffix) = match base.rsplit_once('-') {
+        Some((h, n)) if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() => {
+            (h, n.parse::<u32>().ok()?)
+        }
+        _ => (base, 0),
+    };
+    let (stem, stamp) = head.rsplit_once('_')?;
+    if stamp.len() != 14 || !stamp.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((
+        stem.to_string(),
+        ext.to_string(),
+        (stamp.parse().ok()?, suffix),
+    ))
+}
+
+/// `keep_last = N`: delete all but the newest N timestamped snapshots that sit
+/// next to the file just written and share its stem and extension. Only names of
+/// exactly the generated form are touched, so unrelated files are never removed.
+fn prune_snapshots(output: &str, config: &Config, silent: bool) {
+    let keep = match (config.timestamped_output, config.keep_last) {
+        (Some(true), Some(n)) if n > 0 => n,
+        _ => return,
+    };
+    if output == "-" {
+        return;
+    }
+    let path = Path::new(output);
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let Some((stem, ext, _)) = parse_snapshot_name(name) else {
+        return;
+    };
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut snapshots: Vec<((u64, u32), PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().into_string().ok()?;
+            let (s, x, key) = parse_snapshot_name(&n)?;
+            (s == stem && x == ext && e.path().is_file()).then(|| (key, e.path()))
+        })
+        .collect();
+    snapshots.sort();
+    let excess = snapshots.len().saturating_sub(keep);
+    for (_, old) in snapshots.into_iter().take(excess) {
+        if old != path
+            && let Err(e) = fs::remove_file(&old)
+            && !silent
+        {
+            eprintln!(
+                "Warning: could not remove old snapshot {}: {}",
+                old.display(),
+                e
+            );
+        }
+    }
 }
 
 /// Print context window overflow warnings with actionable recommendations.
@@ -1311,6 +1382,7 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     }
 
     // Resolve final configuration using the new config resolver
+    let explicit_output = explicit.output;
     let resolution = crate::config_resolver::resolve_final_config(args, config.clone(), explicit);
 
     // Print warnings if any
@@ -1354,6 +1426,12 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let final_config = Config {
         auto_diff: Some(resolution.config.auto_diff),
         diff_context_lines: Some(resolution.config.diff_context_lines),
+        // An explicit `-o` is used verbatim, so its siblings are not ours to prune.
+        keep_last: if explicit_output {
+            None
+        } else {
+            config.as_ref().and_then(|c| c.keep_last)
+        },
         ..config.unwrap_or_default()
     };
 
@@ -3630,5 +3708,121 @@ mod config_selection_tests {
             "--no-config",
         ]);
         assert!(r.is_err());
+    }
+}
+
+#[cfg(test)]
+mod snapshot_retention_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn touch(dir: &Path, name: &str) -> PathBuf {
+        let p = dir.join(name);
+        fs::write(&p, "x").unwrap();
+        p
+    }
+
+    fn cfg(keep: Option<usize>, timestamped: Option<bool>) -> Config {
+        Config {
+            keep_last: keep,
+            timestamped_output: timestamped,
+            ..Config::default()
+        }
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().into_string().unwrap())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn parses_generated_names_and_rejects_others() {
+        let (stem, ext, key) = parse_snapshot_name("proj_20261010120000.md").unwrap();
+        assert_eq!(
+            (stem.as_str(), ext.as_str(), key),
+            ("proj", "md", (20261010120000, 0))
+        );
+        let (_, _, key) = parse_snapshot_name("proj_20261010120000-3.md").unwrap();
+        assert_eq!(key, (20261010120000, 3));
+        assert!(parse_snapshot_name("proj.md").is_none());
+        assert!(parse_snapshot_name("noextension").is_none());
+        assert!(parse_snapshot_name("proj_2026.md").is_none());
+        assert!(parse_snapshot_name("proj_2026101012000x.md").is_none());
+    }
+
+    #[test]
+    fn keeps_the_newest_n_and_leaves_unrelated_files() {
+        let dir = tempdir().unwrap();
+        for n in [
+            "p_20261010120000.md",
+            "p_20261010120001.md",
+            "p_20261010120001-1.md",
+            "p_20261010120002.md",
+            "other_20261010120000.md",
+            "p_20261010120000.txt",
+            "notes.md",
+        ] {
+            touch(dir.path(), n);
+        }
+        let newest = dir.path().join("p_20261010120002.md");
+        prune_snapshots(newest.to_str().unwrap(), &cfg(Some(2), Some(true)), true);
+        assert_eq!(
+            names(dir.path()),
+            vec![
+                "notes.md",
+                "other_20261010120000.md",
+                "p_20261010120000.txt",
+                "p_20261010120001-1.md",
+                "p_20261010120002.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn disabled_when_not_timestamped_zero_or_stdout() {
+        let dir = tempdir().unwrap();
+        for n in ["p_20261010120000.md", "p_20261010120001.md"] {
+            touch(dir.path(), n);
+        }
+        let newest = dir.path().join("p_20261010120001.md");
+        let out = newest.to_str().unwrap();
+        prune_snapshots(out, &cfg(Some(1), Some(false)), true);
+        prune_snapshots(out, &cfg(Some(1), None), true);
+        prune_snapshots(out, &cfg(Some(0), Some(true)), true);
+        prune_snapshots(out, &cfg(None, Some(true)), true);
+        prune_snapshots("-", &cfg(Some(1), Some(true)), true);
+        assert_eq!(names(dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn non_snapshot_output_names_and_relative_paths_are_safe() {
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "p_20261010120000.md");
+        let plain = dir.path().join("report.md");
+        prune_snapshots(plain.to_str().unwrap(), &cfg(Some(1), Some(true)), true);
+        assert_eq!(names(dir.path()).len(), 1);
+        // A bare file name resolves against the current directory (which has
+        // no snapshots of that stem); nothing is removed and nothing panics.
+        prune_snapshots("zz_20261010120000.md", &cfg(Some(1), Some(true)), true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_snapshot_that_cannot_be_removed_only_warns() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "p_20261010120000.md");
+        let newest = touch(dir.path(), "p_20261010120001.md");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        prune_snapshots(newest.to_str().unwrap(), &cfg(Some(1), Some(true)), false);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        // Either removal failed (non-root) or succeeded (root); never a panic,
+        // and the newest snapshot always survives.
+        assert!(newest.exists());
     }
 }

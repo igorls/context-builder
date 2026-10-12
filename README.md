@@ -252,6 +252,9 @@ output_folder = "docs/context"
 # Create timestamped versions of the output file (e.g., context_20250912123000.md)
 timestamped_output = true
 
+# Keep only the newest N timestamped snapshots in the output folder (optional)
+# keep_last = 10
+
 # Automatically compute per-file diffs against the previous timestamped snapshot
 auto_diff = true
 
