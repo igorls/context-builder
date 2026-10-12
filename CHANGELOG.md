@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Snapshots (#20 B10, B9).** Timestamped outputs written within the same second get `-1`, `-2`, … suffixes instead of prompting/cancelling or overwriting the previous snapshot. The auto-diff renderer prints `Modified:` as `YYYY-MM-DD HH:MM:SS UTC` (it printed a Debug `SystemTime { … }`) when `--file-metadata` is on.
 - **Built-in ignores can be overridden (#16).** `--ignore '!build'` (also `!dist`, `!vendor`, …) keeps a directory the defaults would hide, so tracked sources such as `src/build/mod.rs` can be included.
 - **Go files under `doc/` rank as source (#19).** cobra's real `doc` package no longer sorts with documentation; Markdown in `doc/` is still docs.
 - **Install docs no longer suggest `curl | sh` from `master` (#37).** The README and `install.sh` header now show download, review, run from a release tag; `install.sh` honors `CONTEXT_BUILDER_VERSION` to pin the release (and `curl -f`, and reports the version of the binary it just installed); a no-script, checksum-verified path is documented. `SKILL.md` and the README pin `cargo install … --version 0.11.0 --locked`. **Release checklist:** bump these pinned versions with each release.

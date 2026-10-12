@@ -1092,7 +1092,9 @@ fn generate_markdown_with_diff(
                 // compares content hashes (file bytes), not mtime.
                 if args.file_metadata {
                     output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-                    output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+                    let modified = chrono::DateTime::<chrono::Utc>::from(file_state.modified);
+                    let stamp = modified.format("%Y-%m-%d %H:%M:%S UTC");
+                    output.push_str(&format!("- Modified: {stamp}\n\n"));
                 }
 
                 // Determine language from file extension (canonical map —
