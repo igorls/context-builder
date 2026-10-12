@@ -450,9 +450,9 @@ pub fn collect_files_reporting(
     // these names. Without the defaults, dependency folders can dominate
     // the output.
     //
-    // IMPORTANT: These are added FIRST so that user ignores can override them.
-    // The ignore crate uses "last-match-wins" semantics, so a user can whitelist
-    // a legitimate "vendor" or "build" dir by passing it as a filter pattern.
+    // A user opts a name back in with a negated ignore (`--ignore '!build'`):
+    // that drops it from this list. (A whitelist glob in `OverrideBuilder`
+    // would instead ignore every file it does not match.)
     //
     // IMPORTANT: Patterns must NOT contain a slash — the ignore crate anchors
     // slash-containing patterns to the root, so `!dir/**` would only match
@@ -479,7 +479,12 @@ pub fn collect_files_reporting(
                        // `.cargo` is deliberately not listed: it is hidden (skipped by default),
                        // and with `--hidden` a project's `.cargo/config.toml` is real config.
     ];
-    for dir in &default_ignores {
+    let opted_in: Vec<&str> = ignores
+        .iter()
+        .filter_map(|pattern| pattern.strip_prefix('!'))
+        .map(|name| name.trim_matches('/'))
+        .collect();
+    for dir in default_ignores.iter().filter(|dir| !opted_in.contains(dir)) {
         // No slash in pattern → matches at any depth (not root-anchored)
         let pattern = format!("!{}", dir);
         if let Err(e) = override_builder.add(&pattern) {
@@ -494,7 +499,7 @@ pub fn collect_files_reporting(
     }
 
     // User-specified ignore patterns (added AFTER defaults so they can override)
-    for pattern in ignores {
+    for pattern in ignores.iter().filter(|p| !p.starts_with('!')) {
         // Attention: Confusing pattern ahead!
         // Add the pattern to the override builder with ! prefix to ignore matching files.
         // In OverrideBuilder, patterns without ! are whitelist (include) patterns,
