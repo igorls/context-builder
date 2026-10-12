@@ -222,6 +222,10 @@ pub enum SkipReason {
     TooLarge,
     /// Filename (or `.npmrc` / `.pypirc` contents) looks like a credential.
     Secret,
+    /// Not a known asset type, but the content is binary (NUL bytes in the
+    /// first 8 KiB, outside UTF-16/32 text). Rendering it would only print a
+    /// placeholder block.
+    Binary,
 }
 
 impl SkipReason {
@@ -231,6 +235,7 @@ impl SkipReason {
             SkipReason::Asset => "asset",
             SkipReason::TooLarge => "too large",
             SkipReason::Secret => "secret",
+            SkipReason::Binary => "binary",
         }
     }
 }
@@ -395,7 +400,24 @@ pub fn classify(
     {
         return Some((SkipReason::TooLarge, "too large"));
     }
+    if looks_binary(path) {
+        return Some((SkipReason::Binary, "binary"));
+    }
     None
+}
+
+/// Sniff the start of the file. Unreadable files are not reported as binary
+/// (the renderer deals with them).
+fn looks_binary(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = Vec::with_capacity(8192);
+    if file.take(8192).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    crate::markdown::is_binary_content(&head)
 }
 
 /// Stderr lines for a skip list: one warning per secret (path and category
@@ -423,7 +445,7 @@ pub fn report_skips(skipped: &[SkippedFile], silent: bool) {
         return;
     }
     for line in report_lines(skipped) {
-        eprintln!("{line}");
+        let _ = writeln!(std::io::stderr(), "{line}");
     }
 }
 
@@ -453,11 +475,13 @@ pub fn summary_line(skipped: &[SkippedFile]) -> Option<String> {
     let mut assets = 0usize;
     let mut large = 0usize;
     let mut secrets = 0usize;
+    let mut binaries = 0usize;
     for item in skipped {
         match item.reason {
             SkipReason::Asset => assets += 1,
             SkipReason::TooLarge => large += 1,
             SkipReason::Secret => secrets += 1,
+            SkipReason::Binary => binaries += 1,
         }
     }
     let mut parts = Vec::new();
@@ -469,6 +493,9 @@ pub fn summary_line(skipped: &[SkippedFile]) -> Option<String> {
     }
     if secrets > 0 {
         parts.push(count_phrase(secrets, "secret", "secrets"));
+    }
+    if binaries > 0 {
+        parts.push(count_phrase(binaries, "binary", "binaries"));
     }
     let noun = if skipped.len() == 1 { "file" } else { "files" };
     Some(format!(

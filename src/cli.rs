@@ -10,7 +10,7 @@ pub struct Args {
     #[clap(short = 'd', long, default_value = ".")]
     pub input: String,
 
-    /// Output file path
+    /// Output file path; `-` writes the document to stdout (notices go to stderr)
     #[clap(short, long, default_value = "output.md")]
     pub output: String,
 
@@ -33,7 +33,9 @@ pub struct Args {
     #[clap(long, default_value_t = false)]
     pub include_lockfiles: bool,
 
-    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core)
+    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core).
+    /// Prefix a built-in ignore name with `!` to keep it (e.g. -i '!build,!vendor');
+    /// dot-prefixed names (.next, .venv, …) are also hidden, so they additionally need --hidden.
     #[clap(short = 'i', long, value_delimiter = ',', value_name = "PATTERN")]
     pub ignore: Vec<String>,
 
@@ -44,6 +46,18 @@ pub struct Args {
     /// Token count mode: estimate the total token count of the final document
     #[clap(long)]
     pub token_count: bool,
+
+    /// Per-file token breakdown: the largest files first, and with --max-tokens
+    /// what would be cut. Writes no document. `--stats` lists 20 files,
+    /// `--stats=N` lists N (`--stats=0` lists all).
+    #[clap(
+        long,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "20",
+        value_name = "N"
+    )]
+    pub stats: Option<usize>,
 
     /// Add line numbers to code blocks in the output
     #[clap(long)]
@@ -72,7 +86,8 @@ pub struct Args {
     #[clap(long)]
     pub clear_cache: bool,
 
-    /// Initialize a new context-builder.toml config file in the current directory
+    /// Initialize a new context-builder.toml in the --input directory (default: the current
+    /// directory), with file types detected there
     #[clap(long)]
     pub init: bool,
 
@@ -80,7 +95,7 @@ pub struct Args {
     #[clap(long)]
     pub signatures: bool,
 
-    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    /// Extract code structure (line and symbol counts per file) - requires tree-sitter feature
     #[clap(long)]
     pub structure: bool,
 

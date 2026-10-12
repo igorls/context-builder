@@ -221,11 +221,12 @@ fn large_output_warning_goes_to_stderr_not_stdout() {
     let dir = tempdir().unwrap();
     let fixture = dir.path().join("repo");
     fs::create_dir_all(&fixture).unwrap();
-    // bytes/4 must exceed the 128K warning threshold. 800_000 bytes of text
-    // plus the markdown wrapper is well over 512_000 output bytes.
-    // Each file stays under the default 256K size limit.
+    // The real token count must exceed the 128K warning threshold (a long run
+    // of one letter would tokenize far below it). "1 " pairs cost about one
+    // token each: 4 x 100_000 of them is ~400K tokens. Each file stays under
+    // the default 256K size limit.
     for n in 0..4 {
-        fs::write(fixture.join(format!("big{n}.txt")), "a".repeat(200_000)).unwrap();
+        fs::write(fixture.join(format!("big{n}.txt")), "1 ".repeat(100_000)).unwrap();
     }
 
     let output = dir.path().join("out.md");

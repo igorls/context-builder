@@ -92,6 +92,7 @@ fn test_auto_diff_workflow_basic() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
     let prompter = TestPrompter;
 
@@ -257,6 +258,7 @@ fn test_auto_diff_added_and_removed_files() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;
@@ -427,6 +429,7 @@ diff_only = true
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;
@@ -581,6 +584,7 @@ fn test_cache_invalidation_on_config_change() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;
@@ -742,6 +746,7 @@ fn test_concurrent_cache_access() {
                     include_secrets: false,
                     file_metadata: false,
                     include_lockfiles: false,
+                    stats: None,
                 };
 
                 let prompter = TestPrompter;
@@ -803,6 +808,7 @@ fn test_corrupted_cache_recovery() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter;
@@ -980,6 +986,7 @@ diff_only = true
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     run_with_args(args.clone(), load_config().unwrap_or_default(), &prompter).unwrap();

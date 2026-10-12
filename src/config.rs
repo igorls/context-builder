@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use std::fs;
+use std::io;
+use std::io::Write as _;
 use std::path::Path;
 
 use crate::content_filter::{self, DEFAULT_MAX_FILE_SIZE_BYTES};
@@ -65,6 +67,11 @@ pub struct Config {
 
     /// If true, append a UTC timestamp to the output file name (before extension)
     pub timestamped_output: Option<bool>,
+
+    /// With `timestamped_output`, keep only the newest N snapshots of the output
+    /// (older `<name>_<timestamp>.<ext>` files in the same folder are deleted).
+    /// Unset or 0 keeps everything.
+    pub keep_last: Option<usize>,
 
     /// Assume "yes" for the overwrite prompt.
     ///
@@ -222,7 +229,8 @@ pub fn load_config() -> Option<Config> {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "⚠️  Failed to parse context-builder.toml: {}. Config will be ignored.",
                     e
                 );
@@ -234,25 +242,136 @@ pub fn load_config() -> Option<Config> {
     }
 }
 
-/// Load configuration from `context-builder.toml` in the specified project root directory.
-/// Returns `None` if the file does not exist or cannot be parsed.
-pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
-    let config_path = project_root.join("context-builder.toml");
-    if config_path.exists() {
-        let content = fs::read_to_string(&config_path).ok()?;
-        match toml::from_str(&content) {
-            Ok(config) => Some(config),
-            Err(e) => {
-                eprintln!(
-                    "⚠️  Failed to parse {}: {}. Config will be ignored.",
-                    config_path.display(),
-                    e
-                );
-                None
-            }
+/// Every key `context-builder.toml` understands (the fields of [`Config`]).
+/// A test keeps this list in step with the struct.
+pub const KNOWN_KEYS: &[&str] = &[
+    "output",
+    "filter",
+    "ignore",
+    "include_lockfiles",
+    "line_numbers",
+    "file_metadata",
+    "preview",
+    "token_count",
+    "output_folder",
+    "timestamped_output",
+    "keep_last",
+    "yes",
+    "auto_diff",
+    "diff_context_lines",
+    "diff_only",
+    "encoding_strategy",
+    "max_tokens",
+    "signatures",
+    "structure",
+    "truncate",
+    "visibility",
+    "encoding",
+    "max_file_size",
+    "hidden",
+    "include_secrets",
+];
+
+/// Load `context-builder.toml` from `project_root`.
+///
+/// `Ok(None)` when there is no file. A file that cannot be read or parsed is an
+/// error naming the file: silently running with defaults would hide a typo
+/// such as an unclosed bracket. Unknown keys are not errors; they come back as
+/// warnings (with a suggestion when one is close) so a typo like `filters`
+/// does not pass unnoticed.
+pub fn try_load_config(project_root: &Path) -> io::Result<Option<(Config, Vec<String>)>> {
+    let path = project_root.join("context-builder.toml");
+    // Read directly: `exists()` is false for an unreadable path too, which
+    // would quietly mean "no config". Only NotFound means that.
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(io::Error::new(
+                e.kind(),
+                format!("cannot read config '{}': {e}", path.display()),
+            ));
         }
-    } else {
-        None
+    };
+    let config: Config = toml::from_str(&content).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid config '{}': {e}", path.display()),
+        )
+    })?;
+    Ok(Some((config, unknown_key_warnings(&content, &path))))
+}
+
+fn unknown_key_warnings(content: &str, path: &Path) -> Vec<String> {
+    let Ok(table) = content.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    table
+        .keys()
+        .filter(|k| !KNOWN_KEYS.contains(&k.as_str()))
+        .map(|k| match closest_key(k) {
+            Some(near) => format!(
+                "unknown key '{k}' in {} (ignored); did you mean '{near}'?",
+                path.display()
+            ),
+            None => format!("unknown key '{k}' in {} (ignored)", path.display()),
+        })
+        .collect()
+}
+
+/// The known key within edit distance 2 of `key`, if any.
+fn closest_key(key: &str) -> Option<&'static str> {
+    KNOWN_KEYS
+        .iter()
+        .map(|k| (edit_distance(key, k), *k))
+        .filter(|(d, _)| *d <= 2)
+        .min()
+        .map(|(_, k)| k)
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != *cb);
+            cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+/// Load the config file the user named with `--config`. Unlike the implicit
+/// `context-builder.toml`, an explicit path must exist and parse: silently
+/// falling back to defaults would hide the mistake.
+pub fn load_config_file(path: &Path) -> io::Result<Config> {
+    let content = fs::read_to_string(path).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("cannot read config '{}': {e}", path.display()),
+        )
+    })?;
+    toml::from_str(&content).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid config '{}': {e}", path.display()),
+        )
+    })
+}
+
+/// Load configuration from `context-builder.toml` in the specified project root directory.
+/// Returns `None` if the file does not exist or cannot be parsed (a parse
+/// failure is reported on stderr). The command line uses [`try_load_config`],
+/// which fails instead.
+pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
+    match try_load_config(project_root) {
+        Ok(found) => found.map(|(config, _)| config),
+        Err(e) => {
+            let _ = writeln!(std::io::stderr(), "⚠️  {e}. Config will be ignored.");
+            None
+        }
     }
 }
 
@@ -576,5 +695,133 @@ filter = ["rs"]
         assert!(result.is_some());
         let config = result.unwrap();
         assert_eq!(config.output, Some("context.md".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod try_load_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn write(dir: &Path, text: &str) {
+        fs::write(dir.join("context-builder.toml"), text).unwrap();
+    }
+
+    #[test]
+    fn known_keys_match_the_config_struct() {
+        // Checkouts on Windows may have CRLF line endings.
+        let src = include_str!("config.rs").replace("\r\n", "\n");
+        let start = src.find(concat!("pub struct ", "Config {")).unwrap();
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let fields: Vec<&str> = body
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.trim().strip_prefix("pub "))
+            .filter_map(|l| l.split(':').next())
+            .collect();
+        assert_eq!(fields, KNOWN_KEYS);
+    }
+
+    #[test]
+    fn missing_file_is_none() {
+        let dir = tempdir().unwrap();
+        assert!(try_load_config(dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn malformed_file_is_an_error_naming_the_file() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "filter = [\"rs\"\n");
+        let err = try_load_config(dir.path()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let text = err.to_string();
+        assert!(text.contains("invalid config"), "{text}");
+        assert!(text.contains("context-builder.toml"), "{text}");
+    }
+
+    #[test]
+    fn wrong_value_type_is_an_error() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "line_numbers = \"yes\"\n");
+        assert!(try_load_config(dir.path()).is_err());
+    }
+
+    #[test]
+    fn unreadable_file_is_an_error() {
+        let dir = tempdir().unwrap();
+        // A directory where the file should be: exists, cannot be read as text.
+        fs::create_dir(dir.path().join("context-builder.toml")).unwrap();
+        let err = try_load_config(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("cannot read config"), "{err}");
+    }
+
+    #[test]
+    fn unknown_keys_warn_with_a_suggestion() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "filters = [\"rs\"]\nfilter = [\"md\"]\nzzzzzzzz = 1\n",
+        );
+        let (config, warnings) = try_load_config(dir.path()).unwrap().unwrap();
+        assert_eq!(config.filter, Some(vec!["md".to_string()]));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].contains("'filters'") && warnings[0].contains("did you mean 'filter'?")
+        );
+        assert!(warnings[1].contains("'zzzzzzzz'") && !warnings[1].contains("did you mean"));
+    }
+
+    #[test]
+    fn valid_file_has_no_warnings() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "line_numbers = true\n");
+        let (_, warnings) = try_load_config(dir.path()).unwrap().unwrap();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn legacy_loader_still_returns_none_on_a_bad_file() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "filter = [");
+        assert!(load_config_from_path(dir.path()).is_none());
+    }
+
+    #[test]
+    fn edit_distance_basics() {
+        assert_eq!(edit_distance("filter", "filter"), 0);
+        assert_eq!(edit_distance("filters", "filter"), 1);
+        assert_eq!(edit_distance("", "ab"), 2);
+    }
+}
+
+#[cfg(test)]
+mod load_config_file_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn invalid_toml_is_invalid_data_naming_the_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "line_numbers = [oops").unwrap();
+        let err = load_config_file(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("invalid config"), "{err}");
+        assert!(err.to_string().contains("bad.toml"), "{err}");
+    }
+
+    #[test]
+    fn missing_file_keeps_its_error_kind() {
+        let err = load_config_file(Path::new("/definitely/not/here.toml")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn valid_file_loads() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("ok.toml");
+        std::fs::write(&path, "line_numbers = true\n").unwrap();
+        assert_eq!(load_config_file(&path).unwrap().line_numbers, Some(true));
     }
 }

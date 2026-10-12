@@ -20,11 +20,11 @@ Generate a single, structured markdown file from any codebase directory. The out
 ## Installation
 
 ```bash
-# Requires Rust toolchain. Builds from source with cryptographic verification via crates.io.
-cargo install context-builder --features tree-sitter-all
+# Requires Rust toolchain. Pinned to a version; crates.io verifies the package checksum.
+cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all
 ```
 
-Pre-built binaries with SHA256 checksums are also available for manual download from [GitHub Releases](https://github.com/igorls/context-builder/releases/latest).
+Pre-built binaries with SHA256 checksums are also available from [GitHub Releases](https://github.com/igorls/context-builder/releases/tag/v0.11.0): download the archive and `SHA256SUMS` for the pinned version and verify before installing. Do not pipe a remote script into a shell.
 
 Verify: `context-builder --version` (expected: `0.11.0`)
 
@@ -211,6 +211,7 @@ These behaviors require no configuration:
 | `-i <PATTERN>` | Ignore paths or gitignore globs | Comma-separated (`-i docs,assets`) or repeated (`-i '*.lock' -i crates/core`) |
 | `--max-tokens <N>` | Token budget cap | Use `100000` for most models, `200000` for Gemini |
 | `--token-count` | Dry-run token estimate | Run first to check if filtering is needed |
+| `--stats[=N]` | Per-file token breakdown (largest first; with `--max-tokens`, what would be cut) | Find the files to `-i`gnore or `--filter` out |
 | `-y` | Skip all prompts | **Use only with explicit, scoped project paths** |
 | `--preview` | Show file tree only | Quick exploration without generating output |
 | `--diff-only` | Output only diffs | Minimizes tokens for incremental updates |
@@ -322,7 +323,7 @@ When `--signatures` is active, file contents are replaced with extracted signatu
 
 ## Error Handling
 
-- If `context-builder` is not installed, install with `cargo install context-builder --features tree-sitter-all`
+- If `context-builder` is not installed, install with `cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all`
 - If `--signatures` shows no output for a file, the language may not be supported or the feature was not enabled at install
 - If output exceeds token limits, add `--max-tokens` or narrow with `-f` / `-i`, or use `--signatures`
 - If the project has no `.git` directory, auto-ignores still protect against dependency flooding
