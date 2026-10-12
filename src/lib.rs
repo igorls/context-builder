@@ -390,6 +390,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if final_args.preview {
         if !silent {
             let _ = writeln!(std::io::stdout(), "\n# File Tree Structure (Preview)\n");
+            let _ = writeln!(std::io::stdout(), "{}\n", markdown::TREE_ORDER_NOTE);
             print_tree(&file_tree, 0);
         }
         if !final_args.token_count {
@@ -445,7 +446,11 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 encoding,
                 &format!("{}0000000000000000\n\n", markdown::CONTENT_HASH_PREFIX),
             );
-            total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
+            let tree_header = format!(
+                "## File Tree Structure\n\n{}\n\n",
+                markdown::TREE_ORDER_NOTE
+            );
+            total_tokens += estimate_tokens(encoding, &tree_header);
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
             // The `## Skipped` section is part of the generated report.
@@ -1057,6 +1062,11 @@ fn generate_markdown_with_diff(
 
     // File tree
     output.push_str("## File Tree Structure\n\n");
+    // Bodies follow only when not diff-only; the note explains their order.
+    if !diff_config.diff_only {
+        output.push_str(markdown::TREE_ORDER_NOTE);
+        output.push_str("\n\n");
+    }
     let mut tree_output = Vec::new();
     tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
     output.push_str(&String::from_utf8_lossy(&tree_output));
