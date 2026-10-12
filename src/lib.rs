@@ -476,28 +476,23 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             match final_args.max_tokens {
                 Some(budget) => {
                     let mut remaining = budget.saturating_sub(total_tokens);
-                    for (i, tokens) in per_file.iter().enumerate() {
-                        if *tokens <= remaining {
+                    // Whole files while they fit; the first that does not is the crossing file.
+                    let crossing = per_file.iter().position(|tokens| {
+                        let fits = *tokens <= remaining;
+                        if fits {
                             file_tokens += tokens;
                             remaining -= tokens;
-                            continue;
                         }
-                        // The crossing file: the real writer clamps it with the
-                        // same helper, or omits it when not even its header fits.
+                        !fits
+                    });
+                    if let Some(i) = crossing {
+                        // The real writer clamps it with the same helper, or omits it
+                        // when not even its header fits.
                         let mut scratch = Vec::new();
-                        let fit = markdown::render_truncated_to_fit(
-                            base_path,
-                            files[i].path(),
-                            &mut scratch,
-                            final_args.line_numbers,
-                            enc_strategy,
-                            &ts_config,
-                            encoding,
-                            remaining,
-                        );
+                        #[rustfmt::skip]
+                        let fit = markdown::render_truncated_to_fit(base_path, files[i].path(), &mut scratch, final_args.line_numbers, enc_strategy, &ts_config, encoding, remaining);
                         file_tokens += fit.unwrap_or(0);
                         omitted = per_file.len() - i - usize::from(fit.is_some());
-                        break;
                     }
                 }
                 None => file_tokens = per_file.iter().sum(),
@@ -511,12 +506,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             let _ = writeln!(std::io::stdout(), "File tree tokens: {}", tree_tokens);
             let _ = writeln!(std::io::stdout(), "File content tokens: {}", file_tokens);
             if let Some(budget) = final_args.max_tokens {
-                let _ = writeln!(
-                    std::io::stdout(),
-                    "Token budget: {} (files omitted: {})",
-                    budget,
-                    omitted
-                );
+                #[rustfmt::skip]
+                let _ = writeln!(std::io::stdout(), "Token budget: {budget} (files omitted: {omitted})");
             }
         }
         return Ok(());
