@@ -1377,18 +1377,12 @@ pub fn run() -> io::Result<()> {
     // `--encoding o200k_base` and `-o output.md` carry the same value as the
     // default, so the value alone can't reveal an intent to override a
     // non-default config (see resolver).
-    let matches = Args::command().get_matches();
-}
-
     let matches = command_with_config_flags().get_matches();
     run_matches(&matches, std::env::args_os().len())
 }
 
 /// [`run`] with an explicit argument vector (program name first) instead of
 /// the process arguments, so the whole command line path can run in-process.
-/// A bad command line is returned as `InvalidInput` instead of exiting.
-}
-
 /// A bad command line is returned as `InvalidInput` instead of exiting;
 /// `--help` and `--version` print and return `Ok`.
 pub fn run_from<I, T>(argv: I) -> io::Result<()>
@@ -1397,11 +1391,6 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
-    let matches = Args::command()
-        .try_get_matches_from(&argv)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-}
-
     let matches = match command_with_config_flags().try_get_matches_from(&argv) {
         Ok(matches) => matches,
         // `--help` / `--version` are requests, not mistakes: print and succeed.
@@ -1472,9 +1461,6 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     }
 
     if argc == 1 && config.is_none() {
-        Args::command().print_help()?;
-}
-
         command_with_config_flags().print_help()?;
         return Ok(());
     }
