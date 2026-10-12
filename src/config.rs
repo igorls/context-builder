@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use std::fs;
+use std::io;
+use std::io::Write as _;
 use std::path::Path;
 
 use crate::content_filter::{self, DEFAULT_MAX_FILE_SIZE_BYTES};
@@ -227,7 +229,8 @@ pub fn load_config() -> Option<Config> {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "⚠️  Failed to parse context-builder.toml: {}. Config will be ignored.",
                     e
                 );
@@ -239,6 +242,24 @@ pub fn load_config() -> Option<Config> {
     }
 }
 
+/// Load the config file the user named with `--config`. Unlike the implicit
+/// `context-builder.toml`, an explicit path must exist and parse: silently
+/// falling back to defaults would hide the mistake.
+pub fn load_config_file(path: &Path) -> io::Result<Config> {
+    let content = fs::read_to_string(path).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("cannot read config '{}': {e}", path.display()),
+        )
+    })?;
+    toml::from_str(&content).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid config '{}': {e}", path.display()),
+        )
+    })
+}
+
 /// Load configuration from `context-builder.toml` in the specified project root directory.
 /// Returns `None` if the file does not exist or cannot be parsed.
 pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
@@ -248,7 +269,8 @@ pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "⚠️  Failed to parse {}: {}. Config will be ignored.",
                     config_path.display(),
                     e
@@ -581,5 +603,36 @@ filter = ["rs"]
         assert!(result.is_some());
         let config = result.unwrap();
         assert_eq!(config.output, Some("context.md".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod load_config_file_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn invalid_toml_is_invalid_data_naming_the_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "line_numbers = [oops").unwrap();
+        let err = load_config_file(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("invalid config"), "{err}");
+        assert!(err.to_string().contains("bad.toml"), "{err}");
+    }
+
+    #[test]
+    fn missing_file_keeps_its_error_kind() {
+        let err = load_config_file(Path::new("/definitely/not/here.toml")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn valid_file_loads() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("ok.toml");
+        std::fs::write(&path, "line_numbers = true\n").unwrap();
+        assert_eq!(load_config_file(&path).unwrap().line_numbers, Some(true));
     }
 }
