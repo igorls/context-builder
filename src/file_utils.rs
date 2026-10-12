@@ -188,6 +188,9 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
 
     match first {
         "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
+        // `doc/` is also a real Go package directory (cobra's `doc`): Go files
+        // there are source, not documentation.
+        "doc" if file_extension(name) == Some("go") => 1,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
         // Build/CI infrastructure — useful context but not core source.
         ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
@@ -1766,8 +1769,9 @@ mod tests {
         for path in sources {
             assert_eq!(category_of(path), 1, "{path}");
         }
-        // `doc/` is still documentation. Reclassifying that package is out of scope.
-        assert_eq!(category_of("doc/api.go"), 3);
+        // Go files in a `doc/` package are source; other files there are docs.
+        assert_eq!(category_of("doc/api.go"), 1);
+        assert_eq!(category_of("doc/guide.md"), 3);
     }
 
     #[test]

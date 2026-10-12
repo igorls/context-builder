@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Go files under `doc/` rank as source (#19).** cobra's real `doc` package no longer sorts with documentation; Markdown in `doc/` is still docs.
 - **Install docs no longer suggest `curl | sh` from `master` (#37).** The README and `install.sh` header now show download, review, run from a release tag; `install.sh` honors `CONTEXT_BUILDER_VERSION` to pin the release (and `curl -f`, and reports the version of the binary it just installed); a no-script, checksum-verified path is documented. `SKILL.md` and the README pin `cargo install … --version 0.11.0 --locked`. **Release checklist:** bump these pinned versions with each release.
 - **The report says its file tree is alphabetical (#42).** File bodies follow the relevance ranking (root README and manifests first), so a one-line note under `## File Tree Structure` (and in `--preview`) now explains why the two orders differ.
 - **Size warnings match what the run writes (#41).** The `large file(s) detected … Total context size` block is no longer printed when `--max-tokens` caps the output, and leaves out files that `--signatures` replaces with an outline (`--structure` only appends a summary, so those files still count) (it still appears for full runs and `--preview`). The >128K advice omits `--filter …` when a filter was already given.
