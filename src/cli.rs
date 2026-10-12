@@ -83,7 +83,7 @@ pub struct Args {
     #[clap(long)]
     pub signatures: bool,
 
-    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    /// Extract code structure (line and symbol counts per file) - requires tree-sitter feature
     #[clap(long)]
     pub structure: bool,
 
