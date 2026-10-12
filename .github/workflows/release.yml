@@ -12,7 +12,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  EXPECTED_RELEASE_ARTIFACTS: 5
+  EXPECTED_RELEASE_ARTIFACTS: 7
 
 permissions:
   contents: read
@@ -35,6 +35,15 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             archive: tar.gz
+          # Static musl builds: the gnu binaries need glibc >= 2.34, so they do
+          # not start on Alpine or older distributions. install.sh picks these
+          # automatically there.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            archive: tar.gz
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -54,6 +63,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Cache cargo registry
         uses: actions/cache@v6
         with:
@@ -64,7 +77,14 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} --features tree-sitter-all
+        shell: bash
+        run: |
+          # The tree-sitter grammars are C: compile them with musl's compiler.
+          if [[ "${{ matrix.target }}" == *-musl ]]; then
+            target_env="${{ matrix.target }}"
+            export "CC_${target_env//-/_}=musl-gcc"
+          fi
+          cargo build --release --target ${{ matrix.target }} --features tree-sitter-all
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
