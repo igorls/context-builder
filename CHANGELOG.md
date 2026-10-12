@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **`--token-count` honors `--max-tokens` (#21 B21).** It reports the capped size, the budget, and how many files would be omitted.
 - **Python `--signatures` headings use `#` (#22 B16).** Section headings inside a `python` block were `// Functions`. `--structure`'s help no longer promises imports/exports, which it never emitted.
 - **`--structure` code-line counts (#22 B15).** TypeScript, JavaScript, Python, Go, Java and C/C++ no longer report `(0 code)`; blank lines and whole-line comments are excluded, as for Rust.
 - **Snapshots (#20 B10, B9).** Timestamped outputs written within the same second get `-1`, `-2`, … suffixes instead of prompting/cancelling or overwriting the previous snapshot. The auto-diff renderer prints `Modified:` as `YYYY-MM-DD HH:MM:SS UTC` (it printed a Debug `SystemTime { … }`) when `--file-metadata` is on.
