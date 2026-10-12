@@ -25,7 +25,7 @@ use std::fs::File;
 use cache::CacheManager;
 use cli::Args;
 use config::{Config, load_config_from_path};
-use content_filter::{ContentPolicy, SkippedFile};
+use content_filter::{ContentPolicy, DEFAULT_MAX_FILE_SIZE_SPEC, SkippedFile};
 use diff::render_per_file_diffs;
 #[cfg(test)]
 use file_utils::collect_files;
@@ -155,6 +155,17 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     out
 }
 
+/// Maps the result of [`run`] to the process result.
+///
+/// The reader of `-o -` going away (`context-builder -o - | head`) ends a
+/// pipeline; it is not a failure of ours, so `BrokenPipe` is success.
+pub fn finish(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
+}
+
 pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io::Result<()> {
     let start_time = Instant::now();
 
@@ -174,7 +185,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !matches!(strat.as_str(), "detect" | "strict" | "skip")
         && !silent
     {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "⚠️  Unknown encoding_strategy '{strat}' in config; expected one of: detect, strict, skip. Falling back to 'detect'."
         );
     }
@@ -197,12 +209,6 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     let base_path = resolved_base.as_path();
 
     if !base_path.exists() || !base_path.is_dir() {
-        if !silent {
-            eprintln!(
-                "Error: The specified input directory '{}' does not exist or is not a directory.",
-                final_args.input
-            );
-        }
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
@@ -229,9 +235,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
         && !final_args.yes
         && !prompter.confirm_overwrite(&final_args.output)?
     {
-        if !silent {
-            eprintln!("Operation cancelled.");
-        }
+        // No separate message: `main` prints the error once.
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "Operation cancelled by user",
@@ -260,7 +264,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     if !silent
         && let Some(notice) = crate::file_utils::lockfile_skip_notice(collected.skipped_lockfiles)
     {
-        eprintln!("{notice}");
+        let _ = writeln!(std::io::stderr(), "{notice}");
     }
     let files = collected.files;
     let policy = ContentPolicy::new(
@@ -274,7 +278,10 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // write the (empty) document. Name the filters when any were given.
     if !silent && files.is_empty() && skipped.is_empty() {
         if final_args.filter.is_empty() {
-            eprintln!("Warning: No files matched; check .gitignore, --ignore, and --filter");
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: No files matched; check .gitignore, --ignore, and --filter"
+            );
         } else {
             let quoted = final_args
                 .filter
@@ -287,27 +294,56 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             } else {
                 "filters"
             };
-            eprintln!("Warning: no files matched {noun} {quoted}.");
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: no files matched {noun} {quoted}."
+            );
         }
     }
     let debug_config = std::env::var("CB_DEBUG_CONFIG").is_ok();
     if debug_config {
-        eprintln!("[DEBUG][CONFIG] Args: {:?}", final_args);
-        eprintln!("[DEBUG][CONFIG] Raw Config: {:?}", config);
-        eprintln!("[DEBUG][CONFIG] Auto-ignores: {:?}", auto_ignores);
-        eprintln!("[DEBUG][CONFIG] Collected {} files", files.len());
+        let _ = writeln!(std::io::stderr(), "[DEBUG][CONFIG] Args: {:?}", final_args);
+        let _ = writeln!(
+            std::io::stderr(),
+            "[DEBUG][CONFIG] Raw Config: {:?}",
+            config
+        );
+        let _ = writeln!(
+            std::io::stderr(),
+            "[DEBUG][CONFIG] Auto-ignores: {:?}",
+            auto_ignores
+        );
+        let _ = writeln!(
+            std::io::stderr(),
+            "[DEBUG][CONFIG] Collected {} files",
+            files.len()
+        );
         for f in &files {
-            eprintln!("[DEBUG][CONFIG]  - {}", f.path().display());
+            let _ = writeln!(
+                std::io::stderr(),
+                "[DEBUG][CONFIG]  - {}",
+                f.path().display()
+            );
         }
     }
 
-    // Smart large-file detection: warn about files that may bloat the context
-    if !silent {
+    // Smart large-file detection: warn about files that may bloat the context.
+    // Not shown when the output is already reduced (a token budget caps it;
+    // outlined files are not written in full): the input sizes would only
+    // suggest a problem that is not there. `--preview` writes nothing, so it
+    // always reports the input.
+    let report_input_size = final_args.preview || final_args.max_tokens.is_none();
+    if !silent && report_input_size {
         const LARGE_FILE_THRESHOLD: u64 = 100 * 1024; // 100 KB
         let mut large_files: Vec<(String, u64)> = Vec::new();
         let mut total_size: u64 = 0;
 
+        let mut counted_files = 0usize;
         for entry in &files {
+            if !final_args.preview && body_is_outlined(&final_args, entry.path()) {
+                continue;
+            }
+            counted_files += 1;
             if let Ok(metadata) = entry.path().metadata() {
                 let size = metadata.len();
                 total_size += size;
@@ -325,21 +361,27 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         if !large_files.is_empty() {
             large_files.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by size descending
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "\n⚠  {} large file(s) detected (>{} KB):",
                 large_files.len(),
                 LARGE_FILE_THRESHOLD / 1024
             );
             for (path, size) in large_files.iter().take(5) {
-                eprintln!("   {:>8} KB  {}", size / 1024, path);
+                let _ = writeln!(std::io::stderr(), "   {:>8} KB  {}", size / 1024, path);
             }
             if large_files.len() > 5 {
-                eprintln!("   ... and {} more", large_files.len() - 5);
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "   ... and {} more",
+                    large_files.len() - 5
+                );
             }
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "   Total context size: {} KB across {} files\n",
                 total_size / 1024,
-                files.len()
+                counted_files
             );
         }
     }
@@ -347,7 +389,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     if final_args.preview {
         if !silent {
-            println!("\n# File Tree Structure (Preview)\n");
+            let _ = writeln!(std::io::stdout(), "\n# File Tree Structure (Preview)\n");
+            let _ = writeln!(std::io::stdout(), "{}\n", markdown::TREE_ORDER_NOTE);
             print_tree(&file_tree, 0);
         }
         if !final_args.token_count {
@@ -368,7 +411,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 file_metadata: final_args.file_metadata,
             };
             let enc_strategy = config.encoding_strategy.as_deref();
-            println!("\n# Token Count Estimation\n");
+            let _ = writeln!(std::io::stdout(), "\n# Token Count Estimation\n");
             let mut total_tokens = 0;
             total_tokens +=
                 estimate_tokens(encoding, &format!("{}\n\n", markdown::REPORT_TITLE_LINE));
@@ -403,12 +446,16 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                 encoding,
                 &format!("{}0000000000000000\n\n", markdown::CONTENT_HASH_PREFIX),
             );
-            total_tokens += estimate_tokens(encoding, "## File Tree Structure\n\n");
+            let tree_header = format!(
+                "## File Tree Structure\n\n{}\n\n",
+                markdown::TREE_ORDER_NOTE
+            );
+            total_tokens += estimate_tokens(encoding, &tree_header);
             let tree_tokens = count_tree_tokens(&file_tree, 0, encoding);
             total_tokens += tree_tokens;
             // The `## Skipped` section is part of the generated report.
             total_tokens += skipped_section_tokens(encoding, &skipped)?;
-            let file_tokens: usize = files
+            let per_file: Vec<usize> = files
                 .iter()
                 .map(|entry| {
                     count_file_tokens(
@@ -420,11 +467,48 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                         &ts_config,
                     )
                 })
-                .sum();
+                .collect();
+            // With `--max-tokens` the document stops at the budget: files are
+            // taken in order, the first one that does not fit is cut to the
+            // remaining budget, and the rest are omitted.
+            let mut file_tokens = 0usize;
+            let mut omitted = 0usize;
+            match final_args.max_tokens {
+                Some(budget) => {
+                    let mut remaining = budget.saturating_sub(total_tokens);
+                    // Whole files while they fit; the first that does not is the crossing file.
+                    let crossing = per_file.iter().position(|tokens| {
+                        let fits = *tokens <= remaining;
+                        if fits {
+                            file_tokens += tokens;
+                            remaining -= tokens;
+                        }
+                        !fits
+                    });
+                    if let Some(i) = crossing {
+                        // The real writer clamps it with the same helper, or omits it
+                        // when not even its header fits.
+                        let mut scratch = Vec::new();
+                        #[rustfmt::skip]
+                        let fit = markdown::render_truncated_to_fit(base_path, files[i].path(), &mut scratch, final_args.line_numbers, enc_strategy, &ts_config, encoding, remaining);
+                        file_tokens += fit.unwrap_or(0);
+                        omitted = per_file.len() - i - usize::from(fit.is_some());
+                    }
+                }
+                None => file_tokens = per_file.iter().sum(),
+            }
             total_tokens += file_tokens;
-            println!("Estimated total tokens: {}", total_tokens);
-            println!("File tree tokens: {}", tree_tokens);
-            println!("File content tokens: {}", file_tokens);
+            let _ = writeln!(
+                std::io::stdout(),
+                "Estimated total tokens: {}",
+                total_tokens
+            );
+            let _ = writeln!(std::io::stdout(), "File tree tokens: {}", tree_tokens);
+            let _ = writeln!(std::io::stdout(), "File content tokens: {}", file_tokens);
+            if let Some(budget) = final_args.max_tokens {
+                #[rustfmt::skip]
+                let _ = writeln!(std::io::stdout(), "Token budget: {budget} (files omitted: {omitted})");
+            }
         }
         return Ok(());
     }
@@ -436,10 +520,32 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     // B8: --diff-only only takes effect together with auto_diff (+ timestamped
     // output). Warn instead of silently emitting full file contents.
     if final_args.diff_only && !config.auto_diff.unwrap_or(false) && !silent {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "⚠️  --diff-only has no effect without auto_diff (it also needs timestamped_output). \
              Full file contents will be emitted. Enable auto_diff = true + timestamped_output = true to use diff-only mode."
         );
+    }
+
+    // Graceful degradation (before the auto-diff branch so both paths warn): warn if tree-sitter flags are used without the feature.
+    // `--truncate` defaults to "smart", so it only matters (and only warns) when a
+    // token budget is actually being applied; a plain default run stays quiet.
+    #[cfg_attr(feature = "tree-sitter-base", allow(unused_variables))]
+    let smart_truncate_requested =
+        final_args.truncate == "smart" && final_args.max_tokens.is_some();
+    if !silent && (final_args.signatures || final_args.structure || smart_truncate_requested) {
+        #[cfg(not(feature = "tree-sitter-base"))]
+        {
+            let _ = writeln!(
+                std::io::stderr(),
+                "⚠️  --signatures/--structure/--truncate smart require tree-sitter support."
+            );
+            let _ = writeln!(
+                std::io::stderr(),
+                "   Install with: cargo install context-builder --features tree-sitter-all"
+            );
+            let _ = writeln!(std::io::stderr(), "   Falling back to standard output.\n");
+        }
     }
 
     if config.auto_diff.unwrap_or(false) {
@@ -483,7 +589,8 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             Ok(state) => state,
             Err(e) => {
                 if !silent {
-                    eprintln!(
+                    let _ = writeln!(
+                        std::io::stderr(),
                         "Warning: Failed to read cache (proceeding without diff): {}",
                         e
                     );
@@ -512,35 +619,47 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
         let debug_autodiff = std::env::var("CB_DEBUG_AUTODIFF").is_ok();
         if debug_autodiff {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] cache file: {}",
                 cache_manager.debug_cache_file_path().display()
             );
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] config_hash current={} prev={:?} invalidated={}",
                 current_state.config_hash,
                 previous_state.as_ref().map(|s| s.config_hash.clone()),
                 effective_previous.is_none() && previous_state.is_some()
             );
-            eprintln!("[DEBUG][AUTODIFF] effective_config: {:?}", effective_config);
+            let _ = writeln!(
+                std::io::stderr(),
+                "[DEBUG][AUTODIFF] effective_config: {:?}",
+                effective_config
+            );
             if let Some(prev) = previous_state.as_ref() {
-                eprintln!("[DEBUG][AUTODIFF] raw previous files: {}", prev.files.len());
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "[DEBUG][AUTODIFF] raw previous files: {}",
+                    prev.files.len()
+                );
             }
             if let Some(prev) = effective_previous {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "[DEBUG][AUTODIFF] effective previous files: {}",
                     prev.files.len()
                 );
                 for k in prev.files.keys() {
-                    eprintln!("  PREV: {}", k.display());
+                    let _ = writeln!(std::io::stderr(), "  PREV: {}", k.display());
                 }
             }
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "[DEBUG][AUTODIFF] current files: {}",
                 current_state.files.len()
             );
             for k in current_state.files.keys() {
-                eprintln!("  CURR: {}", k.display());
+                let _ = writeln!(std::io::stderr(), "  CURR: {}", k.display());
             }
         }
 
@@ -628,43 +747,59 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     e
                 )));
             }
-            let mut final_output = fs::File::create(output_path)?;
-            final_output.write_all(final_doc.as_bytes())?;
+            let mut final_output =
+                fs::File::create(output_path).map_err(|e| write_error(output_path, e))?;
+            final_output
+                .write_all(final_doc.as_bytes())
+                .map_err(|e| write_error(output_path, e))?;
         }
 
         // 6. Update cache with current state
         if let Err(e) = cache_manager.write_cache(&current_state)
             && !silent
         {
-            eprintln!("Warning: failed to update state cache: {}", e);
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: failed to update state cache: {}",
+                e
+            );
         }
 
         let duration = start_time.elapsed();
         if !silent && !to_stdout {
             if let Some(comp) = &comparison {
                 if comp.summary.has_changes() {
-                    println!(
+                    let _ = writeln!(
+                        std::io::stdout(),
                         "Documentation created successfully with {} changes: {}",
-                        comp.summary.total_changes, final_args.output
+                        comp.summary.total_changes,
+                        final_args.output
                     );
                 } else {
-                    println!(
+                    let _ = writeln!(
+                        std::io::stdout(),
                         "Documentation created successfully (no changes detected): {}",
                         final_args.output
                     );
                 }
             } else {
-                println!(
+                let _ = writeln!(
+                    std::io::stdout(),
                     "Documentation created successfully (initial state): {}",
                     final_args.output
                 );
             }
-            println!("Processing time: {:.2?}", duration);
+            let _ = writeln!(std::io::stdout(), "Processing time: {:.2?}", duration);
         }
         if !silent {
             // Non-blocking. File count is not a cost proxy; this estimate is.
             // Stderr so `-o -` stays a clean document.
-            print_context_window_warning(final_doc.len(), final_args.max_tokens, &files);
+            print_context_window_warning(
+                final_doc.len(),
+                final_args.max_tokens,
+                &files,
+                !final_args.filter.is_empty(),
+            );
         }
         return Ok(());
     }
@@ -674,20 +809,16 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
     let ts_config = markdown::TreeSitterConfig {
         signatures: final_args.signatures,
         structure: final_args.structure,
-        truncate: final_args.truncate.clone(),
+        // Without tree-sitter support "smart" truncation cannot happen; report the
+        // mode that is actually used (byte) in truncation notices.
+        truncate: if cfg!(feature = "tree-sitter-base") {
+            final_args.truncate.clone()
+        } else {
+            "byte".to_string()
+        },
         visibility: final_args.visibility.clone(),
         file_metadata: final_args.file_metadata,
     };
-
-    // Graceful degradation: warn if tree-sitter flags are used without the feature
-    if !silent && (ts_config.signatures || ts_config.structure || ts_config.truncate == "smart") {
-        #[cfg(not(feature = "tree-sitter-base"))]
-        {
-            eprintln!("⚠️  --signatures/--structure/--truncate smart require tree-sitter support.");
-            eprintln!("   Build with: cargo build --features tree-sitter-all");
-            eprintln!("   Falling back to standard output.\n");
-        }
-    }
 
     let output_bytes = generate_markdown(
         &final_args.output,
@@ -707,13 +838,22 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
 
     let duration = start_time.elapsed();
     if !silent && !to_stdout {
-        println!("Documentation created successfully: {}", final_args.output);
-        println!("Processing time: {:.2?}", duration);
+        let _ = writeln!(
+            std::io::stdout(),
+            "Documentation created successfully: {}",
+            final_args.output
+        );
+        let _ = writeln!(std::io::stdout(), "Processing time: {:.2?}", duration);
     }
     if !silent {
         // Non-blocking. File count is not a cost proxy; this estimate is.
         // Stderr so `-o -` stays a clean document.
-        print_context_window_warning(output_bytes, final_args.max_tokens, &files);
+        print_context_window_warning(
+            output_bytes,
+            final_args.max_tokens,
+            &files,
+            !final_args.filter.is_empty(),
+        );
     }
 
     Ok(())
@@ -727,6 +867,18 @@ fn skipped_section_tokens(encoding: Encoding, skipped: &[SkippedFile]) -> io::Re
     Ok(estimate_tokens(encoding, &String::from_utf8_lossy(&buf)))
 }
 
+/// True when a file's body will be replaced by an outline: `--signatures` on
+/// an extension tree-sitter supports (always false without tree-sitter support
+/// compiled in, where the full content is written). `--structure` only appends
+/// a summary after the full body, so it does not shrink the output.
+fn body_is_outlined(args: &Args, path: &Path) -> bool {
+    args.signatures
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(tree_sitter::is_supported_extension)
+}
+
 /// Estimates tokens using the ~4 bytes/token heuristic. Warns when output
 /// exceeds 128K tokens — beyond this size, context quality degrades
 /// significantly for most LLM use cases.
@@ -736,11 +888,16 @@ fn print_context_window_warning(
     output_bytes: usize,
     max_tokens: Option<usize>,
     files: &[ignore::DirEntry],
+    filter_applied: bool,
 ) {
     let estimated_tokens = output_bytes / 4;
 
     // Stderr only: this notice must never mix into a captured or piped document.
-    eprintln!("Estimated tokens: ~{}K", estimated_tokens / 1000);
+    let _ = writeln!(
+        std::io::stderr(),
+        "Estimated tokens: ~{}K",
+        estimated_tokens / 1000
+    );
 
     // If the user already set --max-tokens, they're managing their budget
     if max_tokens.is_some() {
@@ -755,17 +912,21 @@ fn print_context_window_warning(
 
     let paths: Vec<&Path> = files.iter().map(|entry| entry.path()).collect();
 
-    eprintln!();
-    eprintln!(
+    let _ = writeln!(std::io::stderr());
+    let _ = writeln!(
+        std::io::stderr(),
         "⚠️  Output is ~{}K tokens — recommended limit is 128K for effective LLM context.",
         estimated_tokens / 1000
     );
-    eprintln!("   Large contexts degrade response quality. Consider narrowing the scope:");
-    eprintln!();
-    for line in context_window_suggestions(&paths) {
-        eprintln!("   • {line}");
+    let _ = writeln!(
+        std::io::stderr(),
+        "   Large contexts degrade response quality. Consider narrowing the scope:"
+    );
+    let _ = writeln!(std::io::stderr());
+    for line in context_window_suggestions(&paths, filter_applied) {
+        let _ = writeln!(std::io::stderr(), "   • {line}");
     }
-    eprintln!();
+    let _ = writeln!(std::io::stderr());
 }
 
 /// `--filter` extensions to suggest for this run: the most common extensions
@@ -808,9 +969,10 @@ fn is_suggestable_filter_ext(ext: &str) -> bool {
 
 /// Copy-pasteable commands for the >128K warning. Every flag here is one the
 /// CLI actually honors (`--ignore docs,assets` included).
-fn context_window_suggestions(paths: &[&Path]) -> Vec<String> {
+fn context_window_suggestions(paths: &[&Path], filter_applied: bool) -> Vec<String> {
     let mut lines: Vec<String> = ADVICE.iter().map(|(f, d)| advice_line(f, d)).collect();
-    if let Some(exts) = suggested_filter_exts(paths) {
+    // A run that already passes `--filter` has nothing more to gain from that advice.
+    if !filter_applied && let Some(exts) = suggested_filter_exts(paths) {
         lines.insert(1, advice_line(&format!("--filter {exts}"), FILTER_ADVICE));
     }
     lines
@@ -933,6 +1095,11 @@ fn generate_markdown_with_diff(
 
     // File tree
     output.push_str("## File Tree Structure\n\n");
+    // Bodies follow only when not diff-only; the note explains their order.
+    if !diff_config.diff_only {
+        output.push_str(markdown::TREE_ORDER_NOTE);
+        output.push_str("\n\n");
+    }
     let mut tree_output = Vec::new();
     tree::write_tree_to_file(&mut tree_output, file_tree, 0)?;
     output.push_str(&String::from_utf8_lossy(&tree_output));
@@ -958,7 +1125,9 @@ fn generate_markdown_with_diff(
                 // compares content hashes (file bytes), not mtime.
                 if args.file_metadata {
                     output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-                    output.push_str(&format!("- Modified: {:?}\n\n", file_state.modified));
+                    let modified = chrono::DateTime::<chrono::Utc>::from(file_state.modified);
+                    let stamp = modified.format("%Y-%m-%d %H:%M:%S UTC");
+                    output.push_str(&format!("- Modified: {stamp}\n\n"));
                 }
 
                 // Determine language from file extension (canonical map —
@@ -1004,6 +1173,48 @@ fn generate_markdown_with_diff(
     Ok(output)
 }
 
+/// The CLI definition plus `--config` / `--no-config`. They are read straight
+/// from the matches, so the many `Args { .. }` literals (library users, tests)
+/// do not need new fields.
+fn command_with_config_flags() -> clap::Command {
+    Args::command()
+        .arg(
+            clap::Arg::new("config")
+                .long("config")
+                .value_name("PATH")
+                .conflicts_with("no_config")
+                .help("Use this config file instead of <input>/context-builder.toml"),
+        )
+        .arg(
+            clap::Arg::new("no_config")
+                .long("no-config")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "Ignore any context-builder.toml; use only command-line options and defaults",
+                ),
+        )
+}
+
+/// Which config applies: none (`--no-config`), the named file (`--config`,
+/// which must exist and parse), or `<project_root>/context-builder.toml`.
+fn select_config(matches: &clap::ArgMatches, project_root: &Path) -> io::Result<Option<Config>> {
+    if matches.get_flag("no_config") {
+        Ok(None)
+    } else if let Some(path) = matches.get_one::<String>("config") {
+        Ok(Some(crate::config::load_config_file(Path::new(path))?))
+    } else {
+        Ok(load_config_from_path(project_root))
+    }
+}
+
+/// An output-path error naming the path (the bare OS error does not).
+pub(crate) fn write_error(path: &Path, err: io::Error) -> io::Error {
+    io::Error::new(
+        err.kind(),
+        format!("cannot write '{}': {err}", path.display()),
+    )
+}
+
 pub fn run() -> io::Result<()> {
     env_logger::init();
     // Parse via `ArgMatches` (not `Args::parse`) so we can tell whether the
@@ -1011,7 +1222,38 @@ pub fn run() -> io::Result<()> {
     // `--encoding o200k_base` and `-o output.md` carry the same value as the
     // default, so the value alone can't reveal an intent to override a
     // non-default config (see resolver).
-    let matches = Args::command().get_matches();
+    let matches = command_with_config_flags().get_matches();
+    run_matches(&matches, std::env::args_os().len())
+}
+
+/// [`run`] with an explicit argument vector (program name first) instead of
+/// the process arguments, so the whole command line path can run in-process.
+/// A bad command line is returned as `InvalidInput` instead of exiting;
+/// `--help` and `--version` print and return `Ok`.
+pub fn run_from<I, T>(argv: I) -> io::Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
+    let matches = match command_with_config_flags().try_get_matches_from(&argv) {
+        Ok(matches) => matches,
+        // `--help` / `--version` are requests, not mistakes: print and succeed.
+        Err(e)
+            if matches!(
+                e.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            e.print()?;
+            return Ok(());
+        }
+        Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string())),
+    };
+    run_matches(&matches, argv.len())
+}
+
+fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let explicit = crate::config_resolver::ExplicitCli {
         truncate: matches.value_source("truncate") == Some(clap::parser::ValueSource::CommandLine),
         visibility: matches.value_source("visibility")
@@ -1024,34 +1266,47 @@ pub fn run() -> io::Result<()> {
         // `-o` is used verbatim (no output_folder / timestamp rewrite).
         output: matches.value_source("output") == Some(clap::parser::ValueSource::CommandLine),
     };
-    let args = Args::from_arg_matches(&matches)
-        .expect("arguments were already validated by get_matches()");
+    let args =
+        Args::from_arg_matches(matches).expect("arguments were already validated by get_matches()");
 
     // Handle init command first
     if args.init {
-        return init_config();
+        return init_config_in(Path::new(&args.input));
     }
 
     // Determine project root first
     let project_root = Path::new(&args.input);
-    let config = load_config_from_path(project_root);
+    let config = select_config(matches, project_root)?;
 
     // Handle early clear-cache request (runs even if no config or other args)
     if args.clear_cache {
         let cache_path = project_root.join(".context-builder").join("cache");
         if cache_path.exists() {
             match fs::remove_dir_all(&cache_path) {
-                Ok(()) => println!("Cache cleared: {}", cache_path.display()),
-                Err(e) => eprintln!("Failed to clear cache ({}): {}", cache_path.display(), e),
+                Ok(()) => {
+                    let _ = writeln!(std::io::stdout(), "Cache cleared: {}", cache_path.display());
+                }
+                Err(e) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "Failed to clear cache ({}): {}",
+                        cache_path.display(),
+                        e
+                    );
+                }
             }
         } else {
-            println!("No cache directory found at {}", cache_path.display());
+            let _ = writeln!(
+                std::io::stdout(),
+                "No cache directory found at {}",
+                cache_path.display()
+            );
         }
         return Ok(());
     }
 
-    if std::env::args().len() == 1 && config.is_none() {
-        Args::command().print_help()?;
+    if argc == 1 && config.is_none() {
+        command_with_config_flags().print_help()?;
         return Ok(());
     }
 
@@ -1065,7 +1320,7 @@ pub fn run() -> io::Result<()> {
 
     if !silent {
         for warning in &resolution.warnings {
-            eprintln!("Warning: {}", warning);
+            let _ = writeln!(std::io::stderr(), "Warning: {}", warning);
         }
     }
 
@@ -1106,25 +1361,46 @@ pub fn run() -> io::Result<()> {
 }
 
 /// Detect major file types in the current directory respecting .gitignore and default ignore patterns
+#[cfg(test)]
 fn detect_major_file_types() -> io::Result<Vec<String>> {
+    detect_major_file_types_in(Path::new("."))
+}
+
+/// Same as [`detect_major_file_types`] for the project at `root`.
+fn detect_major_file_types_in(root: &Path) -> io::Result<Vec<String>> {
     use std::collections::HashMap;
     let mut extension_counts = HashMap::new();
 
     // Use the same default ignore patterns as the main application
     let default_ignores = vec![
-        "docs".to_string(),
         "target".to_string(),
         ".git".to_string(),
         "node_modules".to_string(),
     ];
 
     // Collect files using the same logic as the main application
-    let files = crate::file_utils::collect_files(Path::new("."), &[], &default_ignores, &[])?;
+    let files = crate::file_utils::collect_files(root, &[], &default_ignores, &[])?;
+    // Only suggest what a default run would actually include. An explicit
+    // `filter` entry for an asset type (`png`, `pdf`, …) opts those files back
+    // in, so suggesting one would undo the default asset/size/secret skips.
+    let policy = ContentPolicy::new(DEFAULT_MAX_FILE_SIZE_SPEC, &[], false);
+    let (files, skipped) = content_filter::partition(files, root, &policy);
+    // An extension that also names a skipped file (`app.js` next to `app.min.js`,
+    // `logo.svg` over the size limit) is left out: an explicit filter entry for
+    // it would opt the skipped files back in, even though the regular ones are fine.
+    let skipped_exts: std::collections::HashSet<String> = skipped
+        .iter()
+        .filter_map(|file| Path::new(&file.path).extension())
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+        .collect();
 
     // Count extensions from the filtered file list
     for entry in files {
         let path = entry.path();
         if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+            if skipped_exts.contains(&extension.to_ascii_lowercase()) {
+                continue;
+            }
             // Count the extension occurrences
             *extension_counts.entry(extension.to_string()).or_insert(0) += 1;
         }
@@ -1141,17 +1417,31 @@ fn detect_major_file_types() -> io::Result<Vec<String>> {
 }
 
 /// Initialize a new context-builder.toml config file in the current directory with sensible defaults
+#[cfg(test)]
 fn init_config() -> io::Result<()> {
-    let config_path = Path::new("context-builder.toml");
+    init_config_in(Path::new("."))
+}
+
+/// Write `context-builder.toml` into the project at `root` (`-d` target).
+fn init_config_in(root: &Path) -> io::Result<()> {
+    let config_path_buf = root.join("context-builder.toml");
+    let config_path = config_path_buf.as_path();
 
     if config_path.exists() {
-        println!("Config file already exists at {}", config_path.display());
-        println!("If you want to replace it, please remove it manually first.");
+        let _ = writeln!(
+            std::io::stdout(),
+            "Config file already exists at {}",
+            config_path.display()
+        );
+        let _ = writeln!(
+            std::io::stdout(),
+            "If you want to replace it, please remove it manually first."
+        );
         return Ok(());
     }
 
     // Detect major file types in the current directory
-    let filter_suggestions = match detect_major_file_types() {
+    let filter_suggestions = match detect_major_file_types_in(root) {
         Ok(extensions) => extensions,
         _ => vec!["rs".to_string(), "toml".to_string()], // fallback to defaults
     };
@@ -1169,8 +1459,10 @@ fn init_config() -> io::Result<()> {
 # Output file name (or base name when timestamped_output is true)
 output = "context.md"
 
-# Optional folder to place the generated output file(s) in
-output_folder = "docs"
+# Optional folder (relative to this project) to place the generated output in.
+# Kept out of the files scanned, so reports are never fed back in. Consider
+# adding `.context-builder/` to your .gitignore.
+output_folder = ".context-builder/out"
 
 # Append a UTC timestamp to the output file name (before extension)
 timestamped_output = true
@@ -1185,7 +1477,7 @@ diff_only = false
 filter = {}
 
 # Paths or gitignore-style globs to ignore (names, paths like "crates/core", globs like "*.lock")
-ignore = ["docs", "target", ".git", "node_modules"]
+ignore = ["target", ".git", "node_modules"]
 
 # Dependency lockfiles are skipped by default, including when `filter` matches
 # their type (for example toml or lock). Set true or pass --include-lockfiles.
@@ -1215,9 +1507,20 @@ file_metadata = false
     let mut file = File::create(config_path)?;
     file.write_all(default_config_content.as_bytes())?;
 
-    println!("Config file created at {}", config_path.display());
-    println!("Detected file types: {}", filter_suggestions.join(", "));
-    println!("You can now customize it according to your project needs.");
+    let _ = writeln!(
+        std::io::stdout(),
+        "Config file created at {}",
+        config_path.display()
+    );
+    let _ = writeln!(
+        std::io::stdout(),
+        "Detected file types: {}",
+        filter_suggestions.join(", ")
+    );
+    let _ = writeln!(
+        std::io::stdout(),
+        "You can now customize it according to your project needs."
+    );
 
     Ok(())
 }
@@ -1937,7 +2240,7 @@ mod tests {
             Path::new("cmd/main.go"),
             Path::new("README.md"),
         ];
-        let lines = context_window_suggestions(&go);
+        let lines = context_window_suggestions(&go, false);
         let text = lines.join("\n");
         assert!(
             text.contains("--filter go,md"),
@@ -1960,7 +2263,7 @@ mod tests {
             Path::new("src/util.py"),
             Path::new("tests/test_app.py"),
         ];
-        let py_lines = context_window_suggestions(&python);
+        let py_lines = context_window_suggestions(&python, false);
         assert!(
             py_lines.iter().any(|line| line.contains("--filter py")),
             "{py_lines:?}"
@@ -1997,9 +2300,22 @@ mod tests {
     }
 
     #[test]
+    fn test_context_window_suggestions_omit_filter_when_already_applied() {
+        let paths = [Path::new("a.rs"), Path::new("b.rs")];
+        let with = context_window_suggestions(&paths, false);
+        assert!(with.iter().any(|l| l.contains("--filter rs")));
+        let without = context_window_suggestions(&paths, true);
+        assert!(
+            !without.iter().any(|l| l.contains("--filter")),
+            "{without:?}"
+        );
+        assert_eq!(without.len(), with.len() - 1);
+    }
+
+    #[test]
     fn test_context_window_suggestions_omit_filter_without_extensions() {
         let paths = [Path::new("Makefile"), Path::new("LICENSE")];
-        let lines = context_window_suggestions(&paths);
+        let lines = context_window_suggestions(&paths, false);
         assert!(
             !lines.iter().any(|line| line.contains("--filter")),
             "no extensions means no --filter command to suggest: {lines:?}"
@@ -2025,7 +2341,7 @@ mod tests {
         }
 
         let output_bytes = 100_000;
-        print_context_window_warning(output_bytes * 4, None, &[]);
+        print_context_window_warning(output_bytes * 4, None, &[], false);
 
         unsafe {
             std::env::remove_var("CB_SILENT");
@@ -2040,21 +2356,21 @@ mod tests {
     #[test]
     fn test_context_window_warning_over_limit() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, None, &[]);
+        print_context_window_warning(output_bytes * 4, None, &[], false);
     }
 
     #[test]
     fn test_context_window_warning_with_max_tokens() {
         let output_bytes = 600_000;
-        print_context_window_warning(output_bytes * 4, Some(100_000), &[]);
+        print_context_window_warning(output_bytes * 4, Some(100_000), &[], false);
     }
 
     #[test]
     fn test_print_context_window_warning_various_sizes() {
-        print_context_window_warning(50_000, None, &[]);
-        print_context_window_warning(200_000, None, &[]);
-        print_context_window_warning(500_000, None, &[]);
-        print_context_window_warning(1_000_000, None, &[]);
+        print_context_window_warning(50_000, None, &[], false);
+        print_context_window_warning(200_000, None, &[], false);
+        print_context_window_warning(500_000, None, &[], false);
+        print_context_window_warning(1_000_000, None, &[], false);
     }
 
     #[test]
@@ -2679,7 +2995,7 @@ mod tests {
     #[test]
     fn test_print_context_window_warning_exact_limit() {
         let output_bytes = 128_000 * 4;
-        print_context_window_warning(output_bytes, None, &[]);
+        print_context_window_warning(output_bytes, None, &[], false);
     }
 
     #[test]
@@ -3249,5 +3565,70 @@ mod tests {
         assert_eq!(info, "text");
         assert_eq!(fence.len(), 4, "{doc}");
         assert_eq!(body, "before\n```\nafter\n");
+    }
+}
+
+#[cfg(test)]
+mod config_selection_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn select(argv: &[&str], root: &Path) -> io::Result<Option<Config>> {
+        let mut full = vec!["context-builder"];
+        full.extend_from_slice(argv);
+        let matches = command_with_config_flags()
+            .try_get_matches_from(full)
+            .unwrap();
+        select_config(&matches, root)
+    }
+
+    #[test]
+    fn project_config_applies_by_default_and_no_config_ignores_it() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("context-builder.toml"),
+            "line_numbers = true\n",
+        )
+        .unwrap();
+        let cfg = select(&[], dir.path()).unwrap().unwrap();
+        assert_eq!(cfg.line_numbers, Some(true));
+        assert!(select(&["--no-config"], dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn explicit_config_replaces_the_project_one() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("context-builder.toml"),
+            "line_numbers = true\n",
+        )
+        .unwrap();
+        let other = dir.path().join("other.toml");
+        fs::write(&other, "line_numbers = false\n").unwrap();
+        let cfg = select(&["--config", other.to_str().unwrap()], dir.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cfg.line_numbers, Some(false));
+    }
+
+    #[test]
+    fn explicit_config_that_is_missing_is_an_error() {
+        let dir = tempdir().unwrap();
+        let err = select(&["--config", "nope.toml"], dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("cannot read config 'nope.toml'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn config_and_no_config_conflict() {
+        let r = command_with_config_flags().try_get_matches_from([
+            "context-builder",
+            "--config",
+            "a.toml",
+            "--no-config",
+        ]);
+        assert!(r.is_err());
     }
 }

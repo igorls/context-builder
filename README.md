@@ -50,7 +50,7 @@ It's a command-line utility that recursively processes directories and creates c
   Processes thousands of files in seconds by leveraging all available CPU cores.
 
 - 🧠 **Smart & Efficient File Discovery:**
-  Respects `.gitignore` and custom ignore patterns out-of-the-box. Ignore files inside the directory apply even when it is not a git checkout; ignore files in parent directories apply only when a `.git` directory or file exists at that directory or an ancestor. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) at any depth even without a `.git` directory. `target` is excluded only at the directory root, and any directory that contains a `CACHEDIR.TAG` file (such as Cargo's `target/`) is skipped.
+  Respects `.gitignore` and custom ignore patterns out-of-the-box. Ignore files inside the directory apply even when it is not a git checkout; ignore files in parent directories apply only when a `.git` directory or file exists at that directory or an ancestor. Automatically excludes common heavy directories (`node_modules`, `dist`, `build`, `__pycache__`, `.venv`, `vendor`, etc.) at any depth even without a `.git` directory (keep one with `--ignore '!build'`; dot-prefixed ones such as `.next` also need `--hidden`). `target` is excluded only at the directory root, and any directory that contains a `CACHEDIR.TAG` file (such as Cargo's `target/`) is skipped.
 
 - 📊 **Relevance-Based File Ordering:**
   The root README comes first, then other root manifests (`Cargo.toml`, `package.json`, …) and root project docs. Source follows, grouped by directory: that directory's manifest and README, then entry points (`main`, `lib`, `index`, …), then the remaining files. Tests, documentation (including `CHANGELOG` and `HISTORY`, even at the repo root), and build/CI files come after source. Dependency lockfiles are omitted unless you pass `--include-lockfiles`.
@@ -91,11 +91,22 @@ It's a command-line utility that recursively processes directories and creates c
 
 Pre-built binaries include full Tree-Sitter AST support. The installer verifies SHA256 checksums before installing.
 
+The checksum-verified manual steps below need no script and pin the exact release. (`install.sh` can also pin with `CONTEXT_BUILDER_VERSION=x.y.z` from the first release after v0.11.0 onward; download it from that release's tag, read it, then run it. Do not run it from `master`.)
+
+Download the archive and `SHA256SUMS` from the [release page](https://github.com/igorls/context-builder/releases/tag/v0.11.0) and verify them yourself:
+
 ```bash
-curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | bash
+V=0.11.0; T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin
+curl -fsSLO "https://github.com/igorls/context-builder/releases/download/v$V/context-builder-$T.tar.gz"
+curl -fsSLO "https://github.com/igorls/context-builder/releases/download/v$V/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS \
+  && tar xzf "context-builder-$T.tar.gz" \
+  && mkdir -p ~/.local/bin \
+  && install -m 755 context-builder ~/.local/bin/
+# macOS: use `shasum -a 256 --ignore-missing -c SHA256SUMS` instead of sha256sum
 ```
 
-> **Note:** piping remote scripts into `sh` is a matter of trust — some scanners flag the `curl | bash` pattern generically. If you prefer, review [install.sh](install.sh) first or use one of the alternatives below.
+> **For agents and automation:** never pipe a remote script into a shell. Use a pinned `cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all`, or the checksum-verified steps above.
 
 ### Windows (PowerShell)
 
@@ -110,7 +121,7 @@ $env:PATH += ";$env:LOCALAPPDATA\Programs\context-builder"
 ### From crates.io
 
 ```bash
-cargo install context-builder --features tree-sitter-all
+cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all
 ```
 
 ### From source
@@ -227,6 +238,8 @@ context-builder --hidden --include-secrets  # also .env, .npmrc, …
 
 For more complex projects, you can use a `context-builder.toml` file in your project's root directory to store your preferences. This is great for ensuring consistent outputs and avoiding repetitive command-line flags.
 
+Pass `--config path/to/file.toml` to use a different file (it must exist and parse), or `--no-config` to ignore the project's file for one run.
+
 ### Example `context-builder.toml`
 
 ```toml
@@ -305,7 +318,7 @@ encoding_strategy = "detect"
 
 
 
- You can initialize a new configuration file using the `--init` command. This will create a `context-builder.toml` file in your current directory with sensible defaults based on the file types detected in your project. The filter suggestions will be automatically tailored to your project's most common file extensions while respecting `.gitignore` patterns and common ignore directories like `target`, `node_modules`, etc. This makes it more likely to include the files you actually want to process.
+ You can initialize a new configuration file using the `--init` command. This creates a `context-builder.toml` file in the `-d` directory (the current directory by default) with sensible defaults based on the file types detected in your project. The filter suggestions will be automatically tailored to your project's most common file extensions while respecting `.gitignore` patterns and common ignore directories like `target`, `node_modules`, etc. This makes it more likely to include the files you actually want to process.
 
 
 
