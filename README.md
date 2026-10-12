@@ -106,6 +106,8 @@ sha256sum --ignore-missing -c SHA256SUMS \
 # macOS: use `shasum -a 256 --ignore-missing -c SHA256SUMS` instead of sha256sum
 ```
 
+> On Alpine and on glibc older than 2.34 the installer needs the static `musl` build. Releases that do not include one make it stop with instructions (`cargo install context-builder --locked`) rather than install a binary that will not start; force a choice with `CONTEXT_BUILDER_LIBC=musl` or `gnu`. It verifies the SHA256 checksum, and warns if another `context-builder` on your `PATH` shadows the one it installed.
+
 > **For agents and automation:** never pipe a remote script into a shell. Use a pinned `cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all`, or the checksum-verified steps above.
 
 ### Windows (PowerShell)
