@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **`--config <path>` and `--no-config` (#21).** Use another config file, or ignore the project one, for a single run.
 - **`--token-count` honors `--max-tokens` (#21 B21).** It reports the capped size, the budget, and how many files would be omitted.
 - **Python `--signatures` headings use `#` (#22 B16).** Section headings inside a `python` block were `// Functions`. `--structure`'s help no longer promises imports/exports, which it never emitted.
 - **`--structure` code-line counts (#22 B15).** TypeScript, JavaScript, Python, Go, Java and C/C++ no longer report `(0 code)`; blank lines and whole-line comments are excluded, as for Rust.

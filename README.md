@@ -234,6 +234,8 @@ context-builder --hidden --include-secrets  # also .env, .npmrc, …
 
 For more complex projects, you can use a `context-builder.toml` file in your project's root directory to store your preferences. This is great for ensuring consistent outputs and avoiding repetitive command-line flags.
 
+Pass `--config path/to/file.toml` to use a different file (it must exist and parse), or `--no-config` to ignore the project's file for one run.
+
 ### Example `context-builder.toml`
 
 ```toml
