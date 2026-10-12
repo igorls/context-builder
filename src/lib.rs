@@ -1306,7 +1306,7 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     }
 
     if argc == 1 && config.is_none() {
-        Args::command().print_help()?;
+        command_with_config_flags().print_help()?;
         return Ok(());
     }
 
