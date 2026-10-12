@@ -318,16 +318,20 @@ fn resolve_output_path(
 
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
 
-        let new_filename = format!("{}_{}.{}", stem, timestamp, extension);
-
-        let new_output = if let Some(ref folder) = anchored_folder {
-            folder.join(new_filename).to_string_lossy().to_string()
-        } else {
-            path.with_file_name(new_filename)
-                .to_string_lossy()
-                .to_string()
+        // Two runs in the same second must not share a name (the second would
+        // either prompt/cancel or silently overwrite the first snapshot): add
+        // `-1`, `-2`, … until the name is free. Still matches `stem_*.ext`.
+        let candidate = |suffix: &str| {
+            let new_filename = format!("{}_{}{}.{}", stem, timestamp, suffix, extension);
+            if let Some(ref folder) = anchored_folder {
+                folder.join(new_filename).to_string_lossy().to_string()
+            } else {
+                path.with_file_name(new_filename)
+                    .to_string_lossy()
+                    .to_string()
+            }
         };
-        args.output = new_output;
+        args.output = first_free_name(candidate, |p| Path::new(p).exists());
     }
 
     // Validate output folder exists if specified (check the path we will write to)
@@ -352,6 +356,20 @@ fn anchor_output_folder(output_folder: &str, project_root: &Path) -> PathBuf {
     } else {
         project_root.join(folder)
     }
+}
+
+/// `candidate("")`, else `candidate("-1")`, `candidate("-2")`, … — the first name
+/// `exists` reports as free. (Two processes racing within one second can still
+/// pick the same name; reserving it would leave an empty file that trips the
+/// overwrite prompt, so that case is left alone.)
+fn first_free_name(candidate: impl Fn(&str) -> String, exists: impl Fn(&str) -> bool) -> String {
+    let mut name = candidate("");
+    let mut n = 1;
+    while exists(&name) {
+        name = candidate(&format!("-{n}"));
+        n += 1;
+    }
+    name
 }
 
 #[cfg(test)]
@@ -1053,5 +1071,19 @@ mod tests {
             ExplicitCli::default(),
         );
         assert_eq!(parsed.config.max_file_size, "100");
+    }
+
+    #[test]
+    fn first_free_name_skips_taken_snapshot_names() {
+        let candidate = |suffix: &str| format!("out_20260101000000{suffix}.md");
+        let none = |_: &str| false;
+        assert_eq!(first_free_name(candidate, none), "out_20260101000000.md");
+
+        let taken = ["out_20260101000000.md", "out_20260101000000-1.md"];
+        let exists = |p: &str| taken.contains(&p);
+        assert_eq!(
+            first_free_name(candidate, exists),
+            "out_20260101000000-2.md"
+        );
     }
 }
