@@ -423,7 +423,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     encoding,
                     &format!(
                         "This document contains files from the {} directory with extensions: {} \n",
-                        fences::inline_code(&final_args.input),
+                        fences::inline_code(&markdown::directory_display_name(&final_args.input)),
                         final_args.filter.join(", ")
                     ),
                 );
@@ -432,7 +432,7 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
                     encoding,
                     &format!(
                         "This document contains all files from the {} directory, optimized for LLM consumption.\n",
-                        fences::inline_code(&final_args.input)
+                        fences::inline_code(&markdown::directory_display_name(&final_args.input))
                     ),
                 );
             }

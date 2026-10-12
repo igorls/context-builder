@@ -113,16 +113,7 @@ pub fn generate_markdown(
         path: (output_path != "-").then(|| std::path::PathBuf::from(output_path)),
     };
 
-    let input_dir_name = if input_dir == "." {
-        let current_dir = std::env::current_dir()?;
-        current_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_else(|| current_dir.to_str().unwrap_or("project"))
-            .to_string()
-    } else {
-        input_dir.to_string()
-    };
+    let input_dir_name = directory_display_name(input_dir);
 
     // --- Header + file tree (buffered) --- //
     // Build the header and tree into a buffer first so we can (a) write them in
@@ -1107,6 +1098,26 @@ fn first_visibility_warning_for(ext: &str) -> bool {
     let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
     // `insert` returns true when the value was newly added (first time).
     guard.insert(ext.to_string())
+}
+
+/// The name shown for the input directory in the document header: its last
+/// path component, never the absolute path (which leaks the user's home
+/// directory and username into a document that is meant to be shared).
+pub(crate) fn directory_display_name(input_dir: &str) -> String {
+    use std::path::Component;
+    let path = Path::new(input_dir);
+    // The lexical name the user typed wins (a symlink keeps its own name).
+    let last = path.components().next_back();
+    if let Some(Component::Normal(name)) = last
+        && let Some(name) = name.to_str()
+    {
+        return name.to_string();
+    }
+    // `.`, `..`, `/`, `C:\`: resolve, and never fall back to a path.
+    fs::canonicalize(path)
+        .ok()
+        .and_then(|p| p.file_name().and_then(|n| n.to_str().map(str::to_string)))
+        .unwrap_or_else(|| "project".to_string())
 }
 
 /// Bytes read from the start of a file when deciding text vs binary.
