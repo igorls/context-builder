@@ -188,6 +188,9 @@ fn file_relevance_category(path: &Path, base_path: &Path) -> u8 {
 
     match first {
         "src" | "lib" | "crates" | "packages" | "internal" | "cmd" | "pkg" => 1,
+        // `doc/` is also a real Go package directory (cobra's `doc`): Go files
+        // there are source, not documentation.
+        "doc" if file_extension(name) == Some("go") => 1,
         "docs" | "doc" | "examples" | "scripts" | "tools" | "assets" => 3,
         // Build/CI infrastructure — useful context but not core source.
         ".github" | ".circleci" | ".gitlab" | ".buildkite" => 4,
@@ -447,9 +450,9 @@ pub fn collect_files_reporting(
     // these names. Without the defaults, dependency folders can dominate
     // the output.
     //
-    // IMPORTANT: These are added FIRST so that user ignores can override them.
-    // The ignore crate uses "last-match-wins" semantics, so a user can whitelist
-    // a legitimate "vendor" or "build" dir by passing it as a filter pattern.
+    // A user opts a name back in with a negated ignore (`--ignore '!build'`):
+    // that drops it from this list. (A whitelist glob in `OverrideBuilder`
+    // would instead ignore every file it does not match.)
     //
     // IMPORTANT: Patterns must NOT contain a slash — the ignore crate anchors
     // slash-containing patterns to the root, so `!dir/**` would only match
@@ -476,7 +479,12 @@ pub fn collect_files_reporting(
                        // `.cargo` is deliberately not listed: it is hidden (skipped by default),
                        // and with `--hidden` a project's `.cargo/config.toml` is real config.
     ];
-    for dir in &default_ignores {
+    let opted_in: Vec<&str> = ignores
+        .iter()
+        .filter_map(|pattern| pattern.strip_prefix('!'))
+        .map(|name| name.trim_matches('/'))
+        .collect();
+    for dir in default_ignores.iter().filter(|dir| !opted_in.contains(dir)) {
         // No slash in pattern → matches at any depth (not root-anchored)
         let pattern = format!("!{}", dir);
         if let Err(e) = override_builder.add(&pattern) {
@@ -491,7 +499,7 @@ pub fn collect_files_reporting(
     }
 
     // User-specified ignore patterns (added AFTER defaults so they can override)
-    for pattern in ignores {
+    for pattern in ignores.iter().filter(|p| !p.starts_with('!')) {
         // Attention: Confusing pattern ahead!
         // Add the pattern to the override builder with ! prefix to ignore matching files.
         // In OverrideBuilder, patterns without ! are whitelist (include) patterns,
@@ -753,11 +761,21 @@ fn can_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
 /// Prompts must not go to stdout: `-o -` and any caller capturing stdout would
 /// otherwise treat the question as document content.
 fn prompt_yes(prompt: &str) -> io::Result<bool> {
-    eprint!("{prompt}");
-    io::stderr().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim().eq_ignore_ascii_case("y"))
+    prompt_yes_with(prompt, &mut io::stderr(), &mut io::stdin().lock())
+}
+
+/// [`prompt_yes`] over explicit streams, so the question and the answer
+/// parsing are testable without a terminal.
+fn prompt_yes_with(
+    prompt: &str,
+    out: &mut impl Write,
+    input: &mut impl io::BufRead,
+) -> io::Result<bool> {
+    let _ = write!(out, "{prompt}");
+    out.flush()?;
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
 /// Asks for user confirmation to overwrite an existing file.
@@ -798,6 +816,24 @@ pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prompt_yes_with_accepts_only_y() {
+        for (answer, want) in [
+            ("y\n", true),
+            ("Y\n", true),
+            (" y \n", true),
+            ("n\n", false),
+            ("\n", false),
+            ("yes\n", false),
+            ("", false),
+        ] {
+            let mut out = Vec::new();
+            let got = prompt_yes_with("Overwrite? ", &mut out, &mut answer.as_bytes()).unwrap();
+            assert_eq!(got, want, "{answer:?}");
+            assert_eq!(String::from_utf8(out).unwrap(), "Overwrite? ");
+        }
+    }
+
     #[test]
     fn can_prompt_requires_stdin_and_stderr_terminals() {
         assert!(can_prompt(true, true));
@@ -1738,8 +1774,9 @@ mod tests {
         for path in sources {
             assert_eq!(category_of(path), 1, "{path}");
         }
-        // `doc/` is still documentation. Reclassifying that package is out of scope.
-        assert_eq!(category_of("doc/api.go"), 3);
+        // Go files in a `doc/` package are source; other files there are docs.
+        assert_eq!(category_of("doc/api.go"), 1);
+        assert_eq!(category_of("doc/guide.md"), 3);
     }
 
     #[test]
