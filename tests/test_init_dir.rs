@@ -68,3 +68,25 @@ fn init_targets_the_directory_given_with_d() {
         "output re-ingested"
     );
 }
+
+/// Same as the binary test above, in-process so coverage tools see it.
+#[test]
+fn init_with_d_writes_into_that_directory_in_process() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.path().join("logo.png"), [0u8, 1, 2]).unwrap();
+    context_builder::run_from([
+        "context-builder",
+        "-d",
+        dir.path().to_str().unwrap(),
+        "--init",
+    ])
+    .unwrap();
+    let cfg = std::fs::read_to_string(dir.path().join("context-builder.toml")).unwrap();
+    assert!(cfg.contains("\"rs\""), "{cfg}");
+    assert!(!cfg.contains("png"), "{cfg}");
+    assert!(
+        cfg.contains("output_folder = \".context-builder/out\""),
+        "{cfg}"
+    );
+}
