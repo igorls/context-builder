@@ -753,11 +753,21 @@ fn can_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
 /// Prompts must not go to stdout: `-o -` and any caller capturing stdout would
 /// otherwise treat the question as document content.
 fn prompt_yes(prompt: &str) -> io::Result<bool> {
-    eprint!("{prompt}");
-    io::stderr().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim().eq_ignore_ascii_case("y"))
+    prompt_yes_with(prompt, &mut io::stderr(), &mut io::stdin().lock())
+}
+
+/// [`prompt_yes`] over explicit streams, so the question and the answer
+/// parsing are testable without a terminal.
+fn prompt_yes_with(
+    prompt: &str,
+    out: &mut impl Write,
+    input: &mut impl io::BufRead,
+) -> io::Result<bool> {
+    let _ = write!(out, "{prompt}");
+    out.flush()?;
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
 /// Asks for user confirmation to overwrite an existing file.
@@ -798,6 +808,24 @@ pub fn find_latest_file(dir: &Path) -> io::Result<Option<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prompt_yes_with_accepts_only_y() {
+        for (answer, want) in [
+            ("y\n", true),
+            ("Y\n", true),
+            (" y \n", true),
+            ("n\n", false),
+            ("\n", false),
+            ("yes\n", false),
+            ("", false),
+        ] {
+            let mut out = Vec::new();
+            let got = prompt_yes_with("Overwrite? ", &mut out, &mut answer.as_bytes()).unwrap();
+            assert_eq!(got, want, "{answer:?}");
+            assert_eq!(String::from_utf8(out).unwrap(), "Overwrite? ");
+        }
+    }
+
     #[test]
     fn can_prompt_requires_stdin_and_stderr_terminals() {
         assert!(can_prompt(true, true));
