@@ -108,8 +108,34 @@ pub fn extract_signatures_for_file(
 pub fn extract_structure_for_file(source: &str, ext: &str) -> Option<CodeStructure> {
     let support = languages::get_language_support(ext)?;
     let mut structure = extract_structure(source, support);
+    // Only Rust fills this in itself; every other language reported `0 code`.
+    if structure.code_lines == 0 {
+        structure.code_lines = count_code_lines(source, ext);
+    }
     modules::fill(&mut structure, source, ext, support);
     Some(structure)
+}
+
+/// Non-blank lines that are not whole-line comments (`//`, `/* … */` bodies,
+/// or `#` for Python). A line-based approximation, like the Rust counter.
+#[cfg(feature = "tree-sitter-base")]
+fn count_code_lines(source: &str, ext: &str) -> usize {
+    let hash_comments = matches!(ext.to_ascii_lowercase().as_str(), "py" | "pyw");
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && if hash_comments {
+                    !line.starts_with('#')
+                } else {
+                    !(line.starts_with("//")
+                        || line.starts_with("/*")
+                        || line.starts_with('*')
+                        || line.starts_with("*/"))
+                }
+        })
+        .count()
 }
 
 /// Find a smart truncation point for a given file extension.
@@ -145,6 +171,15 @@ pub fn get_language_for_path(_path: &std::path::Path) -> Option<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tree-sitter-base")]
+    #[test]
+    fn count_code_lines_python_family_ignores_hash_comments() {
+        for ext in ["py", "pyw", "PY", "PYW"] {
+            assert_eq!(super::count_code_lines("# a\nx = 1\n", ext), 1, "{ext}");
+        }
+        assert_eq!(super::count_code_lines("# a\nx = 1\n", "go"), 2);
+    }
+
     use super::*;
 
     #[test]

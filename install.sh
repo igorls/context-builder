@@ -1,6 +1,19 @@
 #!/bin/sh
 # Context Builder Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | sh
+#
+# Recommended: download the script from a release tag, read it, then run it.
+# Piping a remote script straight into a shell trusts whatever the URL serves
+# at that moment, so avoid that, and never let an automated agent do it.
+# CONTEXT_BUILDER_VERSION is honored by the copy in the first release after
+# v0.11.0 and later; older tags always install the latest release.
+#
+#   curl -fsSLO https://raw.githubusercontent.com/igorls/context-builder/<TAG>/install.sh
+#   less install.sh
+#   CONTEXT_BUILDER_VERSION=<VERSION> sh install.sh
+#
+# Environment:
+#   CONTEXT_BUILDER_VERSION      release to install, e.g. 0.11.0 (default: latest)
+#   CONTEXT_BUILDER_INSTALL_DIR  target directory (default: ~/.local/bin)
 set -e
 
 REPO="igorls/context-builder"
@@ -10,8 +23,32 @@ INSTALL_DIR="${CONTEXT_BUILDER_INSTALL_DIR:-$HOME/.local/bin}"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
+# Linux: the gnu build needs glibc >= 2.34; the musl build is static and runs
+# anywhere. Use musl on musl systems (Alpine) and on older glibc.
+# Override with CONTEXT_BUILDER_LIBC=musl or gnu.
+linux_libc() {
+  if [ -n "${CONTEXT_BUILDER_LIBC:-}" ]; then
+    echo "$CONTEXT_BUILDER_LIBC"
+    return
+  fi
+  LDD_OUT="$(ldd --version 2>&1 || true)"
+  case "$LDD_OUT" in
+    *musl*) echo musl; return ;;
+  esac
+  GLIBC="$(printf '%s\n' "$LDD_OUT" | sed -n '1s/.* \([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p')"
+  if [ -n "$GLIBC" ]; then
+    MAJOR="${GLIBC%%.*}"
+    MINOR="${GLIBC#*.}"
+    if [ "$MAJOR" -lt 2 ] || { [ "$MAJOR" -eq 2 ] && [ "$MINOR" -lt 34 ]; }; then
+      echo musl
+      return
+    fi
+  fi
+  echo gnu
+}
+
 case "$OS" in
-  Linux)   TARGET_OS="unknown-linux-gnu" ;;
+  Linux)   TARGET_OS="unknown-linux-$(linux_libc)" ;;
   Darwin)  TARGET_OS="apple-darwin" ;;
   *)       echo "Error: Unsupported OS '$OS'. Please install manually from:"; echo "  https://github.com/$REPO/releases/latest"; exit 1 ;;
 esac
@@ -24,20 +61,43 @@ esac
 
 TARGET="${TARGET_ARCH}-${TARGET_OS}"
 ARCHIVE="context-builder-${TARGET}.tar.gz"
-BASE_URL="https://github.com/${REPO}/releases/latest/download"
+VERSION_REQUESTED="${CONTEXT_BUILDER_VERSION:-}"
+if [ -n "$VERSION_REQUESTED" ]; then
+  # Accept both "0.11.0" and "v0.11.0".
+  VERSION_REQUESTED="${VERSION_REQUESTED#v}"
+  BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION_REQUESTED}"
+else
+  BASE_URL="https://github.com/${REPO}/releases/latest/download"
+fi
 
-echo "Installing context-builder for ${TARGET}..."
+echo "Installing context-builder ${VERSION_REQUESTED:-(latest)} for ${TARGET}..."
 
 # Ensure install directory exists (user-local, no sudo needed)
 mkdir -p "$INSTALL_DIR"
 SUDO=""
 
-# Download binary and checksums
+# Download checksums first: they list which archives this release has.
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+curl -fsSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
+
+# This host needs the musl build (Alpine, or glibc older than 2.34). Releases
+# published before the musl build existed only have the gnu archive, which will
+# not start here, so stop instead of replacing a working install with it.
+case "$TARGET" in
+  *-linux-musl)
+    if ! grep -q "$ARCHIVE" "$TMP/SHA256SUMS"; then
+      echo "Error: this release has no musl build, and this system needs one"
+      echo "(musl libc, or glibc older than 2.34)."
+      echo "Install from source instead:  cargo install context-builder --locked"
+      echo "or try the gnu build anyway:  CONTEXT_BUILDER_LIBC=gnu sh install.sh"
+      exit 1
+    fi
+    ;;
+esac
+
 echo "Downloading ${ARCHIVE}..."
-curl -sSL "${BASE_URL}/${ARCHIVE}" -o "$TMP/$ARCHIVE"
-curl -sSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
+curl -fsSL "${BASE_URL}/${ARCHIVE}" -o "$TMP/$ARCHIVE"
 
 # Verify SHA256 checksum (fail closed — never install unverified binaries)
 echo "Verifying checksum..."
@@ -75,11 +135,20 @@ $SUDO mv "$TMP/context-builder" "$INSTALL_DIR/context-builder"
 $SUDO chmod +x "$INSTALL_DIR/context-builder"
 # $TMP is cleaned up automatically by the EXIT trap
 
-# Verify
-VERSION="$(context-builder --version 2>/dev/null || true)"
+# Verify the binary just installed, not whatever is first on PATH
+VERSION="$("$INSTALL_DIR/context-builder" --version 2>/dev/null || true)"
 if [ -n "$VERSION" ]; then
-  echo "✓ Installed: $VERSION"
+  echo "✓ Installed: $VERSION ($INSTALL_DIR/context-builder)"
 else
   echo "✓ Installed to $INSTALL_DIR/context-builder"
-  echo "  Make sure $INSTALL_DIR is in your PATH"
+  echo "  Warning: it did not run here (wrong platform or missing libraries?)"
+fi
+
+# Is `context-builder` on PATH, and is it this one?
+ON_PATH="$(command -v context-builder 2>/dev/null || true)"
+if [ -z "$ON_PATH" ]; then
+  echo "  Add $INSTALL_DIR to your PATH to run it as 'context-builder'."
+elif [ "$ON_PATH" != "$INSTALL_DIR/context-builder" ]; then
+  echo "  Warning: 'context-builder' on your PATH is $ON_PATH, which shadows this install."
+  echo "  Run $INSTALL_DIR/context-builder, or put $INSTALL_DIR first in PATH."
 fi
