@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **`--structure` lists imports and exports (#22 B15).** The help promised them but only counts were printed (and the internal lists held placeholders). Each file now gets `**Imports:**` / `**Exports:**` lists (Rust `use`/`pub use`, Python, JS/TS `import`/`export`, Go, Java, C/C++ `#include`), capped at 20 entries. Top-level declarations only.
 - **Rust `--signatures` group methods under their `impl`/`trait` (#22 B16).** Methods used to be listed flat after `impl A`, leaving several `pub fn new` ambiguous. Each impl/trait is now one entry: `impl A { pub fn new() -> A … }`. Library: members are part of the impl/trait signature's `full_signature` and no longer separate `Signature`s.
 - **Python `--signatures`: no nested functions, overloads keep their return types (#22 B16).** Functions and classes defined inside a function are no longer listed; `@overload def f(...) -> T: ...` used to lose the decorator and `-> T` (the one-line body defeated the slicer) and now keeps both, with decorator lines no longer carrying stray indentation.
 - **Go `--signatures` keep return types (#22 B16).** Methods lost their results (`func (c *Command) Context()` for `… context.Context`) because the grammar's `result` field was looked up under the wrong node kind; type aliases printed `type X type`. Now `func (c *Command) Context() context.Context` and `type X flag.ParseErrorsWhitelist`.

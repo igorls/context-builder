@@ -11,6 +11,9 @@
 pub mod language_support;
 
 #[cfg(feature = "tree-sitter-base")]
+pub mod modules;
+
+#[cfg(feature = "tree-sitter-base")]
 pub mod signatures;
 
 #[cfg(feature = "tree-sitter-base")]
@@ -109,6 +112,7 @@ pub fn extract_structure_for_file(source: &str, ext: &str) -> Option<CodeStructu
     if structure.code_lines == 0 {
         structure.code_lines = count_code_lines(source, ext);
     }
+    modules::fill(&mut structure, source, ext, support);
     Some(structure)
 }
 
