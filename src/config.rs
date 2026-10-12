@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::fs;
 use std::io;
+use std::io::Write as _;
 use std::path::Path;
 
 use crate::content_filter::{self, DEFAULT_MAX_FILE_SIZE_BYTES};
@@ -223,7 +224,8 @@ pub fn load_config() -> Option<Config> {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "⚠️  Failed to parse context-builder.toml: {}. Config will be ignored.",
                     e
                 );
@@ -262,7 +264,8 @@ pub fn load_config_from_path(project_root: &Path) -> Option<Config> {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "⚠️  Failed to parse {}: {}. Config will be ignored.",
                     config_path.display(),
                     e

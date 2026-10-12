@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 ## Unreleased
 
 - **`--config <path>` and `--no-config` (#21).** Use another config file, or ignore the project one, for a single run.
+- **`--token-count` honors `--max-tokens` (#21 B21).** It reports the capped size, the budget, and how many files would be omitted.
+- **Python `--signatures` headings use `#` (#22 B16).** Section headings inside a `python` block were `// Functions`. `--structure`'s help no longer promises imports/exports, which it never emitted.
+- **`--structure` code-line counts (#22 B15).** TypeScript, JavaScript, Python, Go, Java and C/C++ no longer report `(0 code)`; blank lines and whole-line comments are excluded, as for Rust.
+- **Snapshots (#20 B10, B9).** Timestamped outputs written within the same second get `-1`, `-2`, … suffixes instead of prompting/cancelling or overwriting the previous snapshot. The auto-diff renderer prints `Modified:` as `YYYY-MM-DD HH:MM:SS UTC` (it printed a Debug `SystemTime { … }`) when `--file-metadata` is on.
+- **Built-in ignores can be overridden (#16).** `--ignore '!build'` (also `!dist`, `!vendor`, …) keeps a directory the defaults would hide, so tracked sources such as `src/build/mod.rs` can be included.
+- **Go files under `doc/` rank as source (#19).** cobra's real `doc` package no longer sorts with documentation; Markdown in `doc/` is still docs.
+- **Install docs no longer suggest `curl | sh` from `master` (#37).** The README and `install.sh` header now show download, review, run from a release tag; `install.sh` honors `CONTEXT_BUILDER_VERSION` to pin the release (and `curl -f`, and reports the version of the binary it just installed); a no-script, checksum-verified path is documented. `SKILL.md` and the README pin `cargo install … --version 0.11.0 --locked`. **Release checklist:** bump these pinned versions with each release.
+- **The report says its file tree is alphabetical (#42).** File bodies follow the relevance ranking (root README and manifests first), so a one-line note under `## File Tree Structure` (and in `--preview`) now explains why the two orders differ.
+- **Size warnings match what the run writes (#41).** The `large file(s) detected … Total context size` block is no longer printed when `--max-tokens` caps the output, and leaves out files that `--signatures` replaces with an outline (`--structure` only appends a summary, so those files still count) (it still appears for full runs and `--preview`). The >128K advice omits `--filter …` when a filter was already given.
+- **`--init` honors `-d` and no longer drops docs (#17 B11).** The config is written to, and file types detected from, the `-d` directory. The generated `ignore` no longer lists `docs`, and `output_folder` is `.context-builder/out` instead of `docs`.
+- **`--init` no longer suggests asset, secret or oversized types in `filter` (#39).** The generated `filter` used to list every common extension, including `png` or `pem`; an explicit filter of such a type opts those files back in, which undid the v0.11.0 default skips. Detection now counts only files a default run would include.
+- **Diagnostics (#21: B13, B17, B18).** The tree-sitter notice no longer prints on every default run: only for `--signatures`/`--structure`, or `--truncate smart` with `--max-tokens`, and it suggests `cargo install context-builder --features tree-sitter-all`. Errors print once as `Error: <message>` (not Debug), and output-path errors name the path. In builds without tree-sitter, truncation notices say `mode: byte`.
+- **A closed stderr or stdout pipe no longer aborts the run (#40).** `context-builder … 2>&1 | head -3` used to panic with exit code 101 and could leave the output file missing. Progress and warning lines now ignore write errors, and `-o - | head` ends with exit code 0.
 
 ## v0.11.0 (2026-10-10) — "Quiet Defaults"
 
