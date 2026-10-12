@@ -33,7 +33,9 @@ pub struct Args {
     #[clap(long, default_value_t = false)]
     pub include_lockfiles: bool,
 
-    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core)
+    /// Paths or gitignore-style globs to ignore (e.g. -i docs,assets, -i '*.lock', -i crates/core).
+    /// Prefix a built-in ignore name with `!` to keep it (e.g. -i '!build,!vendor');
+    /// dot-prefixed names (.next, .venv, …) are also hidden, so they additionally need --hidden.
     #[clap(short = 'i', long, value_delimiter = ',', value_name = "PATTERN")]
     pub ignore: Vec<String>,
 
@@ -72,7 +74,8 @@ pub struct Args {
     #[clap(long)]
     pub clear_cache: bool,
 
-    /// Initialize a new context-builder.toml config file in the current directory
+    /// Initialize a new context-builder.toml in the --input directory (default: the current
+    /// directory), with file types detected there
     #[clap(long)]
     pub init: bool,
 
@@ -80,7 +83,7 @@ pub struct Args {
     #[clap(long)]
     pub signatures: bool,
 
-    /// Extract code structure (imports, exports, symbol counts) - requires tree-sitter feature
+    /// Extract code structure (line and symbol counts per file) - requires tree-sitter feature
     #[clap(long)]
     pub structure: bool,
 
