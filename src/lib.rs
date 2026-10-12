@@ -24,7 +24,7 @@ use std::fs::File;
 
 use cache::CacheManager;
 use cli::Args;
-use config::{Config, load_config_from_path};
+use config::Config;
 use content_filter::{ContentPolicy, DEFAULT_MAX_FILE_SIZE_SPEC, SkippedFile};
 use diff::render_per_file_diffs;
 #[cfg(test)]
@@ -1244,6 +1244,13 @@ fn generate_markdown_with_diff(
     Ok(output)
 }
 
+/// `CB_SILENT=1|true` suppresses user-facing console output.
+fn silent_requested() -> bool {
+    std::env::var("CB_SILENT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// The CLI definition plus `--config` / `--no-config`. They are read straight
 /// from the matches, so the many `Args { .. }` literals (library users, tests)
 /// do not need new fields.
@@ -1274,7 +1281,17 @@ fn select_config(matches: &clap::ArgMatches, project_root: &Path) -> io::Result<
     } else if let Some(path) = matches.get_one::<String>("config") {
         Ok(Some(crate::config::load_config_file(Path::new(path))?))
     } else {
-        Ok(load_config_from_path(project_root))
+        match crate::config::try_load_config(project_root)? {
+            Some((config, warnings)) => {
+                if !silent_requested() {
+                    for warning in &warnings {
+                        let _ = writeln!(std::io::stderr(), "⚠️  {warning}");
+                    }
+                }
+                Ok(Some(config))
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -1386,9 +1403,7 @@ fn run_matches(matches: &clap::ArgMatches, argc: usize) -> io::Result<()> {
     let resolution = crate::config_resolver::resolve_final_config(args, config.clone(), explicit);
 
     // Print warnings if any
-    let silent = std::env::var("CB_SILENT")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let silent = silent_requested();
 
     if !silent {
         for warning in &resolution.warnings {

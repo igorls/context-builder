@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Malformed config is an error; unknown keys warn (#21 B19).** A `context-builder.toml` that cannot be parsed (or has a wrong value type) now stops the run with `invalid config '<path>': …` instead of silently using defaults. Unknown keys such as `filters` are reported with a suggestion (`did you mean 'filter'?`) and ignored. Library: new `config::try_load_config`; `load_config_from_path` keeps its old lenient behavior.
 - **`keep_last = N` snapshot retention (#20).** With timestamped output, only the newest N generated snapshots are kept.
 - **Docs (#21):** bare invocation, `-o -` in help, environment variables, hidden files/symlinks, diff format.
 - **`--config <path>` and `--no-config` (#21).** Use another config file, or ignore the project one, for a single run.
