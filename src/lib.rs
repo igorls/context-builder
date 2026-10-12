@@ -3710,3 +3710,119 @@ mod config_selection_tests {
         assert!(r.is_err());
     }
 }
+
+#[cfg(test)]
+mod snapshot_retention_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn touch(dir: &Path, name: &str) -> PathBuf {
+        let p = dir.join(name);
+        fs::write(&p, "x").unwrap();
+        p
+    }
+
+    fn cfg(keep: Option<usize>, timestamped: Option<bool>) -> Config {
+        Config {
+            keep_last: keep,
+            timestamped_output: timestamped,
+            ..Config::default()
+        }
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().into_string().unwrap())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn parses_generated_names_and_rejects_others() {
+        let (stem, ext, key) = parse_snapshot_name("proj_20261010120000.md").unwrap();
+        assert_eq!(
+            (stem.as_str(), ext.as_str(), key),
+            ("proj", "md", (20261010120000, 0))
+        );
+        let (_, _, key) = parse_snapshot_name("proj_20261010120000-3.md").unwrap();
+        assert_eq!(key, (20261010120000, 3));
+        assert!(parse_snapshot_name("proj.md").is_none());
+        assert!(parse_snapshot_name("noextension").is_none());
+        assert!(parse_snapshot_name("proj_2026.md").is_none());
+        assert!(parse_snapshot_name("proj_2026101012000x.md").is_none());
+    }
+
+    #[test]
+    fn keeps_the_newest_n_and_leaves_unrelated_files() {
+        let dir = tempdir().unwrap();
+        for n in [
+            "p_20261010120000.md",
+            "p_20261010120001.md",
+            "p_20261010120001-1.md",
+            "p_20261010120002.md",
+            "other_20261010120000.md",
+            "p_20261010120000.txt",
+            "notes.md",
+        ] {
+            touch(dir.path(), n);
+        }
+        let newest = dir.path().join("p_20261010120002.md");
+        prune_snapshots(newest.to_str().unwrap(), &cfg(Some(2), Some(true)), true);
+        assert_eq!(
+            names(dir.path()),
+            vec![
+                "notes.md",
+                "other_20261010120000.md",
+                "p_20261010120000.txt",
+                "p_20261010120001-1.md",
+                "p_20261010120002.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn disabled_when_not_timestamped_zero_or_stdout() {
+        let dir = tempdir().unwrap();
+        for n in ["p_20261010120000.md", "p_20261010120001.md"] {
+            touch(dir.path(), n);
+        }
+        let newest = dir.path().join("p_20261010120001.md");
+        let out = newest.to_str().unwrap();
+        prune_snapshots(out, &cfg(Some(1), Some(false)), true);
+        prune_snapshots(out, &cfg(Some(1), None), true);
+        prune_snapshots(out, &cfg(Some(0), Some(true)), true);
+        prune_snapshots(out, &cfg(None, Some(true)), true);
+        prune_snapshots("-", &cfg(Some(1), Some(true)), true);
+        assert_eq!(names(dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn non_snapshot_output_names_and_relative_paths_are_safe() {
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "p_20261010120000.md");
+        let plain = dir.path().join("report.md");
+        prune_snapshots(plain.to_str().unwrap(), &cfg(Some(1), Some(true)), true);
+        assert_eq!(names(dir.path()).len(), 1);
+        // A bare file name resolves against the current directory (which has
+        // no snapshots of that stem); nothing is removed and nothing panics.
+        prune_snapshots("zz_20261010120000.md", &cfg(Some(1), Some(true)), true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_snapshot_that_cannot_be_removed_only_warns() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "p_20261010120000.md");
+        let newest = touch(dir.path(), "p_20261010120001.md");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        prune_snapshots(newest.to_str().unwrap(), &cfg(Some(1), Some(true)), false);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        // Either removal failed (non-root) or succeeded (root); never a panic,
+        // and the newest snapshot always survives.
+        assert!(newest.exists());
+    }
+}
