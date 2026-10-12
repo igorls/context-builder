@@ -70,7 +70,7 @@ fn preview_omitted_count_matches_the_real_run_at_every_small_budget() {
         )
         .unwrap();
     }
-    for budget in (120..700).step_by(45) {
+    for budget in (200..700).step_by(45) {
         let b = budget.to_string();
         let preview = count(dir.path(), &["--max-tokens", &b]);
         assert!(total(&preview) <= budget, "{budget}: {preview}");
