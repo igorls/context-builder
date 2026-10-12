@@ -43,6 +43,7 @@ fn args(input: &Path, output: &Path, file_metadata: bool) -> Args {
         hidden: false,
         include_secrets: false,
         include_lockfiles: false,
+        stats: None,
     }
 }
 

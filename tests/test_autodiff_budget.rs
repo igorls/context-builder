@@ -62,6 +62,7 @@ fn args(input: &Path, output: &Path, max_tokens: Option<usize>, encoding: &str) 
         hidden: false,
         include_secrets: false,
         include_lockfiles: false,
+        stats: None,
     }
 }
 

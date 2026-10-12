@@ -62,6 +62,7 @@ fn preview_mode_does_not_create_output_file() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
@@ -113,6 +114,7 @@ fn preview_mode_skips_overwrite_confirmation() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -169,6 +171,7 @@ fn token_count_mode_skips_overwrite_confirmation() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     // Use false for overwrite response to verify it's not called
@@ -222,6 +225,7 @@ fn both_preview_and_token_count_modes_work_together() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(false); // false for overwrite since it should be skipped
@@ -288,6 +292,7 @@ fn end_to_end_generates_output_with_filters_ignores_and_line_numbers() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     // Always proceed without interactive prompts
@@ -386,6 +391,7 @@ fn overwrite_prompt_is_respected() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     // Deny overwrite
@@ -438,6 +444,7 @@ fn many_files_proceed_without_a_processing_prompt() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
@@ -482,6 +489,7 @@ fn pipe_mode_many_files_does_not_block() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
@@ -525,6 +533,7 @@ fn token_count_mode_does_not_create_output_file() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);

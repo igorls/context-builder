@@ -352,6 +352,7 @@ The diff sections use a simple `+ ` / `- ` line format with `  ...` separators, 
 - `--max-tokens <N>` - Maximum token budget for the output. Files that exceed the remaining budget are truncated in place (per the `--truncate` mode); further files are omitted with a notice.
 - `--preview` - Preview mode: only show the file tree, don't generate output.
 - `--token-count` - Token count mode: accurately count the total token count of the final document using a real tokenizer.
+- `--stats[=N]` - Per-file token breakdown, largest first (default 20 files; `--stats=0` lists all). With `--max-tokens` it also shows which files fit, which one is cut, and what is omitted. Writes no document.
 - `--line-numbers` - Add line numbers to code blocks in the output.
 - `--file-metadata` - Include per-file `- Size:` and `- Modified:` lines under each file header. **Off by default** (breaking change in v0.11.0): those lines cost tokens and change the output whenever a file's modification time changes, even if the bytes did not. Set `file_metadata = true` in `context-builder.toml` for the same effect. An explicit `--file-metadata` overrides `file_metadata = false`.
 - `-y, --yes` - Overwrite an existing output file without asking. The confirmation that used to run before processing more than 100 files was removed in v0.11.0; `-y` is still accepted so existing scripts keep working, and it only affects the overwrite prompt.

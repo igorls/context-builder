@@ -211,6 +211,7 @@ These behaviors require no configuration:
 | `-i <PATTERN>` | Ignore paths or gitignore globs | Comma-separated (`-i docs,assets`) or repeated (`-i '*.lock' -i crates/core`) |
 | `--max-tokens <N>` | Token budget cap | Use `100000` for most models, `200000` for Gemini |
 | `--token-count` | Dry-run token estimate | Run first to check if filtering is needed |
+| `--stats[=N]` | Per-file token breakdown (largest first; with `--max-tokens`, what would be cut) | Find the files to `-i`gnore or `--filter` out |
 | `-y` | Skip all prompts | **Use only with explicit, scoped project paths** |
 | `--preview` | Show file tree only | Quick exploration without generating output |
 | `--diff-only` | Output only diffs | Minimizes tokens for incremental updates |

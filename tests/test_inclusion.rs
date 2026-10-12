@@ -61,6 +61,7 @@ fn args(input: impl Into<String>, output: impl Into<String>) -> Args {
         hidden: false,
         include_secrets: false,
         include_lockfiles: false,
+        stats: None,
     }
 }
 

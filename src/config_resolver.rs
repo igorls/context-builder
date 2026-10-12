@@ -23,6 +23,7 @@ pub struct ResolvedConfig {
     pub file_metadata: bool,
     pub preview: bool,
     pub token_count: bool,
+    pub stats: Option<usize>,
     pub yes: bool,
     pub diff_only: bool,
     pub clear_cache: bool,
@@ -112,6 +113,7 @@ pub fn resolve_final_config(
         file_metadata: args.file_metadata,
         preview: args.preview,
         token_count: args.token_count,
+        stats: args.stats,
         yes: args.yes,
         diff_only: args.diff_only,
         clear_cache: args.clear_cache,
@@ -399,6 +401,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config = Config {
@@ -442,6 +445,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config = Config {
@@ -498,6 +502,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config = Config {
@@ -538,6 +543,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config = Config {
@@ -580,6 +586,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config = Config {
@@ -623,6 +630,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config = Config {
@@ -661,6 +669,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config = Config {
@@ -701,6 +710,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let resolution = resolve_final_config(args.clone(), None, ExplicitCli::default());
@@ -750,6 +760,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
         let config = Config {
             encoding: Some("cl100k_base".to_string()),
@@ -806,6 +817,7 @@ mod tests {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         }
     }
 

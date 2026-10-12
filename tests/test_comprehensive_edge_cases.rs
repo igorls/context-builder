@@ -121,6 +121,7 @@ fn test_comprehensive_binary_file_edge_cases() {
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let prompter = TestPrompter::new(true);
@@ -216,6 +217,7 @@ fn test_configuration_precedence_edge_cases() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
@@ -262,6 +264,7 @@ fn test_configuration_precedence_edge_cases() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -328,6 +331,7 @@ timestamped_output = true
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let config = context_builder::config::load_config_from_path(&project_dir).unwrap_or_default();
@@ -440,6 +444,7 @@ fn test_error_conditions_and_exit_codes() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let result = run_with_args(args, Config::default(), &prompter);
@@ -476,6 +481,7 @@ fn test_error_conditions_and_exit_codes() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter_deny = TestPrompter::new(false); // Deny overwrite
@@ -509,6 +515,7 @@ fn test_error_conditions_and_exit_codes() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     // The >100-file confirmation was removed. A run without `--yes` proceeds.
@@ -568,6 +575,7 @@ fn test_memory_usage_under_parallel_processing() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
@@ -668,6 +676,7 @@ line_numbers = true
             include_secrets: false,
             file_metadata: false,
             include_lockfiles: false,
+            stats: None,
         };
 
         let config =
@@ -776,6 +785,7 @@ fn test_edge_case_filenames_and_paths() {
         include_secrets: false,
         file_metadata: false,
         include_lockfiles: false,
+        stats: None,
     };
 
     let prompter = TestPrompter::new(true);
