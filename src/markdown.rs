@@ -814,15 +814,17 @@ pub fn process_file_with_content_limit(
 
             if !signatures_only {
                 write_text_content(output, content, language, line_numbers)?;
-                if truncated {
-                    writeln!(
-                        output,
-                        "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
-                        content.len(),
-                        original_len,
-                        ts_config.truncate
-                    )?;
-                }
+            }
+            // About the file, not about whether its body is shown: with
+            // --signatures the block below is computed from the clamped content.
+            if truncated {
+                writeln!(
+                    output,
+                    "\n_⚠️ File content truncated: {} of {} bytes (mode: {})._\n",
+                    content.len(),
+                    original_len,
+                    ts_config.truncate
+                )?;
             }
 
             // Tree-sitter enrichment: signatures and/or structure
@@ -939,27 +941,46 @@ pub fn render_truncated_to_fit(
     token_encoding: TokenEncoding,
     remaining_tokens: usize,
 ) -> Option<usize> {
+    let (chunk, tokens) = fit_chunk_to_budget(remaining_tokens, token_encoding, |limit| {
+        let mut probe: Vec<u8> = Vec::new();
+        process_file_with_content_limit(
+            base_path,
+            file_path,
+            &mut probe,
+            line_numbers,
+            encoding_strategy,
+            ts_config,
+            limit,
+        )
+        .ok()?;
+        Some(String::from_utf8_lossy(&probe).into_owned())
+    })?;
+    *buf = chunk.into_bytes();
+    Some(tokens)
+}
+
+/// The budget search shared by every renderer: find a rendering of one file
+/// section whose real token count fits `remaining_tokens`.
+///
+/// `render(limit)` returns the section with its content clamped to `limit`
+/// bytes (`None` = no clamp) or `None` if it cannot be rendered. The fixed
+/// header cost is measured with a zero-byte probe, the content allowance is
+/// what is left at ~4 bytes/token, and it shrinks proportionally (with
+/// margin) while the tokenizer says the chunk overshoots. Gives up (omit the
+/// file) when even an empty section does not fit.
+pub(crate) fn fit_chunk_to_budget(
+    remaining_tokens: usize,
+    token_encoding: TokenEncoding,
+    mut render: impl FnMut(Option<usize>) -> Option<String>,
+) -> Option<(String, usize)> {
     if remaining_tokens == 0 {
         return None;
     }
 
     // 1. Measure the fixed section cost (header + empty fence + marker) by
     //    rendering with a zero-byte content allowance.
-    let mut base_probe: Vec<u8> = Vec::new();
-    if process_file_with_content_limit(
-        base_path,
-        file_path,
-        &mut base_probe,
-        line_numbers,
-        encoding_strategy,
-        ts_config,
-        Some(0),
-    )
-    .is_err()
-    {
-        return None;
-    }
-    let base_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&base_probe));
+    let base_probe = render(Some(0))?;
+    let base_tokens = estimate_tokens(token_encoding, &base_probe);
 
     // Even an empty section would overdraw — omit the file instead.
     if base_tokens >= remaining_tokens {
@@ -973,25 +994,10 @@ pub fn render_truncated_to_fit(
     //    tokenizer; shrink proportionally on overshoot. Bounded attempts —
     //    if it still doesn't fit, omission is safer than an over-budget emit.
     for _ in 0..5 {
-        let mut probe: Vec<u8> = Vec::new();
-        if process_file_with_content_limit(
-            base_path,
-            file_path,
-            &mut probe,
-            line_numbers,
-            encoding_strategy,
-            ts_config,
-            Some(byte_allowance),
-        )
-        .is_err()
-        {
-            return None;
-        }
-
-        let chunk_tokens = estimate_tokens(token_encoding, &String::from_utf8_lossy(&probe));
+        let probe = render(Some(byte_allowance))?;
+        let chunk_tokens = estimate_tokens(token_encoding, &probe);
         if chunk_tokens <= remaining_tokens {
-            *buf = probe;
-            return Some(chunk_tokens);
+            return Some((probe, chunk_tokens));
         }
 
         if byte_allowance == 0 {

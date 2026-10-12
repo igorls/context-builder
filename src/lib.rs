@@ -707,28 +707,12 @@ pub fn run_with_args(args: Args, config: Config, prompter: &impl Prompter) -> io
             &skipped,
         )?;
 
-        // Enforce max_tokens budget (same ~4 bytes/token heuristic as parallel path)
+        // Files are budgeted one by one inside the renderer. This is only the
+        // safety net for a header/diff/tree that alone exceeds the budget.
         if let Some(max_tokens) = final_args.max_tokens {
-            let max_bytes = max_tokens.saturating_mul(4);
-            if final_doc.len() > max_bytes {
-                // Truncate at a valid UTF-8 boundary
-                let mut truncate_at = max_bytes;
-                while truncate_at > 0 && !final_doc.is_char_boundary(truncate_at) {
-                    truncate_at -= 1;
-                }
-                final_doc.truncate(truncate_at);
-
-                // Close any open code fence so the truncation notice is not
-                // swallowed by the block. The closer matches the opening
-                // fence's length — a fixed ``` would not close a longer fence
-                // chosen because the file itself contains ```.
-                fences::close_unmatched_backtick_fence(&mut final_doc);
-
-                final_doc.push_str("\n---\n\n");
-                final_doc.push_str(&format!(
-                    "_Output truncated: exceeded {} token budget (estimated)._\n",
-                    max_tokens
-                ));
+            let encoding = final_args.encoding.parse::<Encoding>().unwrap_or_default();
+            if estimate_tokens(encoding, &final_doc) > max_tokens {
+                final_doc = truncate_to_token_budget(&final_doc, max_tokens, encoding);
             }
         }
 
@@ -1183,64 +1167,147 @@ fn generate_markdown_with_diff(
     if !diff_config.diff_only {
         output.push_str("## File Contents\n\n");
 
+        // Same per-file, tokenizer-based budget as the standard renderer: a file
+        // that would cross `--max-tokens` is clamped to what is left (or omitted)
+        // and the rest are reported, instead of cutting the document mid-file.
+        let budget = args.max_tokens.map(|max| {
+            let encoding = args.encoding.parse::<Encoding>().unwrap_or_default();
+            (max, encoding, estimate_tokens(encoding, &output))
+        });
+        let mut tokens_used = budget.map_or(0, |(_, _, used)| used);
+
         // Iterate in relevance order (from sorted_paths) instead of
         // BTreeMap's alphabetical order — preserves file_relevance_category ordering.
-        for path in sorted_paths {
-            if let Some(file_state) = current_state.files.get(path) {
-                output.push_str(&format!(
-                    "### File: {}\n\n",
-                    fences::inline_code(&path.display().to_string())
-                ));
-                // Same opt-in as the standard renderer. Off by default so an
-                // mtime-only change does not rewrite the document. The cache
-                // compares content hashes (file bytes), not mtime.
-                if args.file_metadata {
-                    output.push_str(&format!("- Size: {} bytes\n", file_state.size));
-                    let modified = chrono::DateTime::<chrono::Utc>::from(file_state.modified);
-                    let stamp = modified.format("%Y-%m-%d %H:%M:%S UTC");
-                    output.push_str(&format!("- Modified: {stamp}\n\n"));
+        let present: Vec<(&PathBuf, &state::FileState)> = sorted_paths
+            .iter()
+            .filter_map(|path| current_state.files.get(path).map(|state| (path, state)))
+            .collect();
+        for (idx, (path, file_state)) in present.iter().enumerate() {
+            let section = diff_file_section(path, file_state, args, ts_config, None)?;
+            let section_tokens =
+                budget.map_or(0, |(_, encoding, _)| estimate_tokens(encoding, &section));
+            let fits = budget.is_none_or(|(max, _, _)| tokens_used + section_tokens <= max);
+            if fits {
+                tokens_used += section_tokens;
+                output.push_str(&section);
+            } else if let Some((max, encoding, _)) = budget {
+                // Crossing file: clamp it into the remaining allowance, else omit it.
+                let remaining_tokens = max.saturating_sub(tokens_used);
+                let fitted = markdown::fit_chunk_to_budget(remaining_tokens, encoding, |limit| {
+                    diff_file_section(path, file_state, args, ts_config, limit).ok()
+                });
+                let omitted = present.len() - idx - usize::from(fitted.is_some());
+                if let Some((chunk, _)) = fitted {
+                    output.push_str(&chunk);
                 }
-
-                // Determine language from file extension (canonical map —
-                // same fence language as the main rendering path)
-                let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
-                let language = crate::languages::language_for_extension(extension);
-
-                // When --signatures is active, only suppress content for supported code files
-                let signatures_only =
-                    ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
-
-                if !signatures_only {
-                    // `output` is a String (`fmt::Write`); the shared writer speaks `io::Write`.
-                    let mut rendered = Vec::new();
-                    markdown::write_text_content(
-                        &mut rendered,
-                        &file_state.content,
-                        language,
-                        args.line_numbers,
-                    )?;
-                    let rendered = std::str::from_utf8(&rendered)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    output.push_str(rendered);
-                }
-
-                // Tree-sitter enrichment (same as standard path)
-                let mut enrichment_buf = Vec::new();
-                markdown::write_tree_sitter_enrichment(
-                    &mut enrichment_buf,
-                    &file_state.content,
-                    extension,
-                    ts_config,
-                )?;
-                if !enrichment_buf.is_empty() {
-                    output.push_str(&String::from_utf8_lossy(&enrichment_buf));
-                }
-
-                output.push('\n');
+                output.push_str("---\n\n");
+                output.push_str(&budget_notice(max, omitted));
+                break;
             }
         }
     }
 
+    Ok(output)
+}
+
+/// Cut `doc` so that, with its fence closed and the notice appended, the real
+/// token count is within `max_tokens`. Starts from the bytes/4 guess and
+/// shrinks until the tokenizer agrees (or nothing is left but the notice).
+fn truncate_to_token_budget(doc: &str, max_tokens: usize, encoding: Encoding) -> String {
+    let mut cut = doc.len().min(max_tokens.saturating_mul(4));
+    loop {
+        while cut > 0 && !doc.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut out = doc[..cut].to_string();
+        // Close any open code fence so the notice is not swallowed by the
+        // block. The closer matches the opening fence's length: a fixed ```
+        // would not close a longer fence chosen because the file contains ```.
+        fences::close_unmatched_backtick_fence(&mut out);
+        out.push_str("\n---\n\n");
+        out.push_str(&format!(
+            "_Output truncated: exceeded {max_tokens} token budget._\n"
+        ));
+        if cut == 0 || estimate_tokens(encoding, &out) <= max_tokens {
+            return out;
+        }
+        cut -= (cut / 10).max(1);
+    }
+}
+
+/// The notice that ends a document whose budget ran out.
+fn budget_notice(max: usize, omitted: usize) -> String {
+    format!("_⚠️ Token budget ({max}) reached. {omitted} remaining files omitted._\n\n")
+}
+
+/// One `### File:` section of the auto-diff document. `content_limit` clamps
+/// the file's content to that many bytes (at a boundary chosen by `--truncate`)
+/// and says so, like the standard renderer does for a file that crosses the
+/// token budget.
+fn diff_file_section(
+    path: &Path,
+    file_state: &state::FileState,
+    args: &Args,
+    ts_config: &markdown::TreeSitterConfig,
+    content_limit: Option<usize>,
+) -> io::Result<String> {
+    let mut output = String::new();
+    let heading = fences::inline_code(&path.display().to_string());
+    output.push_str(&format!("### File: {heading}\n\n"));
+    // Same opt-in as the standard renderer. Off by default so an
+    // mtime-only change does not rewrite the document. The cache
+    // compares content hashes (file bytes), not mtime.
+    if args.file_metadata {
+        let size = file_state.size;
+        let modified = chrono::DateTime::<chrono::Utc>::from(file_state.modified);
+        let stamp = modified.format("%Y-%m-%d %H:%M:%S UTC");
+        output.push_str(&format!("- Size: {size} bytes\n- Modified: {stamp}\n\n"));
+    }
+
+    // Determine language from file extension (canonical map —
+    // same fence language as the main rendering path)
+    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("text");
+    let language = crate::languages::language_for_extension(extension);
+
+    let full = file_state.content.as_str();
+    let (content, truncated) = match content_limit {
+        Some(limit) if full.len() > limit => {
+            let cut =
+                markdown::content_cut_point(full, limit, extension, ts_config.truncate.as_str());
+            (&full[..cut], cut < full.len())
+        }
+        _ => (full, false),
+    };
+
+    // When --signatures is active, only suppress content for supported code files
+    let signatures_only =
+        ts_config.signatures && crate::tree_sitter::is_supported_extension(extension);
+
+    if !signatures_only {
+        // `output` is a String (`fmt::Write`); the shared writer speaks `io::Write`.
+        let mut rendered = Vec::new();
+        markdown::write_text_content(&mut rendered, content, language, args.line_numbers)?;
+        let rendered = std::str::from_utf8(&rendered)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        output.push_str(rendered);
+    }
+    // The marker is about the file, not about whether its body is shown: with
+    // --signatures the signatures below are computed from the clamped content.
+    if truncated {
+        let (shown, total, mode) = (content.len(), full.len(), &ts_config.truncate);
+        output.push_str(&format!(
+            "\n_⚠️ File content truncated: {shown} of {total} bytes (mode: {mode})._\n\n"
+        ));
+    }
+
+    // Tree-sitter enrichment (same as standard path), over what is displayed
+    let mut enrichment_buf = Vec::new();
+    markdown::write_tree_sitter_enrichment(&mut enrichment_buf, content, extension, ts_config)?;
+    if !enrichment_buf.is_empty() {
+        output.push_str(&String::from_utf8_lossy(&enrichment_buf));
+    }
+
+    output.push('\n');
     Ok(output)
 }
 
