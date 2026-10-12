@@ -255,6 +255,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "token_count",
     "output_folder",
     "timestamped_output",
+    "keep_last",
     "yes",
     "auto_diff",
     "diff_context_lines",
