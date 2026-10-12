@@ -1,6 +1,19 @@
 #!/bin/sh
 # Context Builder Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/igorls/context-builder/master/install.sh | sh
+#
+# Recommended: download the script from a release tag, read it, then run it.
+# Piping a remote script straight into a shell trusts whatever the URL serves
+# at that moment, so avoid that, and never let an automated agent do it.
+# CONTEXT_BUILDER_VERSION is honored by the copy in the first release after
+# v0.11.0 and later; older tags always install the latest release.
+#
+#   curl -fsSLO https://raw.githubusercontent.com/igorls/context-builder/<TAG>/install.sh
+#   less install.sh
+#   CONTEXT_BUILDER_VERSION=<VERSION> sh install.sh
+#
+# Environment:
+#   CONTEXT_BUILDER_VERSION      release to install, e.g. 0.11.0 (default: latest)
+#   CONTEXT_BUILDER_INSTALL_DIR  target directory (default: ~/.local/bin)
 set -e
 
 REPO="igorls/context-builder"
@@ -48,9 +61,16 @@ esac
 
 TARGET="${TARGET_ARCH}-${TARGET_OS}"
 ARCHIVE="context-builder-${TARGET}.tar.gz"
-BASE_URL="https://github.com/${REPO}/releases/latest/download"
+VERSION_REQUESTED="${CONTEXT_BUILDER_VERSION:-}"
+if [ -n "$VERSION_REQUESTED" ]; then
+  # Accept both "0.11.0" and "v0.11.0".
+  VERSION_REQUESTED="${VERSION_REQUESTED#v}"
+  BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION_REQUESTED}"
+else
+  BASE_URL="https://github.com/${REPO}/releases/latest/download"
+fi
 
-echo "Installing context-builder for ${TARGET}..."
+echo "Installing context-builder ${VERSION_REQUESTED:-(latest)} for ${TARGET}..."
 
 # Ensure install directory exists (user-local, no sudo needed)
 mkdir -p "$INSTALL_DIR"
@@ -59,7 +79,7 @@ SUDO=""
 # Download checksums first: they list which archives this release has.
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-curl -sSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
+curl -fsSL "${BASE_URL}/SHA256SUMS" -o "$TMP/SHA256SUMS"
 
 # This host needs the musl build (Alpine, or glibc older than 2.34). Releases
 # published before the musl build existed only have the gnu archive, which will
@@ -77,7 +97,7 @@ case "$TARGET" in
 esac
 
 echo "Downloading ${ARCHIVE}..."
-curl -sSL "${BASE_URL}/${ARCHIVE}" -o "$TMP/$ARCHIVE"
+curl -fsSL "${BASE_URL}/${ARCHIVE}" -o "$TMP/$ARCHIVE"
 
 # Verify SHA256 checksum (fail closed — never install unverified binaries)
 echo "Verifying checksum..."

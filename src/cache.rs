@@ -117,7 +117,11 @@ impl CacheManager {
         for pattern in &old_cache_patterns {
             let old_cache_path = self.cache_dir.join(pattern);
             if old_cache_path.exists() {
-                eprintln!("Migrating old cache format: removing {}", pattern);
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "Migrating old cache format: removing {}",
+                    pattern
+                );
                 let _ = fs::remove_file(&old_cache_path);
             }
         }
@@ -128,7 +132,11 @@ impl CacheManager {
                 let file_name = entry.file_name();
                 let name = file_name.to_string_lossy();
                 if name.ends_with(".md") && (name.contains("_20") || name.starts_with("output_")) {
-                    eprintln!("Migrating old cache format: removing {}", name);
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "Migrating old cache format: removing {}",
+                        name
+                    );
                     let _ = fs::remove_file(entry.path());
                 }
             }
