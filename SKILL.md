@@ -6,7 +6,7 @@ description: >
   implementation agent). Use when generating project context, preparing Deep Think reviews,
   or binding a weaker coding agent to a senior reasoning pass.
 homepage: https://github.com/igorls/context-builder
-version: 0.11.0
+version: 0.12.0
 requires:
   - context-builder
 ---
@@ -21,12 +21,12 @@ Generate a single, structured markdown file from any codebase directory. The out
 
 ```bash
 # Requires Rust toolchain. Pinned to a version; crates.io verifies the package checksum.
-cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all
+cargo install context-builder --version 0.12.0 --locked --features tree-sitter-all
 ```
 
-Pre-built binaries with SHA256 checksums are also available from [GitHub Releases](https://github.com/igorls/context-builder/releases/tag/v0.11.0): download the archive and `SHA256SUMS` for the pinned version and verify before installing. Do not pipe a remote script into a shell.
+Pre-built binaries with SHA256 checksums are also available from [GitHub Releases](https://github.com/igorls/context-builder/releases/tag/v0.12.0): download the archive and `SHA256SUMS` for the pinned version and verify before installing. Do not pipe a remote script into a shell.
 
-Verify: `context-builder --version` (expected: `0.11.0`)
+Verify: `context-builder --version` (expected: `0.12.0`)
 
 
 ## Security & Path Scoping
@@ -323,7 +323,7 @@ When `--signatures` is active, file contents are replaced with extracted signatu
 
 ## Error Handling
 
-- If `context-builder` is not installed, install with `cargo install context-builder --version 0.11.0 --locked --features tree-sitter-all`
+- If `context-builder` is not installed, install with `cargo install context-builder --version 0.12.0 --locked --features tree-sitter-all`
 - If `--signatures` shows no output for a file, the language may not be supported or the feature was not enabled at install
 - If output exceeds token limits, add `--max-tokens` or narrow with `-f` / `-i`, or use `--signatures`
 - If the project has no `.git` directory, auto-ignores still protect against dependency flooding
